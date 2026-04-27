@@ -1,0 +1,23 @@
+accounts:
+  - name: "Personal"
+    email: "alice@example.com"
+    color: "#3b82f6"
+    use_mock: true
+    folders:
+      - name: INBOX
+        messages:
+          - from: "Bob <bob@example.com>"
+            subject: "Project update"
+            date: 2026-04-27T10:30:00Z
+            body_text: "Here is the latest milestone."
+  - name: "Work"
+    email: "alice@work.example"
+    color: "#10b981"
+    use_mock: true
+    folders:
+      - name: INBOX
+        messages:
+          - from: "Carol <carol@work.example>"
+            subject: "Q2 planning"
+            date: 2026-04-26T08:00:00Z
+            body_text: "Adding you to the planning thread."
