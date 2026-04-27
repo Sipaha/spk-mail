@@ -16,3 +16,8 @@ export interface ThreadFilter {
 }
 export type EventType = 'MessageInserted'|'MessageArrived'|'MessageUpdated'|'SyncProgress'|'AccountStatus'|'WriteError'
 export interface ApiEvent { type: EventType; payload: Record<string, unknown> }
+export interface SearchHitDTO {
+  message_id: number; thread_id?: number;
+  subject: string; from_addr: string; date: number;
+  snippet: string; // contains \x01 BEGIN and \x02 END sentinels around matches
+}
