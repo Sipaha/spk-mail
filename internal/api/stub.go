@@ -3,13 +3,21 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"time"
 
 	mimep "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 )
+
+// ErrAttachmentNotReady is returned by GetAttachmentLocalPath when the
+// attachment has not yet been downloaded (or its local file disappeared).
+// Callers should trigger a re-download and retry.
+var ErrAttachmentNotReady = errors.New("attachment not yet downloaded")
 
 // FlagOp is the API-side representation of a flag mutation request submitted
 // to the sync engine. The concrete sync.FlagOp value is constructed by the
@@ -222,6 +230,40 @@ func (s *Stub) UnreadCounts(ctx context.Context) (UnreadCountsDTO, error) {
 		out.Total += n
 	}
 	return out, rows.Err()
+}
+
+// GetAttachmentLocalPath returns the local filesystem path for an attachment
+// that's already been downloaded. If the row has no local_path or the file is
+// missing, it returns ErrAttachmentNotReady (after clearing a stale path so
+// the downloader will re-fetch).
+func (s *Stub) GetAttachmentLocalPath(ctx context.Context, id int64) (string, error) {
+	row := s.Store.DB().QueryRowContext(ctx, `SELECT local_path FROM attachments WHERE id = ?`, id)
+	var lp *string
+	if err := row.Scan(&lp); err != nil {
+		return "", err
+	}
+	if lp == nil || *lp == "" {
+		return "", ErrAttachmentNotReady
+	}
+	if _, err := os.Stat(*lp); err != nil {
+		// File missing — clear so the downloader will re-fetch.
+		_ = s.Store.ClearAttachmentLocalPath(ctx, id)
+		return "", ErrAttachmentNotReady
+	}
+	return *lp, nil
+}
+
+// OpenAttachment hands the local file off to xdg-open (Linux). Detached: we
+// don't wait for the opener to finish. Uses context.Background() for the exec
+// so that a short-lived API request ctx doesn't SIGKILL xdg-open before it
+// forks the real viewer.
+func (s *Stub) OpenAttachment(ctx context.Context, id int64) error {
+	path, err := s.GetAttachmentLocalPath(ctx, id)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("xdg-open", path)
+	return cmd.Start()
 }
 
 func strFrom(p *string) string {

@@ -39,6 +39,12 @@ func (w *Wails) Search(q string, limit, offset int) ([]api.SearchHitDTO, error) 
 func (w *Wails) UnreadCounts() (api.UnreadCountsDTO, error) {
 	return w.a.UnreadCounts(context.Background())
 }
+func (w *Wails) GetAttachmentLocalPath(id int64) (string, error) {
+	return w.a.GetAttachmentLocalPath(context.Background(), id)
+}
+func (w *Wails) OpenAttachment(id int64) error {
+	return w.a.OpenAttachment(context.Background(), id)
+}
 
 // Events returns the api.Emitter for the desktop runner to bridge to Wails event bus.
 func (w *Wails) Events() *api.Emitter { return w.em }
