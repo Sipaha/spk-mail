@@ -19,21 +19,33 @@ type Engine struct {
 	secrets *secrets.Store
 	em      *api.Emitter
 
-	mu      sync.Mutex
-	workers map[int64]*AccountWorker
-	cancels map[int64]context.CancelFunc
-	writer  *StoreWriter
+	mu          sync.Mutex
+	workers     map[int64]*AccountWorker
+	cancels     map[int64]context.CancelFunc
+	writer      *StoreWriter
+	downloaders map[int64]*AttachmentDownloader
+	attachDir   string
 }
 
 // NewEngine constructs an Engine. It performs no I/O.
 func NewEngine(s *storage.Store, sec *secrets.Store, em *api.Emitter) *Engine {
 	return &Engine{
-		store:   s,
-		secrets: sec,
-		em:      em,
-		workers: map[int64]*AccountWorker{},
-		cancels: map[int64]context.CancelFunc{},
+		store:       s,
+		secrets:     sec,
+		em:          em,
+		workers:     map[int64]*AccountWorker{},
+		cancels:     map[int64]context.CancelFunc{},
+		downloaders: map[int64]*AttachmentDownloader{},
 	}
+}
+
+// NewEngineWithDir constructs an Engine that will additionally start an
+// AttachmentDownloader per account, writing blobs under attachDir. If
+// attachDir is empty no downloaders are spawned (matching NewEngine).
+func NewEngineWithDir(s *storage.Store, sec *secrets.Store, em *api.Emitter, attachDir string) *Engine {
+	e := NewEngine(s, sec, em)
+	e.attachDir = attachDir
+	return e
 }
 
 // Run starts the StoreWriter and a worker per account currently in the DB.
@@ -69,6 +81,17 @@ func (e *Engine) StartAccount(parent context.Context, id int64) {
 	e.workers[id] = w
 	e.cancels[id] = cancel
 	go e.supervise(ctx, id, w)
+
+	// Spawn an AttachmentDownloader tied to the engine's parent ctx (not the
+	// per-worker ctx) so it survives worker restarts. Guard against
+	// double-spawn when an account is stopped and re-started.
+	if e.attachDir != "" {
+		if _, ok := e.downloaders[id]; !ok {
+			d := NewAttachmentDownloader(id, e.store, e.secrets, e.em, e.attachDir)
+			e.downloaders[id] = d
+			go d.Run(parent)
+		}
+	}
 }
 
 // StopAccount cancels the worker for the given account ID and forgets it.
@@ -82,6 +105,10 @@ func (e *Engine) StopAccount(id int64) {
 	}
 	delete(e.workers, id)
 	delete(e.cancels, id)
+	// Drop the downloader entry so a subsequent StartAccount can spawn a fresh
+	// one. The goroutine itself stays alive until the engine's parent ctx is
+	// cancelled (per-account cancel TBD).
+	delete(e.downloaders, id)
 }
 
 // WorkerFor returns the live worker for an account, or nil if none exists.
