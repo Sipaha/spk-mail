@@ -20,7 +20,7 @@ func newStub(t *testing.T) *Stub {
 	key := make([]byte, 32)
 	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
 	require.NoError(t, err)
-	return NewStub(s, sec, NewEmitter())
+	return NewStub(s, sec, NewEmitter(), nil) // nil engine — unit tests don't exercise sync
 }
 
 func TestStub_AddListRemoveAccount(t *testing.T) {
