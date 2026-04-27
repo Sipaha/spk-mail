@@ -54,6 +54,7 @@ func (h *HTTP) routes() {
 	}) (any, error) {
 		return h.api.Search(ctx, req.Query, req.Limit, req.Offset)
 	}))
+	h.mux.HandleFunc("POST /api/UnreadCounts", httpHandle(func(ctx context.Context, _ *struct{}) (any, error) { return h.api.UnreadCounts(ctx) }))
 
 	h.mux.HandleFunc("GET /api/events", h.sse)
 }

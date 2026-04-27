@@ -16,6 +16,8 @@ type API interface {
 	MarkRead(ctx context.Context, messageIDs []int64) error
 	AllowRemoteForMessage(ctx context.Context, id int64) (string, error) // returns updated body_html
 	Search(ctx context.Context, query string, limit, offset int) ([]MessageDTO, error)
+
+	UnreadCounts(ctx context.Context) (UnreadCountsDTO, error)
 }
 
 type ThreadFilter struct {

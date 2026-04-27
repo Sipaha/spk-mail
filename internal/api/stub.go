@@ -186,6 +186,29 @@ func (s *Stub) Search(_ context.Context, _ string, _, _ int) ([]MessageDTO, erro
 	return nil, nil
 }
 
+func (s *Stub) UnreadCounts(ctx context.Context) (UnreadCountsDTO, error) {
+	rows, err := s.Store.DB().QueryContext(ctx, `
+		SELECT m.account_id, COUNT(*)
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE f.role = 'inbox' AND m.flags NOT LIKE '%\Seen%'
+		GROUP BY m.account_id`)
+	if err != nil {
+		return UnreadCountsDTO{}, err
+	}
+	defer rows.Close()
+	out := UnreadCountsDTO{PerAccount: map[int64]int64{}}
+	for rows.Next() {
+		var id, n int64
+		if err := rows.Scan(&id, &n); err != nil {
+			return UnreadCountsDTO{}, err
+		}
+		out.PerAccount[id] = n
+		out.Total += n
+	}
+	return out, rows.Err()
+}
+
 func strFrom(p *string) string {
 	if p == nil {
 		return ""
