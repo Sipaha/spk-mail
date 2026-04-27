@@ -146,24 +146,56 @@ func (s *Store) UnreadCountsByFolder(ctx context.Context, accountID int64) (map[
 // UpdateThreadStats recomputes counters from the messages table.
 // Called by StoreWriter after each insert/update.
 //
-// The LIKE patterns look for the JSON-encoded flag tokens. The flags column
-// stores a JSON array literal where each \-prefixed flag like \Seen is encoded
-// with a literal escape (Go json.Marshal of "\Seen" produces the 8 bytes
-// `"\\Seen"`). SQLite string literals don't interpret \\ as an escape, so the
-// pattern '%"\\Seen"%' here represents the same 8-byte sequence and matches
-// the real flag, while substring decoys like "Seenmaybe" or stray "Seen" do
-// not (the surrounding " characters bound the token).
+// Flag membership uses json_each(m.flags) to compare flag tokens by exact
+// string equality (e.g. value = '\Seen'). Earlier versions used LIKE patterns
+// like '%"\\Seen"%', which depended on JSON's specific escape encoding and
+// silently broke when flags arrived in a different escape form; switching to
+// json_each makes the check stable regardless of JSON formatting.
 func (s *Store) UpdateThreadStats(ctx context.Context, threadID int64) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE threads SET
 			last_date = (SELECT COALESCE(MAX(date),0) FROM messages WHERE thread_id = ?),
 			msg_count = (SELECT COUNT(*) FROM messages WHERE thread_id = ?),
-			unread_count = (SELECT COUNT(*) FROM messages WHERE thread_id = ? AND flags NOT LIKE '%"\\Seen"%'),
-			has_flagged = CASE WHEN EXISTS(SELECT 1 FROM messages WHERE thread_id = ? AND flags LIKE '%"\\Flagged"%') THEN 1 ELSE 0 END,
+			unread_count = (SELECT COUNT(*) FROM messages m WHERE m.thread_id = ?
+				AND NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')),
+			has_flagged = CASE WHEN EXISTS(
+				SELECT 1 FROM messages m WHERE m.thread_id = ?
+				AND EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Flagged')
+			) THEN 1 ELSE 0 END,
 			has_attach  = CASE WHEN EXISTS(SELECT 1 FROM messages WHERE thread_id = ? AND has_attachments = 1) THEN 1 ELSE 0 END
 		WHERE id = ?`,
 		threadID, threadID, threadID, threadID, threadID, threadID)
 	return err
+}
+
+// RecomputeAllThreadStats walks every thread row and re-runs UpdateThreadStats.
+// Cheap on small mailboxes (single-digit ms per 100 threads) and run on every
+// app boot so any thread with desynced unread_count / last_date / has_flagged /
+// has_attach (e.g. left behind by an older LIKE-based query, or by a partial
+// write) is repaired without user action.
+func (s *Store) RecomputeAllThreadStats(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM threads`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := s.UpdateThreadStats(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // FindThreadBySubject returns a candidate thread bucket for a message that has

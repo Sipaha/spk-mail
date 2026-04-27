@@ -41,6 +41,9 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 	if err := st.EnsureDefaultProfile(ctx); err != nil {
 		return fmt.Errorf("ensure default profile: %w", err)
 	}
+	if err := st.RecomputeAllThreadStats(ctx); err != nil {
+		slog.Warn("recompute thread stats", "err", err)
+	}
 
 	masterKey, err := secrets.LoadOrCreateMasterKey()
 	if err != nil {
