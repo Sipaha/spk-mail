@@ -1,0 +1,16 @@
+accounts:
+  - name: "Test"
+    email: "alice@example.com"
+    color: "#a855f7"
+    use_mock: true
+    folders:
+      - name: INBOX
+        messages:
+          - from: "Reports <reports@example.com>"
+            subject: "Weekly digest"
+            date: 2026-04-27T08:00:00Z
+            body_html: "<h1>Top stories</h1><p>This week's rundown…</p>"
+            attachments:
+              - filename: "report.pdf"
+                content_type: "application/pdf"
+                size: 102400
