@@ -1,0 +1,23 @@
+# Go
+build/
+*.test
+*.out
+coverage.html
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite-temp/
+
+# Local
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+secrets.bin
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Wails
+.wails/
