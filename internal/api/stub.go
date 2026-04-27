@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 
 	mimep "github.com/spk/spk-mail/internal/mime"
@@ -176,6 +177,8 @@ func (s *Stub) ListThreads(ctx context.Context, filter ThreadFilter) ([]ThreadDT
 			ID: r.ID, Subject: r.SubjectNorm, LastDate: r.LastDate,
 			MsgCount: r.MsgCount, UnreadCount: r.UnreadCount,
 			HasFlagged: r.HasFlagged, HasAttach: r.HasAttach,
+			LastFrom: strFrom(r.LastFrom),
+			Snippet:  collapseWhitespace(strFrom(r.Snippet)),
 		})
 	}
 	return out, nil
@@ -412,4 +415,33 @@ func contains(xs []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// collapseWhitespace folds CR/LF and runs of spaces/tabs into single spaces and
+// trims the result. Used on body_text snippets so multi-line bodies render as a
+// single readable preview line in the UI.
+func collapseWhitespace(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := true // leading-trim: treat start as space so we skip leading whitespace
+	for _, r := range s {
+		if r == '\r' || r == '\n' || r == '\t' || r == ' ' {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	out := b.String()
+	// Trailing space (if input ended in whitespace) — strip one.
+	if n := len(out); n > 0 && out[n-1] == ' ' {
+		out = out[:n-1]
+	}
+	return out
 }

@@ -1,5 +1,10 @@
 export interface AccountDTO { id: number; name: string; email: string; color: string; status: string; profile_id?: number }
-export interface ThreadDTO { id: number; subject: string; last_date: number; msg_count: number; unread_count: number; has_flagged: boolean; has_attach: boolean }
+export interface ThreadDTO {
+  id: number; subject: string; last_date: number; msg_count: number; unread_count: number;
+  has_flagged: boolean; has_attach: boolean;
+  last_from: string;  // raw "Name <addr>" of the most recent message; UI parses display name
+  snippet: string;    // ~200-char preview of the most recent message's body_text
+}
 export interface AttachmentDTO { id: number; filename: string; content_type: string; size_bytes: number; downloaded: boolean }
 export interface MessageDTO {
   id: number; account_id: number; folder_id: number;
