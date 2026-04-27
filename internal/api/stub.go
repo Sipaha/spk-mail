@@ -6,20 +6,48 @@ import (
 	"fmt"
 	"time"
 
+	mimep "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 )
 
-// Stub is the API impl used in plan 1: it talks directly to storage and secrets.
-// In plan 2 it will also dispatch to the sync engine.
+// FlagOp is the API-side representation of a flag mutation request submitted
+// to the sync engine. The concrete sync.FlagOp value is constructed by the
+// engine adapter; using a local type here avoids an import cycle between
+// internal/api and internal/sync (sync depends on api.Emitter).
+type FlagOp struct {
+	AccountID int64
+	FolderID  int64
+	UID       int64
+	Add       bool
+	Flags     []string
+}
+
+// FlagOpSubmitter is implemented by the per-account worker. The engine adapter
+// returns one for a given account ID.
+type FlagOpSubmitter interface {
+	SubmitFlagOp(op FlagOp)
+}
+
+// Engine is the minimal surface the API stub needs from the sync engine.
+// internal/sync.Engine satisfies this via a tiny adapter wired in main.go.
+type Engine interface {
+	StartAccount(ctx context.Context, id int64)
+	StopAccount(id int64)
+	WorkerFor(id int64) FlagOpSubmitter
+}
+
+// Stub is the API impl: talks directly to storage/secrets and dispatches to the
+// sync engine when present (production wires one; unit tests pass nil).
 type Stub struct {
 	Store   *storage.Store
 	Secrets *secrets.Store
 	Emitter *Emitter
+	Engine  Engine
 }
 
-func NewStub(s *storage.Store, sec *secrets.Store, em *Emitter) *Stub {
-	return &Stub{Store: s, Secrets: sec, Emitter: em}
+func NewStub(s *storage.Store, sec *secrets.Store, em *Emitter, eng Engine) *Stub {
+	return &Stub{Store: s, Secrets: sec, Emitter: em, Engine: eng}
 }
 
 func (s *Stub) ListAccounts(ctx context.Context) ([]AccountDTO, error) {
@@ -46,10 +74,16 @@ func (s *Stub) AddAccount(ctx context.Context, req AddAccountRequest) (AccountDT
 	if err := s.Secrets.Set(fmt.Sprintf("account:%d", id), []byte(req.IMAPPassword)); err != nil {
 		return AccountDTO{}, err
 	}
+	if s.Engine != nil {
+		s.Engine.StartAccount(ctx, id)
+	}
 	return AccountDTO{ID: id, Name: req.Name, Email: req.Email, Color: req.Color, Status: "ok"}, nil
 }
 
 func (s *Stub) RemoveAccount(ctx context.Context, id int64) error {
+	if s.Engine != nil {
+		s.Engine.StopAccount(id)
+	}
 	if err := s.Store.DeleteAccount(ctx, id); err != nil {
 		return err
 	}
@@ -69,17 +103,110 @@ func (s *Stub) ListThreads(ctx context.Context, _ ThreadFilter) ([]ThreadDTO, er
 	return out, nil
 }
 
-func (s *Stub) GetThread(ctx context.Context, _ int64) ([]MessageDTO, error) {
-	// plan 2 implements; plan 1 returns empty
-	return []MessageDTO{}, nil
+func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
+	rows, err := s.Store.GetMessagesByThread(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MessageDTO, 0, len(rows))
+	for _, r := range rows {
+		var to []string
+		if r.ToAddrs != nil {
+			_ = json.Unmarshal([]byte(*r.ToAddrs), &to)
+		}
+		var fl []string
+		_ = json.Unmarshal([]byte(r.Flags), &fl)
+		atts, _ := s.Store.ListAttachmentsByMessage(ctx, r.ID)
+		dtoAtts := make([]AttachmentDTO, 0, len(atts))
+		for _, a := range atts {
+			dtoAtts = append(dtoAtts, AttachmentDTO{ID: a.ID, Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.SizeBytes, Downloaded: a.LocalPath != nil})
+		}
+		out = append(out, MessageDTO{
+			ID: r.ID, AccountID: r.AccountID, FolderID: r.FolderID,
+			Subject: strFrom(r.Subject), FromAddr: strFrom(r.FromAddr), ToAddrs: to,
+			Date: r.Date, Flags: fl,
+			BodyText: strFrom(r.BodyText), BodyHTML: strFrom(r.BodyHTML),
+			Attachments: dtoAtts,
+		})
+	}
+	return out, nil
 }
 
-func (s *Stub) MarkRead(_ context.Context, _ []int64) error { return nil }
-func (s *Stub) AllowRemoteForMessage(_ context.Context, _ int64) (string, error) {
-	return "", nil
+func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
+	for _, id := range ids {
+		m, err := s.Store.GetMessage(ctx, id)
+		if err != nil {
+			return err
+		}
+		var fl []string
+		_ = json.Unmarshal([]byte(m.Flags), &fl)
+		if !contains(fl, `\Seen`) {
+			fl = append(fl, `\Seen`)
+		}
+		b, _ := json.Marshal(fl)
+		if err := s.Store.UpdateFlags(ctx, id, string(b)); err != nil {
+			return err
+		}
+		if s.Engine != nil {
+			if w := s.Engine.WorkerFor(m.AccountID); w != nil {
+				w.SubmitFlagOp(FlagOp{
+					AccountID: m.AccountID,
+					FolderID:  m.FolderID,
+					UID:       m.UID,
+					Add:       true,
+					Flags:     []string{`\Seen`},
+				})
+			}
+		}
+		if err := s.Store.UpdateThreadStats(ctx, ptrOr(m.ThreadID)); err != nil {
+			return err
+		}
+		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": id}})
+	}
+	return nil
 }
+
+func (s *Stub) AllowRemoteForMessage(ctx context.Context, id int64) (string, error) {
+	m, err := s.Store.GetMessage(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if m.BodyHTML == nil {
+		return "", nil
+	}
+	updated := mimep.UnblockRemote(*m.BodyHTML)
+	if _, err := s.Store.DB().ExecContext(ctx, `UPDATE messages SET body_html = ? WHERE id = ?`, updated, id); err != nil {
+		return "", err
+	}
+	s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": id}})
+	return updated, nil
+}
+
 func (s *Stub) Search(_ context.Context, _ string, _, _ int) ([]MessageDTO, error) {
 	return nil, nil
+}
+
+func strFrom(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func ptrOr(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+func contains(xs []string, v string) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // helper that other packages use to JSON-encode flags consistently

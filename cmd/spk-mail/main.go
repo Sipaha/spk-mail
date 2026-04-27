@@ -19,6 +19,7 @@ import (
 	"github.com/spk/spk-mail/internal/mockimap"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
+	mailsync "github.com/spk/spk-mail/internal/sync"
 	"github.com/spk/spk-mail/internal/testapi"
 )
 
@@ -84,7 +85,9 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 	}
 
 	em := api.NewEmitter()
-	stub := api.NewStub(st, sec, em)
+	eng := mailsync.NewEngine(st, sec, em)
+	go eng.Run(ctx)
+	stub := api.NewStub(st, sec, em, engineAdapter{eng: eng})
 
 	mux := http.NewServeMux()
 	httpAPI := transport.NewHTTP(stub, em)
@@ -146,6 +149,31 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 		return err
 	}
 	return nil
+}
+
+// engineAdapter bridges *mailsync.Engine to the api.Engine interface, avoiding
+// an import cycle (internal/sync already depends on internal/api for events).
+type engineAdapter struct{ eng *mailsync.Engine }
+
+func (a engineAdapter) StartAccount(ctx context.Context, id int64) { a.eng.StartAccount(ctx, id) }
+func (a engineAdapter) StopAccount(id int64)                       { a.eng.StopAccount(id) }
+func (a engineAdapter) WorkerFor(id int64) api.FlagOpSubmitter {
+	w := a.eng.WorkerFor(id)
+	if w == nil {
+		return nil
+	}
+	return workerAdapter{w: w}
+}
+
+type workerAdapter struct{ w *mailsync.AccountWorker }
+
+func (a workerAdapter) SubmitFlagOp(op api.FlagOp) {
+	a.w.SubmitFlagOp(mailsync.FlagOp{
+		AccountID: op.AccountID,
+		FolderUID: mailsync.FolderUID{FolderID: op.FolderID, UID: op.UID},
+		Add:       op.Add,
+		Flags:     op.Flags,
+	})
 }
 
 // splitHostPort splits "host:port" into host string and port int.

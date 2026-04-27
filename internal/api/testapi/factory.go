@@ -25,5 +25,5 @@ func NewStub(t *testing.T) api.API {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return api.NewStub(st, sec, api.NewEmitter())
+	return api.NewStub(st, sec, api.NewEmitter(), nil)
 }
