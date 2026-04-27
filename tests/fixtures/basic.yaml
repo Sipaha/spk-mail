@@ -26,3 +26,10 @@ accounts:
               - filename: "weekly.pdf"
                 content_type: "application/pdf"
                 size: 256
+      - name: Sent
+        messages:
+          - from: "Alice <alice@example.com>"
+            to: ["bob@example.com"]
+            subject: "Re: Q1 plans"
+            date: 2026-04-26T15:00:00Z
+            body_text: "Sounds good."
