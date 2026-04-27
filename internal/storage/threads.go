@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 type ThreadRow struct {
@@ -14,6 +15,17 @@ type ThreadRow struct {
 	UnreadCount int64
 	HasFlagged  bool
 	HasAttach   bool
+}
+
+// ThreadFilter mirrors the api-layer ThreadFilter shape but lives in storage to
+// avoid an import cycle. All fields are optional and combine with AND semantics.
+// Pointer fields treat nil as "no constraint"; bool fields treat false the same.
+type ThreadFilter struct {
+	AccountID  *int64
+	FolderID   *int64
+	ProfileID  *int64
+	UnreadOnly bool
+	HasFlagged bool
 }
 
 func (s *Store) InsertThread(ctx context.Context, t ThreadRow) (int64, error) {
@@ -27,10 +39,56 @@ func (s *Store) InsertThread(ctx context.Context, t ThreadRow) (int64, error) {
 	return res.LastInsertId()
 }
 
-func (s *Store) ListThreadsRecent(ctx context.Context, limit, offset int) ([]ThreadRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,subject_norm,last_date,msg_count,unread_count,has_flagged,has_attach
-		FROM threads ORDER BY last_date DESC LIMIT ? OFFSET ?`, limit, offset)
+// ListThreads returns recent threads filtered by the supplied ThreadFilter.
+// An empty filter behaves identically to listing all threads ordered by
+// last_date desc. Account/folder/profile filters share a single EXISTS
+// subquery joining messages -> accounts so we don't multiply rows; unread/
+// flagged filters are direct columns on threads. All values are bound via
+// placeholders.
+func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset int) ([]ThreadRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		wheres []string
+		args   []any
+	)
+
+	// account/folder/profile filters all join through messages -> accounts.
+	needSubQ := f.AccountID != nil || f.FolderID != nil || f.ProfileID != nil
+	if needSubQ {
+		subAnd := []string{"m.thread_id = t.id"}
+		if f.AccountID != nil {
+			subAnd = append(subAnd, "m.account_id = ?")
+			args = append(args, *f.AccountID)
+		}
+		if f.FolderID != nil {
+			subAnd = append(subAnd, "m.folder_id  = ?")
+			args = append(args, *f.FolderID)
+		}
+		if f.ProfileID != nil {
+			subAnd = append(subAnd, "a.profile_id = ?")
+			args = append(args, *f.ProfileID)
+		}
+		wheres = append(wheres,
+			"EXISTS (SELECT 1 FROM messages m JOIN accounts a ON a.id = m.account_id WHERE "+
+				strings.Join(subAnd, " AND ")+")")
+	}
+	if f.UnreadOnly {
+		wheres = append(wheres, "t.unread_count > 0")
+	}
+	if f.HasFlagged {
+		wheres = append(wheres, "t.has_flagged = 1")
+	}
+
+	q := `SELECT t.id, t.subject_norm, t.last_date, t.msg_count, t.unread_count, t.has_flagged, t.has_attach FROM threads t`
+	if len(wheres) > 0 {
+		q += " WHERE " + strings.Join(wheres, " AND ")
+	}
+	q += " ORDER BY t.last_date DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -49,37 +107,38 @@ func (s *Store) ListThreadsRecent(ctx context.Context, limit, offset int) ([]Thr
 	return out, rows.Err()
 }
 
-// ListThreadsByProfile returns recent threads, optionally filtered by profile.
-// When profileID is nil, returns all threads (same as ListThreadsRecent).
-// When non-nil, restricts to threads that have at least one message belonging
-// to an account in that profile.
+// ListThreadsRecent is a thin wrapper around ListThreads with an empty filter.
+func (s *Store) ListThreadsRecent(ctx context.Context, limit, offset int) ([]ThreadRow, error) {
+	return s.ListThreads(ctx, ThreadFilter{}, limit, offset)
+}
+
+// ListThreadsByProfile is a thin wrapper around ListThreads that filters by
+// profile. Kept for backwards compatibility with existing callers.
 func (s *Store) ListThreadsByProfile(ctx context.Context, profileID *int64, limit, offset int) ([]ThreadRow, error) {
-	if profileID == nil {
-		return s.ListThreadsRecent(ctx, limit, offset)
-	}
+	return s.ListThreads(ctx, ThreadFilter{ProfileID: profileID}, limit, offset)
+}
+
+// UnreadCountsByFolder returns per-folder counts of unread (no \Seen flag)
+// messages for the given account. Folders with zero unread messages are
+// omitted from the result.
+func (s *Store) UnreadCountsByFolder(ctx context.Context, accountID int64) (map[int64]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id, t.subject_norm, t.last_date, t.msg_count, t.unread_count, t.has_flagged, t.has_attach
-		FROM threads t
-		WHERE EXISTS (
-			SELECT 1 FROM messages m
-			JOIN accounts a ON a.id = m.account_id
-			WHERE m.thread_id = t.id AND a.profile_id = ?
-		)
-		ORDER BY t.last_date DESC LIMIT ? OFFSET ?`, *profileID, limit, offset)
+		SELECT m.folder_id, COUNT(*)
+		FROM messages m
+		WHERE m.account_id = ?
+		  AND NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')
+		GROUP BY m.folder_id`, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ThreadRow
+	out := map[int64]int64{}
 	for rows.Next() {
-		var t ThreadRow
-		var fl, at int
-		if err := rows.Scan(&t.ID, &t.SubjectNorm, &t.LastDate, &t.MsgCount, &t.UnreadCount, &fl, &at); err != nil {
+		var fid, n int64
+		if err := rows.Scan(&fid, &n); err != nil {
 			return nil, err
 		}
-		t.HasFlagged = fl != 0
-		t.HasAttach = at != 0
-		out = append(out, t)
+		out[fid] = n
 	}
 	return out, rows.Err()
 }
