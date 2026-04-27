@@ -798,9 +798,9 @@ git commit -m "docs: ui-testing recipe book + project CLAUDE.md"
 
 ---
 
-## Polish Backlog Accumulated During Plans 2–5
+## Polish Backlog Accumulated During Plans 2–6
 
-These items were flagged by code reviewers during plan 2 (sync engine), plan 3 (UI core), plan 4 (tray + notifications), and plan 5 (search) execution. They were deferred to plan 7 as plan-faithful tech debt or post-implementation polish. None are required for the spec end-state but most improve correctness, observability, or maintainability. Group them into the existing plan-7 task flow as fits, or make them a separate Task X "tech-debt sweep".
+These items were flagged by code reviewers during plan 2 (sync engine), plan 3 (UI core), plan 4 (tray + notifications), plan 5 (search), and plan 6 (attachments) execution. They were deferred to plan 7 as plan-faithful tech debt or post-implementation polish. None are required for the spec end-state but most improve correctness, observability, or maintainability. Group them into the existing plan-7 task flow as fits, or make them a separate Task X "tech-debt sweep".
 
 ### Storage layer hygiene
 - `FindThreadByMessageIDs` doc claims "case-insensitive" but SQL is case-sensitive — drop phrase or add COLLATE NOCASE.
@@ -918,3 +918,12 @@ These items were flagged by code reviewers during plan 2 (sync engine), plan 3 (
 - `frontend/src/components/SearchBar.tsx` — input lacks `aria-label`. Add for accessibility consistency with the rest of the codebase if/when an a11y pass is done.
 - `frontend/src/pages/SearchResults.tsx` — no `AbortController` on in-flight searches. Fast typing can let an older response overwrite a newer one (UI stale-result risk). Wire an abort controller to `client.search`, or debounce input.
 - `frontend/src/components/Snippet.tsx` — adversarial email body containing literal `\x01`/`\x02` bytes would cause those chars to render as `<mark>` boundaries. Severity is low (no XSS, only confusing display in user's own message). Consider stripping these control chars in the MIME parser as a sanitization pass.
+
+### Attachments (plan 6)
+- `internal/api/stub.go::ListThreads` returns `ThreadDTO.Subject = r.SubjectNorm` — `SubjectNorm` is the lowercased + prefix-stripped value used for thread bucketing, NOT a display string. Inbox UI shows lowercase subjects. Either add a `subject_raw` to `threads` (set from the most recent message's subject) or have ListThreads JOIN messages and pick the latest message's `subject` field. Pre-existing — surfaced by Plan 6 Task 7's `getByText(/Weekly digest/i)` workaround.
+- `internal/sync/engine.go::StopAccount` does not cancel the per-account `AttachmentDownloader` goroutine (engine.go:107 has the explicit "per-account cancel TBD" comment). Goroutine survives until engine's parent ctx fires. After `RemoveAccount`, the next downloader tick gets `GetAccount → ErrNotFound` and bails — practical impact is a goroutine waking every 5s to query+sleep — but it's a leak. Add per-account cancel: store cancel funcs in `e.downloadCancels[id]`, call from StopAccount.
+- `internal/sync/attachment_downloader.go` opens a fresh IMAP TLS connection on every tick that has pending work. For high-volume accounts this is wasteful. Either keep the connection alive across ticks (with idle timeout) or batch multiple tick intervals into a single dial.
+- `internal/sync/attachment_downloader.go` — same-message duplicate filenames (RFC 2183 allows it) clobber each other on disk. Both DB rows then point to the same file. Prefix the on-disk filename with `attachmentID-` to disambiguate while keeping `attachments.filename` (display) unchanged.
+- `internal/api/stub.go::OpenAttachment` calls `exec.Command("xdg-open", path)` without the `--` argument separator. Filenames starting with `-` could be parsed as flags by some `xdg-open` shims. Change to `exec.Command("xdg-open", "--", path)`.
+- `internal/sync/attachment_downloader.go` error paths (Dial fail, FetchBodyPart fail, AtomicWrite fail, UpdateAttachmentDownloaded fail) are not unit-tested — each just logs + continues. Add a fault-injection mockimap or a wrapper interface to exercise these.
+- `frontend/src/api/events.ts::AttachmentReady` case unconditionally refetches the open thread regardless of which thread the ready attachment belongs to. Filter on `ev.payload.message_id` belonging to the open thread to skip unnecessary refetches.
