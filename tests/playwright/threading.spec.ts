@@ -15,6 +15,10 @@ test('reply lands in the same thread', async ({ page, request }) => {
   // Both subjects normalize to "topic a" so they share a thread; the inbox row shows "topic a" (lowercased — known issue tracked in plan-7 backlog)
   await expect(page.getByText(/topic a/i)).toBeVisible({ timeout: 10_000 })
   await page.getByText(/topic a/i).first().click()
-  await expect(page.getByText('first')).toBeVisible({ timeout: 5_000 })
-  await expect(page.getByText('second')).toBeVisible({ timeout: 5_000 })
+  // After click, the thread view (<main>) shows both message bodies as <pre>.
+  // Scope to <main> because the inbox ThreadRow now shows a body-text snippet
+  // and would otherwise collide on getByText('first' | 'second').
+  const main = page.getByRole('main')
+  await expect(main.getByText('first')).toBeVisible({ timeout: 5_000 })
+  await expect(main.getByText('second')).toBeVisible({ timeout: 5_000 })
 })

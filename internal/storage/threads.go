@@ -15,6 +15,13 @@ type ThreadRow struct {
 	UnreadCount int64
 	HasFlagged  bool
 	HasAttach   bool
+	// LastFrom is the most recent message's from_addr; nil if the thread has
+	// no messages yet (which can happen briefly between thread insert and
+	// first-message insert).
+	LastFrom *string
+	// Snippet is the most recent message's body_text, server-side truncated
+	// to ~200 chars. Nil if the most recent message has no plain-text body.
+	Snippet *string
 }
 
 // ThreadFilter mirrors the api-layer ThreadFilter shape but lives in storage to
@@ -81,7 +88,14 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 		wheres = append(wheres, "t.has_flagged = 1")
 	}
 
-	q := `SELECT t.id, t.subject_norm, t.last_date, t.msg_count, t.unread_count, t.has_flagged, t.has_attach FROM threads t`
+	// Correlated subqueries fetch the most recent message's from_addr and a
+	// 200-char body_text prefix per thread. SUBSTR is computed server-side to
+	// keep the JSON payload small; the frontend trims further to its visible
+	// width. NULL columns surface as Go nil pointers via sql.NullString.
+	q := `SELECT t.id, t.subject_norm, t.last_date, t.msg_count, t.unread_count, t.has_flagged, t.has_attach,
+		(SELECT m.from_addr FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS last_from,
+		(SELECT SUBSTR(COALESCE(m.body_text, ''), 1, 200) FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS snippet
+		FROM threads t`
 	if len(wheres) > 0 {
 		q += " WHERE " + strings.Join(wheres, " AND ")
 	}
@@ -97,11 +111,20 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 	for rows.Next() {
 		var t ThreadRow
 		var fl, at int
-		if err := rows.Scan(&t.ID, &t.SubjectNorm, &t.LastDate, &t.MsgCount, &t.UnreadCount, &fl, &at); err != nil {
+		var lastFrom, snippet sql.NullString
+		if err := rows.Scan(&t.ID, &t.SubjectNorm, &t.LastDate, &t.MsgCount, &t.UnreadCount, &fl, &at, &lastFrom, &snippet); err != nil {
 			return nil, err
 		}
 		t.HasFlagged = fl != 0
 		t.HasAttach = at != 0
+		if lastFrom.Valid {
+			v := lastFrom.String
+			t.LastFrom = &v
+		}
+		if snippet.Valid {
+			v := snippet.String
+			t.Snippet = &v
+		}
 		out = append(out, t)
 	}
 	return out, rows.Err()

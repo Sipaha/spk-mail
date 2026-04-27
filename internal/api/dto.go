@@ -39,6 +39,14 @@ type ThreadDTO struct {
 	UnreadCount int64  `json:"unread_count"`
 	HasFlagged  bool   `json:"has_flagged"`
 	HasAttach   bool   `json:"has_attach"`
+	// LastFrom is the raw "Name <addr>" of the most recent message in the
+	// thread; the frontend parses out a display name. Empty if the thread
+	// has no messages.
+	LastFrom string `json:"last_from"`
+	// Snippet is the first ~200 chars of the most recent message's
+	// body_text, with whitespace runs collapsed. The frontend truncates
+	// further to its visible width.
+	Snippet string `json:"snippet"`
 }
 
 type MessageDTO struct {
