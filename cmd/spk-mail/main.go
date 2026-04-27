@@ -53,11 +53,6 @@ func main() {
 	}
 }
 
-func runDesktop(_ context.Context) error {
-	fmt.Println("desktop mode is implemented in plan 3; use --browser for now")
-	return nil
-}
-
 func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) error {
 	paths, err := config.Paths()
 	if err != nil {
