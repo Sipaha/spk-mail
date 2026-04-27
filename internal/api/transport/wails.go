@@ -32,6 +32,9 @@ func (w *API) AddAccount(req api.AddAccountRequest) (api.AccountDTO, error) {
 	return w.a.AddAccount(context.Background(), req)
 }
 func (w *API) RemoveAccount(id int64) error { return w.a.RemoveAccount(context.Background(), id) }
+func (w *API) ListFolders(accountID int64) ([]api.FolderDTO, error) {
+	return w.a.ListFolders(context.Background(), accountID)
+}
 func (w *API) ListThreads(f api.ThreadFilter) ([]api.ThreadDTO, error) {
 	return w.a.ListThreads(context.Background(), f)
 }

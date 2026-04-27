@@ -10,6 +10,7 @@ type API interface {
 	AddAccount(ctx context.Context, req AddAccountRequest) (AccountDTO, error)
 	RemoveAccount(ctx context.Context, id int64) error
 
+	ListFolders(ctx context.Context, accountID int64) ([]FolderDTO, error)
 	ListThreads(ctx context.Context, filter ThreadFilter) ([]ThreadDTO, error)
 	GetThread(ctx context.Context, id int64) ([]MessageDTO, error)
 
@@ -36,6 +37,7 @@ type ThreadFilter struct {
 	FolderID   *int64 `json:"folder_id,omitempty"`
 	ProfileID  *int64 `json:"profile_id,omitempty"`
 	UnreadOnly bool   `json:"unread_only,omitempty"`
+	HasFlagged bool   `json:"has_flagged,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
 	Offset     int    `json:"offset,omitempty"`
 }

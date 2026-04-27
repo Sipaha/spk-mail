@@ -31,6 +31,11 @@ func (h *HTTP) routes() {
 	}) (any, error) {
 		return nil, h.api.RemoveAccount(ctx, req.ID)
 	}))
+	h.mux.HandleFunc("POST /api/ListFolders", httpHandle(func(ctx context.Context, req *struct {
+		AccountID int64 `json:"account_id"`
+	}) (any, error) {
+		return h.api.ListFolders(ctx, req.AccountID)
+	}))
 	h.mux.HandleFunc("POST /api/ListThreads", httpHandle(func(ctx context.Context, req *api.ThreadFilter) (any, error) { return h.api.ListThreads(ctx, *req) }))
 	h.mux.HandleFunc("POST /api/GetThread", httpHandle(func(ctx context.Context, req *struct {
 		ID int64 `json:"id"`
