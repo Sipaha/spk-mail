@@ -798,9 +798,9 @@ git commit -m "docs: ui-testing recipe book + project CLAUDE.md"
 
 ---
 
-## Polish Backlog Accumulated During Plans 2–4
+## Polish Backlog Accumulated During Plans 2–5
 
-These items were flagged by code reviewers during plan 2 (sync engine), plan 3 (UI core), and plan 4 (tray + notifications) execution. They were deferred to plan 7 as plan-faithful tech debt or post-implementation polish. None are required for the spec end-state but most improve correctness, observability, or maintainability. Group them into the existing plan-7 task flow as fits, or make them a separate Task X "tech-debt sweep".
+These items were flagged by code reviewers during plan 2 (sync engine), plan 3 (UI core), plan 4 (tray + notifications), and plan 5 (search) execution. They were deferred to plan 7 as plan-faithful tech debt or post-implementation polish. None are required for the spec end-state but most improve correctness, observability, or maintainability. Group them into the existing plan-7 task flow as fits, or make them a separate Task X "tech-debt sweep".
 
 ### Storage layer hygiene
 - `FindThreadByMessageIDs` doc claims "case-insensitive" but SQL is case-sensitive — drop phrase or add COLLATE NOCASE.
@@ -909,3 +909,12 @@ These items were flagged by code reviewers during plan 2 (sync engine), plan 3 (
 - `internal/api/stub.go` `encodeJSON` (helper at the bottom of the file) is unexported and unreferenced — dead code carried from an earlier iteration. Remove.
 - `internal/api/dto.go` `UnreadCountsDTO.PerAccount map[int64]int64` serializes as `{"<int>":<int>}` (JSON object keys must be strings). When Plan 5 wires the frontend, the TypeScript type must be `Record<string, number>`, not `Record<number, number>` — silent runtime failure otherwise. Either add a TS-side note in plan 5 task wiring, or change the DTO to `[]struct{AccountID int64; Count int64}` for unambiguity.
 - `cmd/spk-mail/run_desktop_wails.go` clean-shutdown path: tray "Quit" menu calls `app.Quit()`, which unblocks `app.Run()` but does NOT cancel the engine context (`signal.NotifyContext` only fires on real signals). The `go eng.Run(ctx)` goroutine is reaped by process exit rather than draining cleanly. Make `runDesktop` thread the cancel func through to the tray's Quit handler, or have `app.Quit()` trigger a cancel via a shared `context.CancelFunc`.
+
+### Search (plan 5)
+- `internal/storage/search_parser.go` — empty operator value (`from:`, `to:`, `subject:`) appends `""` to the filter slice, producing SQL `LIKE '%%'` which matches every row. Either reject empty values (skip the token) or treat them as a no-op. Same applies to `account:` with non-numeric value (currently silently dropped, which is fine).
+- `internal/storage/search_parser.go` — unrecognized `key:value` tokens (e.g. `foo:bar`, typos like `form:bob`) fall through to the `default:` case and the entire raw token becomes an FTS5 quoted phrase `"foo:bar"`. Confusing UX. Fix: skip unknown operators or strip the prefix and pass only the value as a match term.
+- `internal/storage/search.go` — `snippet(messages_fts, 3, ...)` hardcodes column index 3 (body_text). If the FTS5 schema column order changes, snippets silently target the wrong field. Either inline a named constant or pass the column index alongside the schema definition.
+- `internal/api/transport/http.go` `httpHandle` — `if r.ContentLength > 0` guard relies on the client setting `Content-Length`. For HTTP/2 / chunked-transfer / non-browser clients this can be -1 (unknown), causing silent zero-value decodes for ALL endpoints. Use `r.Body != http.NoBody` or attempt decode unconditionally and tolerate EOF.
+- `frontend/src/components/SearchBar.tsx` — input lacks `aria-label`. Add for accessibility consistency with the rest of the codebase if/when an a11y pass is done.
+- `frontend/src/pages/SearchResults.tsx` — no `AbortController` on in-flight searches. Fast typing can let an older response overwrite a newer one (UI stale-result risk). Wire an abort controller to `client.search`, or debounce input.
+- `frontend/src/components/Snippet.tsx` — adversarial email body containing literal `\x01`/`\x02` bytes would cause those chars to render as `<mark>` boundaries. Severity is low (no XSS, only confusing display in user's own message). Consider stripping these control chars in the MIME parser as a sanitization pass.
