@@ -6,3 +6,9 @@ accounts:
     use_mock: true
     folders:
       - name: INBOX
+        messages:
+          - from: "Bob <bob@example.com>"
+            to: ["alice@example.com"]
+            subject: "Project update"
+            date: 2026-04-26T10:00:00Z
+            body_text: "Hi Alice, here's the update on our project."
