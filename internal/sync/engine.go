@@ -25,6 +25,11 @@ type Engine struct {
 	writer      *StoreWriter
 	downloaders map[int64]*AttachmentDownloader
 	attachDir   string
+
+	// rootCtx is the engine's process-wide context, captured by Run. Workers
+	// derive from it so they outlive the per-request HTTP ctx that called
+	// StartAccount via AddAccount.
+	rootCtx context.Context
 }
 
 // NewEngine constructs an Engine. It performs no I/O.
@@ -51,6 +56,10 @@ func NewEngineWithDir(s *storage.Store, sec *secrets.Store, em *api.Emitter, att
 // Run starts the StoreWriter and a worker per account currently in the DB.
 // It blocks until ctx is cancelled, then signals all workers to stop.
 func (e *Engine) Run(ctx context.Context) {
+	e.mu.Lock()
+	e.rootCtx = ctx
+	e.mu.Unlock()
+
 	e.writer = NewStoreWriter(e.store, e.em)
 	go e.writer.Run(ctx)
 
@@ -69,14 +78,22 @@ func (e *Engine) Run(ctx context.Context) {
 }
 
 // StartAccount spins up a worker for the given account ID if one isn't already
-// running. The worker's context is derived from parent.
+// running. The worker's context is derived from the engine's process-wide root
+// context (captured by Run) so it survives the per-request HTTP context that
+// may have called StartAccount via AddAccount. The parent argument is kept for
+// API compatibility but is only used as a fallback when Run hasn't been called
+// yet (tests).
 func (e *Engine) StartAccount(parent context.Context, id int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, ok := e.workers[id]; ok {
 		return
 	}
-	ctx, cancel := context.WithCancel(parent)
+	base := e.rootCtx
+	if base == nil {
+		base = parent
+	}
+	ctx, cancel := context.WithCancel(base)
 	w := NewAccountWorker(id, e.store, e.secrets, e.writer, e.em)
 	e.workers[id] = w
 	e.cancels[id] = cancel
@@ -89,7 +106,7 @@ func (e *Engine) StartAccount(parent context.Context, id int64) {
 		if _, ok := e.downloaders[id]; !ok {
 			d := NewAttachmentDownloader(id, e.store, e.secrets, e.em, e.attachDir)
 			e.downloaders[id] = d
-			go d.Run(parent)
+			go d.Run(base)
 		}
 	}
 }
