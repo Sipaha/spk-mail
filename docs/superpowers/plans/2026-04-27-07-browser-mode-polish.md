@@ -795,3 +795,104 @@ git commit -m "docs: ui-testing recipe book + project CLAUDE.md"
 - The `Mount` struct gains a `Clock *clock.Clock` field; all callers updated together (Task 3) ✓.
 - `LogEntry` JSON shape stable between handler, slog mirror, and frontend ✓ (frontend doesn't need a typed model — it just renders the JSON).
 - `TestApi` route paths (`/api/_test/*`) match the documentation in `docs/ui-testing.md` ✓.
+
+---
+
+## Polish Backlog Accumulated During Plans 2–3
+
+These items were flagged by code reviewers during plan 2 (sync engine) and plan 3 (UI core) execution. They were deferred to plan 7 as plan-faithful tech debt or post-implementation polish. None are required for the spec end-state but most improve correctness, observability, or maintainability. Group them into the existing plan-7 task flow as fits, or make them a separate Task X "tech-debt sweep".
+
+### Storage layer hygiene
+- `FindThreadByMessageIDs` doc claims "case-insensitive" but SQL is case-sensitive — drop phrase or add COLLATE NOCASE.
+- `UpdateThreadStats` LIKE patterns are unbounded substring matches — tighten to `'%"\Seen"%'` etc.
+- `findThreadBySubject` proper `ErrNoRows` handling (currently any error → no match → spurious thread).
+- Add `ORDER BY last_date DESC` to `findThreadBySubject` query for determinism.
+- Surface `InsertAttachment` errors via `WriteError` event (currently swallowed).
+- Per-message transaction wrapper in StoreWriter.process (orphan thread possible on InsertMessage failure).
+- Move SQL escapes (`store.DB().ExecContext` in store_writer.go and stub.go) into typed methods: `Store.UpdateBodyHTML`, `Store.GetFolderByID`, `Store.FindThreadBySubject`, `Store.FolderRole`.
+
+### MIME / sanitizer
+- `walk()` control-flow comments documenting multipart-vs-leaf intent.
+- Recursion-depth guard (max 32) in `walk` against deeply-nested attacker input.
+- Document body-read best-effort contract on `Parse()`.
+- Tighten `headerAddrFirst` fallback with `mail.ParseAddress`.
+- Idempotency-safe `Sanitize` with hostile-injection defense — naive `AllowAttrs("data-spk-original-src")` is unsafe (creates attack vector via attacker pre-injecting the attr); proper fix needs strip-before-rewrite.
+- Document `imgSrcPattern` post-bluemonday-canonical-input precondition.
+- Add doc comment to `UnblockRemote`: "Input must be Sanitize() output."
+- Fix double-space in rewritten `<img>` tags (cosmetic).
+- Make `policy` private/unmutable via `sync.OnceValue` or local closure.
+- `</body>` literal in body_html could terminate the iframe wrapper document early — escape on server or use srcDoc wrapper differently.
+
+### Thread package
+- Document `CandidateMessageIDs` non-deterministic map-iteration order (or `sort.Strings(out)` before return).
+- More `NormalizeSubject` table cases: foreign prefixes (Antw/AW/Rv/Tr/Fw), "Hello: world" non-prefix.
+- Test in-reply-to-in-references dedup case for `CandidateMessageIDs`.
+- Drop redundant parens at jwz.go:47.
+
+### IMAP wrapper
+- ctx wiring on `Select`/`StoreFlags`/`Capabilities` — currently parameter is silently ignored.
+- `SplitHostPort` returns `(string, int, error)` for safety in config-loader path (currently swallows port-parse error).
+- `mailboxRole` precedence-ordered switch (currently first-match in iteration order).
+- Split `\Archive` vs `\All` semantics (Gmail "All Mail" is conceptually different).
+- Document `imap.Client` concurrency contract.
+- `FetchedMessage.Internal` zero-time guard (currently produces `-6795364578871` for missing INTERNALDATE).
+- `Capabilities` caching (currently re-issues CAPABILITY every call).
+- Either remove `IdleNotification.UID` field (always 0) or strengthen docstring.
+- `Idle()` re-entry guard (panic or warn if already running).
+- Expand Fetch-handler `Collect()` latency comment to acknowledge worst-case memory cost on large literals.
+- Exponential backoff for IDLE-error retry (currently fixed 2s).
+- Hoist `refresh` timer out of Idle() loop using `Reset()`.
+- Deduplicate `splitHostPort` (unexported) and `SplitHostPort` (exported).
+- Investigate `TestIdle_FiresOnNewMessage` whole-repo flake (passes in isolation and under -race -count=10).
+
+### Sync package
+- Consider renaming `internal/sync` to `mailsync`/`syncengine` to avoid stdlib shadowing if alias tax becomes painful.
+- Tighten `folderRegistry.Set(fid, validity, next)` signature (positional swap risk on identical int64 args) — pass `folderInfo` value or use named returns.
+- Change `folderRegistry.state` map key from `FolderUID{FolderID: fid}` (UID always 0) to plain `int64`.
+- Add `// Package sync …` doc comment.
+- Convert `AccountStatus.State` to typed string with exported constants.
+- Move `flagOps` drain loop into its own goroutine scoped to `Run` (decouples from runOnce restart so pending flag ops always drain).
+- Supervisor-scoped IDLE/poll goroutine lifetime — currently leak across runOnce restarts.
+- Extract `dialForAccount(ctx, acc) (*imap.Client, error)` helper to collapse three Dial sites in account_worker.go (runOnce/runIDLE/runPoll); also captures `secrets.Get` errors that are currently swallowed.
+- Log/emit on runPoll/runIDLE error paths (currently silent).
+- Eliminate `splitHostPortAddr` shim in account_worker.go.
+- Exponential backoff in AccountWorker with auth-vs-network differentiation (currently fixed 5s).
+- Fetch INBOX first then other folders in parallel.
+- Assert `role="inbox"` uniqueness per account.
+- Drop `var _ = imap.DialOpts{}` hedge in types.go (no longer needed once a real `imap.*` reference appears).
+- Resync-suppression test case for StoreWriter (test that `IsResync: true` skips MessageArrived emit).
+- Promote `contains`/`nilIfEmpty` to a shared util when AccountWorker also needs them.
+- Engine double-spawn race on rapid Stop→Start for same id — track in-flight supervise via done channel; serialize Stop/Start.
+- Reset Engine's `attempt` counter after a long-stable run before applying capped 300s.
+- Hoist Engine's `delays` slice to package-level var for discoverability/test override.
+- `engine_test.go::TestEngine_TwoAccountsSyncInParallel` should use `ctx + defer cancel()` for clean shutdown.
+
+### API stub + main
+- `MarkRead` early-continue when `\Seen` is already set (avoid redundant DB write/IMAP STORE/SSE event).
+- `MarkRead` `slog.Warn` when `WorkerFor` returns nil — currently silent local-vs-server divergence.
+- Skip `UpdateThreadStats` when `m.ThreadID` is nil (don't pass 0 silently).
+- `Stub.AddAccount` should return `Status: "starting"` not `"ok"` (engine has not yet connected when the call returns).
+- Promote `engineAdapter`/`workerAdapter` from `cmd/spk-mail/main.go` to `internal/sync/apiadapter` package before more transports need them.
+- `slog.Warn` on JSON unmarshal failures in `GetThread`/`MarkRead` (currently silently degrade to empty arrays).
+- Single transaction around `MarkRead` batch (or document partial-failure contract on the API method).
+- `cmd/spk-mail/main.go::splitHostPort` use `strconv.Atoi` and surface error (currently silent port=0 on garbage input).
+- Shutdown ordering: defer `eng.Run` ctx cancel + wait before `defer st.Close()` to avoid "sql: database is closed" warning at process exit.
+- Engine on AddAccount duplicate-email — currently surfaces UNIQUE-constraint error from DB; either make Stub.AddAccount idempotent or runBrowser's seed loop should handle gracefully (currently `slog.Warn` only).
+
+### testapi + e2e
+- Extract `mockimap.BuildSimple(from, subject, body, when)` shared by `seed.go::buildSimple` and `inject.go` (currently divergent RFC822 builders).
+- E2E tests bind `127.0.0.1:0` and parse port from binary log instead of hardcoded 5188/5189.
+- Move `waitURL` to `tests/e2e/helpers_test.go` to avoid future symbol collision.
+- Gate child stdio piping on `testing.Verbose()` for quiet CI runs.
+- Fix two `defer resp.Body.Close()` defers in `idle_smoke_test.go` (one missing, one unreachable on success path).
+
+### Frontend (plan 3)
+- Server-side `/api/Search` JSON-tag bug — `internal/api/transport/http.go` request struct has `Limit`/`Offset` without JSON tags; client sends lowercase, decodes to 0. **Fix when plan 5 wires the search bar.**
+- `go mod tidy` removes Wails v3 because the import is behind a build tag — must use `GOFLAGS="-tags=wails" go mod tidy` to keep it. Document in CONTRIBUTING.md or add a pre-commit guard.
+- Wails-side JS event bridge — Go side emits via `app.Event.Emit(name, data)`, but the React frontend's `wailsClient.subscribeEvents` relies on a `window.wails.EventsOn` shape that may not match Wails v3's actual `@wailsio/runtime` API. Verify when desktop binary is exercised in real use.
+- `useEventStream` empty-deps eslint warning — plan-faithful but worth `// eslint-disable-next-line` or stable-deps refactor.
+- Wasteful `MessageInserted/Updated/Arrived` handler — refetches all threads + open thread on every event. Use store delta updates (`bumpThread`, `markThreadRead`) instead.
+- Wasteful `AccountStatus` handler — refetches all accounts just to patch one status field.
+- Frontend bundle size 204 kB — Zustand + React 19 only, no virtualization. Plan 3 calls ThreadList "virtualized" but verbatim code does not virtualize. Add react-window when thread counts grow.
+- Playwright test relies on `XDG_DATA_HOME` isolation — without it, prior dev DB state collides. Document or make `runBrowser` always use a fresh DB in `--imap-mock` mode (since mock-port changes per launch anyway).
+- `reuseExistingServer: !process.env.CI` — local dev re-runs without `CI=1` reuse stale servers. Document as a `make test-ui` make target that sets CI=1.
