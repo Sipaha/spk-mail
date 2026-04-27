@@ -7,12 +7,14 @@ import (
 	"strings"
 
 	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/clock"
 	"github.com/spk/spk-mail/internal/mockimap"
 )
 
 type seedHandler struct {
-	api  api.API
-	mock *mockimap.Server
+	api   api.API
+	mock  *mockimap.Server
+	clock *clock.Clock
 }
 
 func (h *seedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -22,7 +24,11 @@ func (h *seedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.mock != nil {
-		if err := h.mock.Apply(&f); err != nil {
+		var ns mockimap.NowSource
+		if h.clock != nil {
+			ns = h.clock
+		}
+		if err := h.mock.ApplyWithClock(&f, ns); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

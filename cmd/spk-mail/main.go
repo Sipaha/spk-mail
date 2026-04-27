@@ -15,6 +15,7 @@ import (
 
 	"github.com/spk/spk-mail/internal/api"
 	"github.com/spk/spk-mail/internal/api/transport"
+	"github.com/spk/spk-mail/internal/clock"
 	"github.com/spk/spk-mail/internal/config"
 	"github.com/spk/spk-mail/internal/mockimap"
 	"github.com/spk/spk-mail/internal/secrets"
@@ -97,7 +98,8 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 		slog.Info("mock IMAP started", "addr", mock.Addr())
 	}
 
-	mount := &testapi.Mount{API: stub, Store: st, Mock: mock, Logs: logBuf}
+	testClock := clock.New()
+	mount := &testapi.Mount{API: stub, Store: st, Mock: mock, Logs: logBuf, Clock: testClock}
 	mount.Register(mux)
 
 	// Serve embedded frontend at /
