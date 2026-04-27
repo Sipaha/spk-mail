@@ -15,6 +15,20 @@ func dbDumpHandler(s *storage.Store) http.HandlerFunc {
 		accs, _ := s.ListAccounts(ctx)
 		out["accounts"] = accs
 
+		type profileDump struct {
+			ID        int64  `json:"id"`
+			Name      string `json:"name"`
+			Color     string `json:"color"`
+			SortOrder int    `json:"sort_order"`
+			CreatedAt int64  `json:"created_at"`
+		}
+		rawProfiles, _ := s.ListProfiles(ctx)
+		profiles := make([]profileDump, 0, len(rawProfiles))
+		for _, p := range rawProfiles {
+			profiles = append(profiles, profileDump{ID: p.ID, Name: p.Name, Color: p.Color, SortOrder: p.SortOrder, CreatedAt: p.CreatedAt})
+		}
+		out["profiles"] = profiles
+
 		threads, _ := s.ListThreadsRecent(ctx, 1000, 0)
 		out["threads"] = threads
 
