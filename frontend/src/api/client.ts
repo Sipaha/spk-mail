@@ -1,4 +1,4 @@
-import type { AccountDTO, AddAccountRequest, ApiEvent, MessageDTO, SearchHitDTO, ThreadDTO, ThreadFilter } from './types'
+import type { AccountDTO, AddAccountRequest, AddProfileRequest, ApiEvent, MessageDTO, ProfileDTO, SearchHitDTO, ThreadDTO, ThreadFilter, UpdateProfileRequest } from './types'
 
 export interface Client {
   listAccounts(): Promise<AccountDTO[]>
@@ -10,6 +10,10 @@ export interface Client {
   allowRemote(id: number): Promise<string>
   search(query: string, limit: number, offset: number): Promise<SearchHitDTO[]>
   openAttachment(id: number): Promise<void>
+  listProfiles(): Promise<ProfileDTO[]>
+  addProfile(req: AddProfileRequest): Promise<ProfileDTO>
+  updateProfile(req: UpdateProfileRequest): Promise<ProfileDTO>
+  deleteProfile(id: number): Promise<void>
   subscribeEvents(onEvent: (e: ApiEvent) => void): () => void
 }
 
@@ -33,6 +37,10 @@ const httpClient: Client = {
   allowRemote:   (id) => post('/api/AllowRemoteForMessage', { id }),
   search:        (query, limit, offset) => post('/api/Search', { query, limit, offset }),
   openAttachment: (id) => post('/api/OpenAttachment', { id }),
+  listProfiles:  () => post('/api/ListProfiles', {}),
+  addProfile:    (req) => post('/api/AddProfile', req),
+  updateProfile: (req) => post('/api/UpdateProfile', req),
+  deleteProfile: (id) => post('/api/DeleteProfile', { id }).then(() => undefined),
   subscribeEvents: (onEvent) => {
     const es = new EventSource('/api/events')
     const handler = (ev: MessageEvent) => {
@@ -60,6 +68,10 @@ const wailsClient: Client = {
   allowRemote:   (id) => window.wails!.CallByName('api.AllowRemoteForMessage', id) as Promise<string>,
   search:        (q, l, o) => window.wails!.CallByName('api.Search', q, l, o) as Promise<SearchHitDTO[]>,
   openAttachment: (id) => window.wails!.CallByName('api.OpenAttachment', id).then(() => undefined),
+  listProfiles:  () => window.wails!.CallByName('api.ListProfiles') as Promise<ProfileDTO[]>,
+  addProfile:    (req) => window.wails!.CallByName('api.AddProfile', req) as Promise<ProfileDTO>,
+  updateProfile: (req) => window.wails!.CallByName('api.UpdateProfile', req) as Promise<ProfileDTO>,
+  deleteProfile: (id) => window.wails!.CallByName('api.DeleteProfile', id).then(() => undefined),
   subscribeEvents: (onEvent) => {
     if (!window.wails?.EventsOn) return () => {}
     const offs = (['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady'] as const)
