@@ -130,19 +130,28 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		}
 	}
 
-	// IDLE on inbox-role folder(s) only — simplest practical default.
+	// IDLE on inbox-role folders for push notifications; periodic poll for
+	// other folders so Sent/Drafts/Archive/custom catch new messages without
+	// a process restart. Trash and Spam are skipped — their content is
+	// rarely interesting in real time and polling them costs IMAP traffic.
+	//
 	// TODO(plan-7): IDLE/poll goroutines outlive runOnce restarts. On any error
 	// path that re-enters runOnce, fresh IDLE/poll goroutines spawn while the
 	// previous ones are still alive (only ctx.Done unblocks them). Move
 	// spawning under a supervisor scope tied to runOnce iterations so they're
 	// torn down on restart.
 	for _, f := range folders {
-		if f.Role != "inbox" {
-			continue
-		}
-		if c.HasIDLE(ctx) {
-			go w.runIDLE(ctx, acc, f.Name, f.Role)
-		} else {
+		switch f.Role {
+		case "inbox":
+			if c.HasIDLE(ctx) {
+				go w.runIDLE(ctx, acc, f.Name, f.Role)
+			} else {
+				go w.runPoll(ctx, acc, f.Name, f.Role)
+			}
+		case "trash", "spam":
+			// skip — high-volume, low-signal
+		default:
+			// sent / drafts / archive / "" (custom) — periodic poll
 			go w.runPoll(ctx, acc, f.Name, f.Role)
 		}
 	}
