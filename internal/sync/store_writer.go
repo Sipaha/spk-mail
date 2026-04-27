@@ -114,7 +114,7 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 	w.em.Emit(api.Event{Type: "MessageInserted", Payload: map[string]any{
 		"id": msgID, "thread_id": threadID, "account_id": m.AccountID, "folder_id": m.FolderID,
 	}})
-	if !m.IsResync && hasInbox(ctx, w.store, m.FolderID) && !contains(m.Flags, `\Seen`) {
+	if !m.IsResync && m.FolderRole == "inbox" && !contains(m.Flags, `\Seen`) {
 		w.em.Emit(api.Event{Type: "MessageArrived", Payload: map[string]any{
 			"id": msgID, "thread_id": threadID, "account_id": m.AccountID,
 			"subject": parsed.Subject, "from": parsed.From,
@@ -138,13 +138,6 @@ func (w *StoreWriter) findThreadBySubject(ctx context.Context, subj string, when
 		return 0, nil
 	}
 	return id, nil
-}
-
-func hasInbox(ctx context.Context, s *storage.Store, folderID int64) bool {
-	row := s.DB().QueryRowContext(ctx, `SELECT role FROM folders WHERE id = ?`, folderID)
-	var role *string
-	_ = row.Scan(&role)
-	return role != nil && *role == "inbox"
 }
 
 func contains(xs []string, v string) bool {

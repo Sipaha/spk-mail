@@ -10,6 +10,7 @@ import (
 type IncomingMessage struct {
 	AccountID  int64
 	FolderID   int64
+	FolderRole string // "inbox"|"sent"|... — used to decide notification emission
 	UID        int64
 	Flags      []string
 	InternalAt time.Time
