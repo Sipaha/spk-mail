@@ -9,6 +9,7 @@ export interface Client {
   markRead(ids: number[]): Promise<void>
   allowRemote(id: number): Promise<string>
   search(query: string, limit: number, offset: number): Promise<SearchHitDTO[]>
+  openAttachment(id: number): Promise<void>
   subscribeEvents(onEvent: (e: ApiEvent) => void): () => void
 }
 
@@ -31,6 +32,7 @@ const httpClient: Client = {
   markRead:      (ids) => post('/api/MarkRead', { ids }),
   allowRemote:   (id) => post('/api/AllowRemoteForMessage', { id }),
   search:        (query, limit, offset) => post('/api/Search', { query, limit, offset }),
+  openAttachment: (id) => post('/api/OpenAttachment', { id }),
   subscribeEvents: (onEvent) => {
     const es = new EventSource('/api/events')
     const handler = (ev: MessageEvent) => {
@@ -40,7 +42,7 @@ const httpClient: Client = {
         console.warn('SSE parse failed', err, ev.data)
       }
     }
-    ;(['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError'] as const).forEach(t => es.addEventListener(t, handler))
+    ;(['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady'] as const).forEach(t => es.addEventListener(t, handler))
     es.onerror = (err) => {
       console.warn('SSE error', err, 'readyState', es.readyState)
     }
@@ -57,9 +59,10 @@ const wailsClient: Client = {
   markRead:      (ids) => window.wails!.CallByName('api.MarkRead', ids).then(() => undefined),
   allowRemote:   (id) => window.wails!.CallByName('api.AllowRemoteForMessage', id) as Promise<string>,
   search:        (q, l, o) => window.wails!.CallByName('api.Search', q, l, o) as Promise<SearchHitDTO[]>,
+  openAttachment: (id) => window.wails!.CallByName('api.OpenAttachment', id).then(() => undefined),
   subscribeEvents: (onEvent) => {
     if (!window.wails?.EventsOn) return () => {}
-    const offs = (['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError'] as const)
+    const offs = (['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady'] as const)
       .map(t => window.wails!.EventsOn!(t, (data: unknown) => onEvent({ type: t, payload: (data as Record<string, unknown>) ?? {} })))
     return () => offs.forEach(off => off())
   },
