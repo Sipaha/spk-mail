@@ -2,8 +2,8 @@ package storage
 
 import (
 	"context"
-	"testing"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 func TestMessages_InsertAndList(t *testing.T) {
@@ -16,7 +16,7 @@ func TestMessages_InsertAndList(t *testing.T) {
 		AccountID: accID, FolderID: folderID, UID: 1,
 		MessageID: stringPtr("<a@x>"), Subject: stringPtr("Hello"),
 		FromAddr: stringPtr("Bob <b@x.y>"), Date: 1700000000,
-		Flags: `[]`,
+		Flags:    `[]`,
 		BodyText: stringPtr("hi"),
 	})
 	require.NoError(t, err)

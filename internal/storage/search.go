@@ -9,6 +9,6 @@ type SearchHit struct {
 	Snippet   string
 }
 
-func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]SearchHit, error) {
+func (s *Store) Search(_ context.Context, _ string, _, _ int) ([]SearchHit, error) {
 	return nil, nil
 }

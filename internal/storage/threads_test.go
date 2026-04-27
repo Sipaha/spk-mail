@@ -2,8 +2,8 @@ package storage
 
 import (
 	"context"
-	"testing"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 func TestThreads_InsertAndList(t *testing.T) {

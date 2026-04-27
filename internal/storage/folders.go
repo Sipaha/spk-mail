@@ -7,7 +7,7 @@ type FolderRow struct {
 	AccountID    int64
 	Name         string
 	Delimiter    string
-	Role         *string  // inbox|sent|drafts|trash|spam|archive|nil
+	Role         *string // inbox|sent|drafts|trash|spam|archive|nil
 	UIDValidity  int64
 	UIDNext      int64
 	LastSyncedAt *int64
