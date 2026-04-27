@@ -13,11 +13,13 @@ export default function ThreadList() {
   useEffect(() => {
     client.listThreads({
       account_id: filter.accountId,
+      folder_id: filter.folderId,
       unread_only: filter.unreadOnly,
+      has_flagged: filter.hasFlagged,
       profile_id: activeProfileId ?? undefined,
       limit: 200,
     }).then(setThreads)
-  }, [filter.accountId, filter.unreadOnly, activeProfileId, setThreads])
+  }, [filter.accountId, filter.folderId, filter.unreadOnly, filter.hasFlagged, activeProfileId, setThreads])
 
   return (
     <div>
