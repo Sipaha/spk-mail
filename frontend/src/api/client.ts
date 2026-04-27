@@ -1,4 +1,4 @@
-import type { AccountDTO, AddAccountRequest, ApiEvent, MessageDTO, ThreadDTO, ThreadFilter } from './types'
+import type { AccountDTO, AddAccountRequest, ApiEvent, MessageDTO, SearchHitDTO, ThreadDTO, ThreadFilter } from './types'
 
 export interface Client {
   listAccounts(): Promise<AccountDTO[]>
@@ -8,7 +8,7 @@ export interface Client {
   getThread(id: number): Promise<MessageDTO[]>
   markRead(ids: number[]): Promise<void>
   allowRemote(id: number): Promise<string>
-  search(query: string, limit: number, offset: number): Promise<MessageDTO[]>
+  search(query: string, limit: number, offset: number): Promise<SearchHitDTO[]>
   subscribeEvents(onEvent: (e: ApiEvent) => void): () => void
 }
 
@@ -56,7 +56,7 @@ const wailsClient: Client = {
   getThread:     (id) => window.wails!.CallByName('api.GetThread', id) as Promise<MessageDTO[]>,
   markRead:      (ids) => window.wails!.CallByName('api.MarkRead', ids).then(() => undefined),
   allowRemote:   (id) => window.wails!.CallByName('api.AllowRemoteForMessage', id) as Promise<string>,
-  search:        (q, l, o) => window.wails!.CallByName('api.Search', q, l, o) as Promise<MessageDTO[]>,
+  search:        (q, l, o) => window.wails!.CallByName('api.Search', q, l, o) as Promise<SearchHitDTO[]>,
   subscribeEvents: (onEvent) => {
     if (!window.wails?.EventsOn) return () => {}
     const offs = (['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError'] as const)

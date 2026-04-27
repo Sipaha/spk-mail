@@ -49,8 +49,8 @@ func (h *HTTP) routes() {
 	}))
 	h.mux.HandleFunc("POST /api/Search", httpHandle(func(ctx context.Context, req *struct {
 		Query  string `json:"query"`
-		Limit  int
-		Offset int
+		Limit  int    `json:"limit"`
+		Offset int    `json:"offset"`
 	}) (any, error) {
 		return h.api.Search(ctx, req.Query, req.Limit, req.Offset)
 	}))
