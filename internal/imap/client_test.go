@@ -36,6 +36,35 @@ func folderNames(fs []FolderInfo) []string {
 	return out
 }
 
+func TestClient_FetchBodyPart(t *testing.T) {
+	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
+	require.NoError(t, err)
+	defer mock.Close()
+	host, port := splitHostPort(mock.Addr())
+
+	// Append a multipart message with an attachment part.
+	u := mock.User("alice@example.com")
+	require.NotNil(t, u)
+	raw := []byte("From: x@y\r\nSubject: t\r\nMIME-Version: 1.0\r\n" +
+		`Content-Type: multipart/mixed; boundary="b"` + "\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\nbody\r\n" +
+		"--b\r\nContent-Type: application/octet-stream\r\n" +
+		`Content-Disposition: attachment; filename="x.bin"` + "\r\n\r\n" +
+		"PAYLOAD\r\n--b--\r\n")
+	_, err = u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
+	require.NoError(t, err)
+
+	c, err := Dial(context.Background(), DialOpts{Host: host, Port: port, Username: "alice@example.com", Password: "secret"})
+	require.NoError(t, err)
+	defer c.Close()
+	_, err = c.Select(context.Background(), "INBOX")
+	require.NoError(t, err)
+
+	body, err := c.FetchBodyPart(context.Background(), 1, "2")
+	require.NoError(t, err)
+	require.Contains(t, string(body), "PAYLOAD")
+}
+
 func TestIdle_FiresOnNewMessage(t *testing.T) {
 	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
 	require.NoError(t, err)
