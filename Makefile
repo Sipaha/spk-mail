@@ -12,7 +12,13 @@ build-frontend:
 
 build-go:
 	mkdir -p $(BIN_DIR)
+	rm -rf cmd/spk-mail/dist
+	cp -r frontend/dist cmd/spk-mail/dist || mkdir -p cmd/spk-mail/dist
+	touch cmd/spk-mail/dist/.gitkeep
 	CGO_ENABLED=1 go build -trimpath -ldflags="-w -s" -o $(BIN) ./cmd/spk-mail
+	rm -rf cmd/spk-mail/dist
+	mkdir -p cmd/spk-mail/dist
+	touch cmd/spk-mail/dist/.gitkeep
 
 test: test-go test-front
 

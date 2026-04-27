@@ -1,5 +1,9 @@
 # Go
 build/
+
+# Embed staging dir
+cmd/spk-mail/dist/*
+!cmd/spk-mail/dist/.gitkeep
 *.test
 *.out
 coverage.html
