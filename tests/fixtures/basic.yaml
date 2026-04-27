@@ -17,3 +17,12 @@ accounts:
             subject: "Project update"
             date: 2026-04-26T10:00:00Z
             body_text: "Hi Alice, here's the update on our project."
+          - from: "Newsletter <news@example.com>"
+            to: ["alice@example.com"]
+            subject: "Weekly digest"
+            date: 2026-04-27T08:00:00Z
+            body_text: "This week's digest is attached."
+            attachments:
+              - filename: "weekly.pdf"
+                content_type: "application/pdf"
+                size: 256
