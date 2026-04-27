@@ -1,8 +1,14 @@
 package imap
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"mime/quotedprintable"
+	"net/textproto"
 	"strconv"
 	"strings"
 
@@ -121,13 +127,18 @@ func (c *Client) FetchSinceUID(ctx context.Context, sinceUID int64, body bool) (
 
 // FetchBodyPart fetches a single MIME part of a message identified by its
 // IMAP BODYSTRUCTURE part path (e.g. "1.2") via UID FETCH BODY.PEEK[<part>].
-// Returns the raw bytes of the section as transmitted by the server (still
-// in its Content-Transfer-Encoding form — decoding is the caller's job).
+// The returned bytes are decoded according to the part's
+// Content-Transfer-Encoding header (base64 / quoted-printable), so the
+// caller receives the actual binary/text payload. The MIME headers of the
+// part are fetched in the same FETCH (BODY.PEEK[<part>.MIME]) so we don't
+// need a second round-trip.
 func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([]byte, error) {
 	seq := imap.UIDSetNum(imap.UID(uid))
+	part := parsePartPath(partID)
 	opts := &imap.FetchOptions{
 		BodySection: []*imap.FetchItemBodySection{
-			{Specifier: imap.PartSpecifierNone, Part: parsePartPath(partID), Peek: true},
+			{Specifier: imap.PartSpecifierMIME, Part: part, Peek: true},
+			{Specifier: imap.PartSpecifierNone, Part: part, Peek: true},
 		},
 	}
 	// Fetch dispatches to UID FETCH automatically when numSet is a UIDSet
@@ -136,7 +147,8 @@ func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([
 	cmd := c.c.Fetch(seq, opts)
 	defer cmd.Close()
 
-	var buf []byte
+	var body, mimeHdr []byte
+	var haveBody bool
 	for {
 		select {
 		case <-ctx.Done():
@@ -151,20 +163,65 @@ func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([
 		if err != nil {
 			return nil, err
 		}
+		// Match by Specifier — FetchBodySectionBuffer.Section exposes the
+		// FetchItemBodySection that produced this buffer (see
+		// imapclient/fetch.go:484).
 		for _, sec := range data.BodySection {
-			if len(sec.Bytes) > 0 {
-				buf = sec.Bytes
-				break
+			if sec.Section == nil {
+				continue
+			}
+			switch sec.Section.Specifier {
+			case imap.PartSpecifierMIME:
+				mimeHdr = sec.Bytes
+			case imap.PartSpecifierNone:
+				body = sec.Bytes
+				haveBody = true
 			}
 		}
 	}
 	if err := cmd.Close(); err != nil {
 		return nil, err
 	}
-	if buf == nil {
+	if !haveBody {
 		return nil, fmt.Errorf("imap: no body part %q for uid %d", partID, uid)
 	}
-	return buf, nil
+
+	cte := cteFromMIMEHeaders(mimeHdr)
+	switch cte {
+	case "base64":
+		decoded, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, bytes.NewReader(body)))
+		if err != nil {
+			return nil, fmt.Errorf("imap: decode base64: %w", err)
+		}
+		body = decoded
+	case "quoted-printable":
+		decoded, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(body)))
+		if err != nil {
+			return nil, fmt.Errorf("imap: decode qp: %w", err)
+		}
+		body = decoded
+	default:
+		// "", "7bit", "8bit", "binary", or anything else: pass through.
+		// Unknown encodings are treated as identity rather than failing the
+		// download — worst case the user gets a file they can't open, which
+		// is no worse than failing outright.
+	}
+	return body, nil
+}
+
+// cteFromMIMEHeaders parses an RFC 822 header block (as returned by
+// BODY.PEEK[<part>.MIME]) and returns the lowercase, trimmed value of the
+// Content-Transfer-Encoding header, or "" if not present / unparseable.
+func cteFromMIMEHeaders(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	tr := textproto.NewReader(bufio.NewReader(bytes.NewReader(b)))
+	hdr, err := tr.ReadMIMEHeader()
+	if err != nil && err != io.EOF {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(hdr.Get("Content-Transfer-Encoding")))
 }
 
 // parsePartPath turns a dotted BODYSTRUCTURE path like "1.2.3" into the

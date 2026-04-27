@@ -3,6 +3,7 @@ package imap
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -63,6 +64,43 @@ func TestClient_FetchBodyPart(t *testing.T) {
 	body, err := c.FetchBodyPart(context.Background(), 1, "2")
 	require.NoError(t, err)
 	require.Contains(t, string(body), "PAYLOAD")
+}
+
+// TestClient_FetchBodyPart_Base64Decoded verifies that FetchBodyPart decodes
+// a base64-encoded MIME part transparently — so the bytes returned to the
+// caller are the actual payload, not the on-the-wire base64 ASCII.
+func TestClient_FetchBodyPart_Base64Decoded(t *testing.T) {
+	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
+	require.NoError(t, err)
+	defer mock.Close()
+	host, port := splitHostPort(mock.Addr())
+
+	const payload = "HELLO WORLD"
+	encoded := base64.StdEncoding.EncodeToString([]byte(payload))
+
+	u := mock.User("alice@example.com")
+	require.NotNil(t, u)
+	raw := []byte("From: x@y\r\nSubject: t\r\nMIME-Version: 1.0\r\n" +
+		`Content-Type: multipart/mixed; boundary="b"` + "\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\nbody\r\n" +
+		"--b\r\nContent-Type: application/octet-stream\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
+		`Content-Disposition: attachment; filename="x.bin"` + "\r\n\r\n" +
+		encoded + "\r\n--b--\r\n")
+	_, err = u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
+	require.NoError(t, err)
+
+	c, err := Dial(context.Background(), DialOpts{Host: host, Port: port, Username: "alice@example.com", Password: "secret"})
+	require.NoError(t, err)
+	defer c.Close()
+	_, err = c.Select(context.Background(), "INBOX")
+	require.NoError(t, err)
+
+	body, err := c.FetchBodyPart(context.Background(), 1, "2")
+	require.NoError(t, err)
+	// Must be the decoded payload, NOT the base64 text.
+	require.Equal(t, payload, string(body))
+	require.NotContains(t, string(body), encoded)
 }
 
 func TestIdle_FiresOnNewMessage(t *testing.T) {
