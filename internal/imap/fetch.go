@@ -2,6 +2,9 @@ package imap
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/emersion/go-imap/v2"
 )
@@ -114,6 +117,71 @@ func (c *Client) FetchSinceUID(ctx context.Context, sinceUID int64, body bool) (
 		}
 	}()
 	return out, errCh
+}
+
+// FetchBodyPart fetches a single MIME part of a message identified by its
+// IMAP BODYSTRUCTURE part path (e.g. "1.2") via UID FETCH BODY.PEEK[<part>].
+// Returns the raw bytes of the section as transmitted by the server (still
+// in its Content-Transfer-Encoding form — decoding is the caller's job).
+func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([]byte, error) {
+	seq := imap.UIDSetNum(imap.UID(uid))
+	opts := &imap.FetchOptions{
+		BodySection: []*imap.FetchItemBodySection{
+			{Specifier: imap.PartSpecifierNone, Part: parsePartPath(partID), Peek: true},
+		},
+	}
+	// Fetch dispatches to UID FETCH automatically when numSet is a UIDSet
+	// (see imapclient/fetch.go). Mirroring FetchSinceUID's pattern keeps the
+	// read-loop drained on early return; FetchCommand.Close is idempotent.
+	cmd := c.c.Fetch(seq, opts)
+	defer cmd.Close()
+
+	var buf []byte
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		msg := cmd.Next()
+		if msg == nil {
+			break
+		}
+		data, err := msg.Collect()
+		if err != nil {
+			return nil, err
+		}
+		for _, sec := range data.BodySection {
+			if len(sec.Bytes) > 0 {
+				buf = sec.Bytes
+				break
+			}
+		}
+	}
+	if err := cmd.Close(); err != nil {
+		return nil, err
+	}
+	if buf == nil {
+		return nil, fmt.Errorf("imap: no body part %q for uid %d", partID, uid)
+	}
+	return buf, nil
+}
+
+// parsePartPath turns a dotted BODYSTRUCTURE path like "1.2.3" into the
+// []int form expected by imap.FetchItemBodySection.Part. An empty string
+// returns nil (= request the whole body).
+func parsePartPath(s string) []int {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		if n, err := strconv.Atoi(p); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // StoreFlags issues UID STORE +FLAGS / -FLAGS for one UID.
