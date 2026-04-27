@@ -53,6 +53,37 @@ func TestEnsureDefaultProfile_IdempotentAndCreatesWhenEmpty(t *testing.T) {
 	require.Len(t, profs, 1)
 }
 
+func TestEnsureDefaultProfile_ReattachesOrphanAccounts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	// Simulate an account created while the (now-removed) "All" pseudo-profile
+	// was active: profile_id ends up NULL.
+	_, err := s.InsertAccount(ctx, AccountRow{
+		Name: "Orphan", Email: "o@x", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+		// ProfileID intentionally nil
+	})
+	require.NoError(t, err)
+
+	// Pre-existing profile (e.g. user already created Work before this fix shipped).
+	work, err := s.InsertProfile(ctx, ProfileRow{Name: "Work", Color: "#10b981", SortOrder: 0, CreatedAt: 0})
+	require.NoError(t, err)
+
+	// EnsureDefaultProfile should attach the orphan to whatever profile sorts first
+	// (here, Work — sort_order 0). Default is NOT created because at least one
+	// profile already exists.
+	require.NoError(t, s.EnsureDefaultProfile(ctx))
+
+	profs, _ := s.ListProfiles(ctx)
+	require.Len(t, profs, 1, "no new profile should be created when one already exists")
+
+	all, _ := s.ListAccounts(ctx)
+	require.Len(t, all, 1)
+	require.NotNil(t, all[0].ProfileID, "orphan account must be reattached")
+	require.Equal(t, work, *all[0].ProfileID)
+}
+
 func TestProfiles_DeleteRefusedWhenAccountsAttached(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
