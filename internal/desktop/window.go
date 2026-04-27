@@ -59,6 +59,11 @@ func Run(ctx context.Context, opts Options) error {
 		Height:           800,
 		BackgroundColour: application.NewRGBA(10, 10, 10, 255),
 		URL:              "/",
+		// Pre-release: keep DevTools on so users can inspect IPC traffic.
+		// Wails defaults this to true unless built with `-tags production`,
+		// but we set it explicitly so the intent is obvious. Disable by
+		// adding the production tag in a release build.
+		DevToolsEnabled: true,
 	})
 
 	// Hide the window on close instead of quitting. RegisterHook fires before
