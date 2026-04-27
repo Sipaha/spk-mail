@@ -26,16 +26,22 @@ describe('ProfileSwitcher', () => {
     useStore.setState({ profiles: [], activeProfileId: null })
   })
 
-  it('renders All + per-profile tabs after load', async () => {
+  it('renders per-profile tabs after load', async () => {
     render(<ProfileSwitcher />)
-    expect(await screen.findByRole('button', { name: 'All' })).toBeTruthy()
     expect(await screen.findByRole('button', { name: /Work/ })).toBeTruthy()
+  })
+
+  it('auto-selects first profile when none is active', async () => {
+    render(<ProfileSwitcher />)
+    await screen.findByRole('button', { name: /Work/ })
+    // After listProfiles resolves, store should have activeProfileId = 1
+    expect(useStore.getState().activeProfileId).toBe(1)
   })
 
   it('clicking a profile sets activeProfileId', async () => {
     render(<ProfileSwitcher />)
-    fireEvent.click(await screen.findByRole('button', { name: /Work/ }))
-    expect(useStore.getState().activeProfileId).toBe(1)
+    fireEvent.click(await screen.findByRole('button', { name: /Personal/ }))
+    expect(useStore.getState().activeProfileId).toBe(2)
   })
 
   it('clicking the bell toggles mute on a profile', async () => {

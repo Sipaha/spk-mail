@@ -38,6 +38,10 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 	}
 	defer st.Close()
 
+	if err := st.EnsureDefaultProfile(ctx); err != nil {
+		return fmt.Errorf("ensure default profile: %w", err)
+	}
+
 	masterKey, err := secrets.LoadOrCreateMasterKey()
 	if err != nil {
 		return fmt.Errorf("master key: %w (run desktop mode for password prompt)", err)
@@ -81,6 +85,20 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 		if mock != nil {
 			_ = mock.Apply(fixture)
 		}
+		// Look up the bootstrap Default profile so seeded accounts (which
+		// have no profile field in the YAML) attach to it. This mirrors
+		// migration v2's backfill but applies at runtime-insert time.
+		var defaultProfileID *int64
+		profs, err := st.ListProfiles(ctx)
+		if err == nil {
+			for _, p := range profs {
+				if p.Name == "Default" {
+					id := p.ID
+					defaultProfileID = &id
+					break
+				}
+			}
+		}
 		// also write accounts to DB so they appear in the UI immediately
 		for _, acc := range fixture.Accounts {
 			pw := acc.Password
@@ -97,6 +115,7 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 				IMAPHost: mockHost, IMAPPort: mockPort,
 				IMAPUsername: acc.Email, IMAPPassword: pw,
 				UseTLS: false, Color: acc.Color, UseMock: true,
+				ProfileID: defaultProfileID,
 			})
 			if err != nil {
 				slog.Warn("seed AddAccount failed", "email", acc.Email, "err", err)

@@ -20,7 +20,6 @@ export default function ProfileSwitcher() {
   return (
     <>
       <div className="flex items-center gap-1 px-3 pt-2 border-b border-zinc-800 overflow-x-auto">
-        <button className={tabClass(activeProfileId === null)} onClick={() => setActiveProfile(null)}>All</button>
         {profiles.map(p => (
           <span key={p.id} className="inline-flex items-center">
             <button

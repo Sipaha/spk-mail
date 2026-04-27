@@ -17,8 +17,8 @@ test('user can create a profile, switch to it, and see only its accounts', async
   await page.getByRole('button', { name: /Work/ }).click()
   await expect(page.getByText('Test Personal')).not.toBeVisible()
 
-  // Switch to All — comes back
-  await page.getByRole('button', { name: 'All', exact: true }).click()
+  // Switch back to Default — comes back
+  await page.getByRole('button', { name: /Default/ }).click()
   await expect(page.getByText('Test Personal')).toBeVisible({ timeout: 5_000 })
 
   // Verify via test API that the profile is in the DB

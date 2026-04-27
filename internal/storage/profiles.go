@@ -21,6 +21,22 @@ type ProfileRow struct {
 // or delete those accounts first.
 var ErrProfileInUse = errors.New("storage: profile has attached accounts")
 
+// EnsureDefaultProfile inserts the seed "Default" profile if no profiles
+// exist yet. Idempotent: a no-op when at least one profile already exists.
+func (s *Store) EnsureDefaultProfile(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM profiles`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO profiles(name, color, sort_order, muted, created_at)
+		 VALUES ('Default', '#3b82f6', 0, 0, strftime('%s','now'))`)
+	return err
+}
+
 func (s *Store) InsertProfile(ctx context.Context, p ProfileRow) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO profiles(name, color, sort_order, created_at, muted) VALUES (?,?,?,?,?)`,

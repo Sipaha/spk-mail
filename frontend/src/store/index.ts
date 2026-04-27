@@ -36,7 +36,13 @@ export const useStore = create<State>()(
 
       setAccounts: (a) => set({ accounts: a }),
       upsertAccount: (a) => set((s) => ({ accounts: [...s.accounts.filter(x => x.id !== a.id), a].sort((x,y)=>x.id-y.id) })),
-      setProfiles: (p) => set({ profiles: p }),
+      setProfiles: (p) => set((s) => {
+        let next = s.activeProfileId
+        if (next === null || !p.some(x => x.id === next)) {
+          next = p[0]?.id ?? null
+        }
+        return { profiles: p, activeProfileId: next }
+      }),
       setActiveProfile: (id) => set({ activeProfileId: id }),
       setThreads: (t) => set({ threads: t }),
       bumpThread: (id, lastDate) => set((s) => ({ threads: s.threads.map(t => t.id === id ? { ...t, last_date: lastDate } : t).sort((a,b)=>b.last_date-a.last_date) })),
