@@ -1,27 +1,65 @@
-# Go
+# Go build outputs
 build/
+# Stray `go build ./cmd/spk-mail` from a repo-root cwd drops the binary here.
+# Anchored with a leading slash so this does NOT match `cmd/spk-mail/` (the dir).
+/spk-mail
+/spk-mail-desktop
+*.exe
+*.dll
+*.so
+*.dylib
 
 # Embed staging dir
 cmd/spk-mail/dist/*
 !cmd/spk-mail/dist/.gitkeep
+
+# Go test + profiling artifacts
 *.test
 *.out
+*.prof
+*.pprof
+*.coverprofile
 coverage.html
+coverage/
+
+# Vendoring (we don't vendor; if anyone runs `go mod vendor`, keep it local)
+vendor/
 
 # Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/.vite-temp/
+frontend/.vite/
+.eslintcache
 
-# Local
+# Local databases / secrets / app data
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
 secrets.bin
+master.salt
+attachments/
+
+# Environment / secrets files
+.env
+.env.*
+!.env.example
+
+# Editor / OS junk
 .DS_Store
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+*.bak
+
+# Logs
 *.log
 
-# Wails
+# Wails runtime cache
 .wails/
+
+# direnv
+.direnv/
+.envrc.local
