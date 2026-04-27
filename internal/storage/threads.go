@@ -49,6 +49,41 @@ func (s *Store) ListThreadsRecent(ctx context.Context, limit, offset int) ([]Thr
 	return out, rows.Err()
 }
 
+// ListThreadsByProfile returns recent threads, optionally filtered by profile.
+// When profileID is nil, returns all threads (same as ListThreadsRecent).
+// When non-nil, restricts to threads that have at least one message belonging
+// to an account in that profile.
+func (s *Store) ListThreadsByProfile(ctx context.Context, profileID *int64, limit, offset int) ([]ThreadRow, error) {
+	if profileID == nil {
+		return s.ListThreadsRecent(ctx, limit, offset)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.id, t.subject_norm, t.last_date, t.msg_count, t.unread_count, t.has_flagged, t.has_attach
+		FROM threads t
+		WHERE EXISTS (
+			SELECT 1 FROM messages m
+			JOIN accounts a ON a.id = m.account_id
+			WHERE m.thread_id = t.id AND a.profile_id = ?
+		)
+		ORDER BY t.last_date DESC LIMIT ? OFFSET ?`, *profileID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ThreadRow
+	for rows.Next() {
+		var t ThreadRow
+		var fl, at int
+		if err := rows.Scan(&t.ID, &t.SubjectNorm, &t.LastDate, &t.MsgCount, &t.UnreadCount, &fl, &at); err != nil {
+			return nil, err
+		}
+		t.HasFlagged = fl != 0
+		t.HasAttach = at != 0
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // UpdateThreadStats recomputes counters from the messages table.
 // Called by StoreWriter after each insert/update.
 //
