@@ -16,42 +16,42 @@ import (
 
 // Fixture is the top-level container for a test fixture YAML file.
 type Fixture struct {
-	Accounts []FixtureAccount `yaml:"accounts"`
+	Accounts []FixtureAccount `yaml:"accounts" json:"accounts"`
 }
 
 // FixtureAccount describes one mail account with its folders and messages.
 type FixtureAccount struct {
-	Name     string          `yaml:"name"`
-	Email    string          `yaml:"email"`
-	Password string          `yaml:"password"`
-	Color    string          `yaml:"color"`
-	UseMock  bool            `yaml:"use_mock"`
-	Folders  []FixtureFolder `yaml:"folders"`
+	Name     string          `yaml:"name"     json:"name"`
+	Email    string          `yaml:"email"    json:"email"`
+	Password string          `yaml:"password" json:"password"`
+	Color    string          `yaml:"color"    json:"color"`
+	UseMock  bool            `yaml:"use_mock" json:"use_mock"`
+	Folders  []FixtureFolder `yaml:"folders"  json:"folders"`
 }
 
 // FixtureFolder describes a mailbox folder and its messages.
 type FixtureFolder struct {
-	Name     string           `yaml:"name"`
-	Messages []FixtureMessage `yaml:"messages"`
+	Name     string           `yaml:"name"     json:"name"`
+	Messages []FixtureMessage `yaml:"messages" json:"messages"`
 }
 
 // FixtureMessage describes a single message to be appended into a folder.
 type FixtureMessage struct {
-	From        string              `yaml:"from"`
-	To          []string            `yaml:"to"`
-	Subject     string              `yaml:"subject"`
-	Date        time.Time           `yaml:"date"`
-	BodyText    string              `yaml:"body_text"`
-	BodyHTML    string              `yaml:"body_html"`
-	Flags       []string            `yaml:"flags"`
-	Attachments []FixtureAttachment `yaml:"attachments"`
+	From        string              `yaml:"from"        json:"from"`
+	To          []string            `yaml:"to"          json:"to"`
+	Subject     string              `yaml:"subject"     json:"subject"`
+	Date        time.Time           `yaml:"date"        json:"date"`
+	BodyText    string              `yaml:"body_text"   json:"body_text"`
+	BodyHTML    string              `yaml:"body_html"   json:"body_html"`
+	Flags       []string            `yaml:"flags"       json:"flags"`
+	Attachments []FixtureAttachment `yaml:"attachments" json:"attachments"`
 }
 
 // FixtureAttachment describes an attachment to be included in a message.
 type FixtureAttachment struct {
-	Filename    string `yaml:"filename"`
-	ContentType string `yaml:"content_type"`
-	Size        int    `yaml:"size"`
+	Filename    string `yaml:"filename"     json:"filename"`
+	ContentType string `yaml:"content_type" json:"content_type"`
+	Size        int    `yaml:"size"         json:"size"`
 }
 
 // LoadFixture reads a YAML fixture file from disk and unmarshals it.
