@@ -237,7 +237,16 @@ func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, fol
 				folders, _ := w.store.ListFolders(ctx, acc.ID)
 				for _, f := range folders {
 					if strings.EqualFold(f.Name, folder) {
-						_ = w.syncFolder(ctx, c, f.ID, folder, role)
+						pw, _ := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
+						syncC, err := imap.Dial(ctx, imap.DialOpts{
+							Host: acc.IMAPHost, Port: acc.IMAPPort,
+							Username: acc.IMAPUsername, Password: string(pw),
+							UseTLS: acc.UseTLS,
+						})
+						if err == nil {
+							_ = w.syncFolder(ctx, syncC, f.ID, folder, role)
+							_ = syncC.Close()
+						}
 						break
 					}
 				}
