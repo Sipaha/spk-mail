@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -28,6 +29,31 @@ type DialOpts struct {
 // only sees the methods on this type and the plain Go structs it returns.
 type Client struct {
 	c *imapclient.Client
+
+	// idleMu guards idleNotifs. The unilateral-data handler closures
+	// installed on imapclient.Options run on arbitrary goroutines, so any
+	// access to idleNotifs is mediated by this mutex. The mutex is never
+	// held while sending on a channel.
+	idleMu     sync.Mutex
+	idleNotifs chan IdleNotification
+}
+
+// pushIdleNotif forwards a unilateral-data notification to the IDLE consumer.
+// Non-blocking: drops on full channel, no-op when no consumer is registered.
+// The mutex is released BEFORE the channel send so we never hold idleMu while
+// a goroutine is sleeping on a full buffer.
+func (c *Client) pushIdleNotif(n IdleNotification) {
+	c.idleMu.Lock()
+	ch := c.idleNotifs
+	c.idleMu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- n:
+	default:
+		// drop on full
+	}
 }
 
 // FolderInfo is the abstract description of an IMAP mailbox returned to
@@ -48,23 +74,52 @@ func Dial(ctx context.Context, opts DialOpts) (*Client, error) {
 		return nil, err
 	}
 
-	var c *imapclient.Client
+	// Bootstrap the wrapper first so the unilateral-data closures below can
+	// capture *Client by reference. The actual *imapclient.Client is wired
+	// in immediately after.
+	wrap := &Client{}
+	imapOpts := &imapclient.Options{
+		UnilateralDataHandler: &imapclient.UnilateralDataHandler{
+			Mailbox: func(data *imapclient.UnilateralDataMailbox) {
+				// EXISTS arrives as a non-nil NumMessages. Flag-only
+				// updates (Flags / PermanentFlags) are ignored — Idle()
+				// callers only care about messages appearing.
+				if data == nil || data.NumMessages == nil {
+					return
+				}
+				wrap.pushIdleNotif(IdleNotification{Kind: NotifExists})
+			},
+			Expunge: func(_ uint32) {
+				wrap.pushIdleNotif(IdleNotification{Kind: NotifExpunge})
+			},
+			Fetch: func(msg *imapclient.FetchMessageData) {
+				wrap.pushIdleNotif(IdleNotification{Kind: NotifFetch})
+				// The client read loop will wedge if we don't consume
+				// the message body before returning. Collect drains
+				// every item; we discard the buffer.
+				if msg != nil {
+					_, _ = msg.Collect()
+				}
+			},
+		},
+	}
+
 	if opts.UseTLS {
 		tlsConn := tls.Client(conn, &tls.Config{ServerName: opts.Host})
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = conn.Close()
 			return nil, err
 		}
-		c = imapclient.New(tlsConn, &imapclient.Options{})
+		wrap.c = imapclient.New(tlsConn, imapOpts)
 	} else {
-		c = imapclient.New(conn, &imapclient.Options{})
+		wrap.c = imapclient.New(conn, imapOpts)
 	}
 
-	if err := c.Login(opts.Username, opts.Password).Wait(); err != nil {
-		_ = c.Close()
+	if err := wrap.c.Login(opts.Username, opts.Password).Wait(); err != nil {
+		_ = wrap.c.Close()
 		return nil, fmt.Errorf("imap login: %w", err)
 	}
-	return &Client{c: c}, nil
+	return wrap, nil
 }
 
 // Close terminates the IMAP session and releases the underlying connection.
