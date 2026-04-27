@@ -26,7 +26,7 @@ func TestStoreWriter_InsertsAndCreatesThread(t *testing.T) {
 		"From: B <b@x>", "Subject: Hello", "Date: Mon, 27 Apr 2026 10:30:00 +0000",
 		"Message-ID: <one@x>", "Content-Type: text/plain", "", "hi",
 	}, "\r\n")
-	w.Submit(IncomingMessage{AccountID: accID, FolderID: fID, UID: 1, Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw)})
+	w.Submit(IncomingMessage{AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 1, Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw)})
 
 	// Wait briefly for processing
 	deadline := time.Now().Add(2 * time.Second)
