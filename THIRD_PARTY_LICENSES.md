@@ -1,6 +1,12 @@
 # Third-Party Licenses
 
-This document lists Go modules linked into the spk-mail binary (union of
+This document lists third-party software linked into spk-mail. Section 1
+covers Go modules (server + desktop binary). Section 2 covers npm
+packages bundled into the frontend.
+
+## 1. Go modules
+
+This section lists Go modules linked into the spk-mail binary (union of
 `go build ./cmd/spk-mail` and `go build -tags=wails ./cmd/spk-mail`),
 their detected licenses, and links to upstream LICENSE files.
 
@@ -16,7 +22,7 @@ Apache-2.0 modules with their own NOTICE files have their attribution
 notices reproduced verbatim in the project's `NOTICE` file at the repo
 root.
 
-## Summary
+### Summary
 
 | License | Module count |
 |---|---|
@@ -26,7 +32,7 @@ root.
 | BSD-2-Clause | 4 |
 | MPL-2.0 | 1 |
 
-## Modules
+### Modules
 
 | Module | License | URL |
 |---|---|---|
@@ -82,7 +88,7 @@ root.
 | `modernc.org/libc` | MIT | https://gitlab.com/cznic/libc/blob/v1.72.0/LICENSE-3RD-PARTY.md |
 | `github.com/cyphar/filepath-securejoin` | MPL-2.0 | https://github.com/cyphar/filepath-securejoin/blob/v0.6.1/COPYING.md |
 
-## License texts
+### License texts
 
 The full text of each license can be found at the URL listed above. The
 canonical text of common licenses is also included in this repository:
@@ -95,12 +101,37 @@ canonical text of common licenses is also included in this repository:
   redistribute the source of these dependencies; binaries embed the
   compiled object code per the terms of the respective licenses.
 
-## Frontend npm dependencies
+## 2. Frontend npm dependencies
 
-This file covers Go-side modules only. The React frontend (Vite + React
-19 + Tailwind + Zustand) ships a separately-bundled JavaScript blob
-under `frontend/dist/` and embeds it via Go `embed`. Generate a frontend
-license report with:
+The React frontend ships a separately-bundled JavaScript blob under
+`frontend/dist/` and embeds it via Go `embed`. The list below covers
+runtime (`dependencies`) packages only — build-only tooling (Tailwind,
+Vite, Vitest, TypeScript, ESLint, Playwright) lives in
+`devDependencies` and does not ship in the distributed bundle.
 
-    cd frontend && npx license-checker --production --excludePrivatePackages
+Generated with [`license-checker`](https://www.npmjs.com/package/license-checker):
+
+    cd frontend && npx license-checker --production --excludePrivatePackages --json
+
+### Summary
+
+| License | Package count |
+|---|---|
+| MIT | 6 |
+
+### Packages
+
+| Package | License | Repository |
+|---|---|---|
+| `@types/react@19.2.14` | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `csstype@3.2.3` | MIT | https://github.com/frenic/csstype |
+| `react@19.2.5` | MIT | https://github.com/facebook/react |
+| `react-dom@19.2.5` | MIT | https://github.com/facebook/react |
+| `scheduler@0.27.0` | MIT | https://github.com/facebook/react |
+| `zustand@5.0.12` | MIT | https://github.com/pmndrs/zustand |
+
+All six are MIT-licensed; none ship a `NOTICE` file. MIT requires the
+copyright notice and license text be retained in distribution — the
+bundler (Vite) injects them into `frontend/dist/` source maps and
+license comments are preserved by default.
 
