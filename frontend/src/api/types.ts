@@ -23,6 +23,6 @@ export interface SearchHitDTO {
   subject: string; from_addr: string; date: number;
   snippet: string; // contains \x01 BEGIN and \x02 END sentinels around matches
 }
-export interface ProfileDTO { id: number; name: string; color: string; sort_order: number }
+export interface ProfileDTO { id: number; name: string; color: string; sort_order: number; muted: boolean }
 export interface AddProfileRequest { name: string; color: string }
 export interface UpdateProfileRequest { id: number; name: string; color: string }

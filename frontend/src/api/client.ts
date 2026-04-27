@@ -14,6 +14,7 @@ export interface Client {
   addProfile(req: AddProfileRequest): Promise<ProfileDTO>
   updateProfile(req: UpdateProfileRequest): Promise<ProfileDTO>
   deleteProfile(id: number): Promise<void>
+  setProfileMuted(id: number, muted: boolean): Promise<void>
   subscribeEvents(onEvent: (e: ApiEvent) => void): () => void
 }
 
@@ -41,6 +42,7 @@ const httpClient: Client = {
   addProfile:    (req) => post('/api/AddProfile', req),
   updateProfile: (req) => post('/api/UpdateProfile', req),
   deleteProfile: (id) => post('/api/DeleteProfile', { id }).then(() => undefined),
+  setProfileMuted: (id, muted) => post('/api/SetProfileMuted', { id, muted }).then(() => undefined),
   subscribeEvents: (onEvent) => {
     const es = new EventSource('/api/events')
     const handler = (ev: MessageEvent) => {
@@ -72,6 +74,7 @@ const wailsClient: Client = {
   addProfile:    (req) => window.wails!.CallByName('api.AddProfile', req) as Promise<ProfileDTO>,
   updateProfile: (req) => window.wails!.CallByName('api.UpdateProfile', req) as Promise<ProfileDTO>,
   deleteProfile: (id) => window.wails!.CallByName('api.DeleteProfile', id).then(() => undefined),
+  setProfileMuted: (id, muted) => window.wails!.CallByName('api.SetProfileMuted', id, muted).then(() => undefined),
   subscribeEvents: (onEvent) => {
     if (!window.wails?.EventsOn) return () => {}
     const offs = (['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady'] as const)

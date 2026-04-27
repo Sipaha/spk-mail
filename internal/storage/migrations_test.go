@@ -16,7 +16,7 @@ func TestMigrate_FreshDBAppliesAllVersions(t *testing.T) {
 
 	var v int
 	require.NoError(t, s.DB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&v))
-	require.Equal(t, 2, v)
+	require.Equal(t, 3, v)
 
 	// profiles table exists
 	var name string
@@ -38,6 +38,21 @@ func TestMigrate_FreshDBAppliesAllVersions(t *testing.T) {
 		cols[n] = true
 	}
 	require.True(t, cols["profile_id"], "accounts must have profile_id column after migration")
+
+	// profiles has muted column after v3
+	rows2, err := s.DB().Query(`PRAGMA table_info(profiles)`)
+	require.NoError(t, err)
+	defer rows2.Close()
+	pcols := map[string]bool{}
+	for rows2.Next() {
+		var cid int
+		var n, typ string
+		var notnull, pk int
+		var dflt any
+		require.NoError(t, rows2.Scan(&cid, &n, &typ, &notnull, &dflt, &pk))
+		pcols[n] = true
+	}
+	require.True(t, pcols["muted"], "profiles must have muted column after v3")
 }
 
 func TestMigrate_PreV2DBGetsBackfillDefaultProfile(t *testing.T) {

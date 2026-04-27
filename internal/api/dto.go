@@ -17,6 +17,7 @@ type ProfileDTO struct {
 	Name      string `json:"name"`
 	Color     string `json:"color"`
 	SortOrder int    `json:"sort_order"`
+	Muted     bool   `json:"muted"`
 }
 
 type AddProfileRequest struct {

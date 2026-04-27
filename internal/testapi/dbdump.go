@@ -21,11 +21,12 @@ func dbDumpHandler(s *storage.Store) http.HandlerFunc {
 			Color     string `json:"color"`
 			SortOrder int    `json:"sort_order"`
 			CreatedAt int64  `json:"created_at"`
+			Muted     bool   `json:"muted"`
 		}
 		rawProfiles, _ := s.ListProfiles(ctx)
 		profiles := make([]profileDump, 0, len(rawProfiles))
 		for _, p := range rawProfiles {
-			profiles = append(profiles, profileDump{ID: p.ID, Name: p.Name, Color: p.Color, SortOrder: p.SortOrder, CreatedAt: p.CreatedAt})
+			profiles = append(profiles, profileDump{ID: p.ID, Name: p.Name, Color: p.Color, SortOrder: p.SortOrder, CreatedAt: p.CreatedAt, Muted: p.Muted})
 		}
 		out["profiles"] = profiles
 

@@ -14,6 +14,7 @@ type migrationStep struct {
 var migrationSteps = []migrationStep{
 	{version: 1, apply: applyMigrationV1},
 	{version: 2, apply: applyMigrationV2},
+	{version: 3, apply: applyMigrationV3},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -85,6 +86,26 @@ func applyMigrationV2(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("v2 record version: %w", err)
 	}
 
+	return tx.Commit()
+}
+
+func applyMigrationV3(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`ALTER TABLE profiles ADD COLUMN muted INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !isDuplicateColumnErr(err) {
+			return fmt.Errorf("v3 add profiles.muted: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (3, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v3 record version: %w", err)
+	}
 	return tx.Commit()
 }
 

@@ -22,10 +22,25 @@ export default function ProfileSwitcher() {
       <div className="flex items-center gap-1 px-3 pt-2 border-b border-zinc-800 overflow-x-auto">
         <button className={tabClass(activeProfileId === null)} onClick={() => setActiveProfile(null)}>All</button>
         {profiles.map(p => (
-          <button key={p.id} className={tabClass(activeProfileId === p.id)} onClick={() => setActiveProfile(p.id)}>
-            <span className="inline-block size-2 rounded-full mr-1 align-middle" style={{ background: p.color }} />
-            {p.name}
-          </button>
+          <span key={p.id} className="inline-flex items-center">
+            <button
+              className={tabClass(activeProfileId === p.id) + (p.muted ? ' opacity-50' : '')}
+              onClick={() => setActiveProfile(p.id)}>
+              <span className="inline-block size-2 rounded-full mr-1 align-middle" style={{ background: p.color }} />
+              {p.muted && <span className="mr-1" title="Muted">🔕</span>}
+              {p.name}
+            </button>
+            <button
+              title={p.muted ? 'Unmute' : 'Mute'}
+              className="px-1 text-xs text-zinc-500 hover:text-zinc-200"
+              onClick={async (e) => {
+                e.stopPropagation()
+                await client.setProfileMuted(p.id, !p.muted)
+                setProfiles(await client.listProfiles())
+              }}>
+              {p.muted ? '🔔' : '🔕'}
+            </button>
+          </span>
         ))}
         <button className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200" title="New profile" onClick={() => setCreating(true)}>+</button>
       </div>

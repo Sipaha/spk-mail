@@ -295,7 +295,7 @@ func (s *Stub) ListProfiles(ctx context.Context) ([]ProfileDTO, error) {
 	}
 	out := make([]ProfileDTO, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, ProfileDTO{ID: r.ID, Name: r.Name, Color: r.Color, SortOrder: r.SortOrder})
+		out = append(out, ProfileDTO{ID: r.ID, Name: r.Name, Color: r.Color, SortOrder: r.SortOrder, Muted: r.Muted})
 	}
 	return out, nil
 }
@@ -312,7 +312,7 @@ func (s *Stub) AddProfile(ctx context.Context, req AddProfileRequest) (ProfileDT
 	if err != nil {
 		return ProfileDTO{}, err
 	}
-	return ProfileDTO{ID: row.ID, Name: row.Name, Color: row.Color, SortOrder: row.SortOrder}, nil
+	return ProfileDTO{ID: row.ID, Name: row.Name, Color: row.Color, SortOrder: row.SortOrder, Muted: row.Muted}, nil
 }
 
 func (s *Stub) UpdateProfile(ctx context.Context, req UpdateProfileRequest) (ProfileDTO, error) {
@@ -323,7 +323,7 @@ func (s *Stub) UpdateProfile(ctx context.Context, req UpdateProfileRequest) (Pro
 	if err != nil {
 		return ProfileDTO{}, err
 	}
-	return ProfileDTO{ID: row.ID, Name: row.Name, Color: row.Color, SortOrder: row.SortOrder}, nil
+	return ProfileDTO{ID: row.ID, Name: row.Name, Color: row.Color, SortOrder: row.SortOrder, Muted: row.Muted}, nil
 }
 
 func (s *Stub) DeleteProfile(ctx context.Context, id int64) error {
@@ -334,6 +334,18 @@ func (s *Stub) DeleteProfile(ctx context.Context, id int64) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Stub) SetProfileMuted(ctx context.Context, id int64, muted bool) error {
+	return s.Store.SetProfileMuted(ctx, id, muted)
+}
+
+func (s *Stub) AccountIsMuted(ctx context.Context, id int64) (bool, error) {
+	return s.Store.AccountIsMuted(ctx, id)
+}
+
+func (s *Stub) TotalUnreadExcludingMuted(ctx context.Context) (int64, error) {
+	return s.Store.TotalUnreadExcludingMuted(ctx)
 }
 
 func strFrom(p *string) string {

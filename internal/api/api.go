@@ -26,6 +26,9 @@ type API interface {
 	AddProfile(ctx context.Context, req AddProfileRequest) (ProfileDTO, error)
 	UpdateProfile(ctx context.Context, req UpdateProfileRequest) (ProfileDTO, error)
 	DeleteProfile(ctx context.Context, id int64) error
+	SetProfileMuted(ctx context.Context, id int64, muted bool) error
+	AccountIsMuted(ctx context.Context, id int64) (bool, error)
+	TotalUnreadExcludingMuted(ctx context.Context) (int64, error)
 }
 
 type ThreadFilter struct {
