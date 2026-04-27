@@ -67,9 +67,31 @@ func LoadFixture(path string) (*Fixture, error) {
 	return &f, nil
 }
 
+// NowSource abstracts a clock so fixtures can be seeded against either
+// time.Now (production / tests that don't care) or a swappable *clock.Clock
+// (browser-mode test screenshots that need deterministic timestamps).
+//
+// Pass nil to ApplyWithClock to use the real wall clock.
+type NowSource interface {
+	Now() time.Time
+}
+
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
 // Apply seeds the server with all accounts, folders, and messages described
-// in the fixture.
+// in the fixture, using the real wall clock for any zero-date defaults.
 func (s *Server) Apply(f *Fixture) error {
+	return s.ApplyWithClock(f, wallClock{})
+}
+
+// ApplyWithClock is like Apply but resolves zero-date message defaults
+// against the provided clock instead of time.Now.
+func (s *Server) ApplyWithClock(f *Fixture, now NowSource) error {
+	if now == nil {
+		now = wallClock{}
+	}
 	for _, acc := range f.Accounts {
 		password := acc.Password
 		if password == "" {
@@ -96,14 +118,16 @@ func (s *Server) Apply(f *Fixture) error {
 			}
 
 			for _, msg := range folder.Messages {
+				// Resolve zero-date here so buildRFC822/buildHeaders don't need
+				// the clock and always see a concrete timestamp.
+				if msg.Date.IsZero() {
+					msg.Date = now.Now()
+				}
+
 				raw := buildRFC822(msg)
 				lr := &literalBytes{data: raw}
 
-				t := msg.Date
-				if t.IsZero() {
-					t = time.Now()
-				}
-				opts := &imap.AppendOptions{Time: t}
+				opts := &imap.AppendOptions{Time: msg.Date}
 
 				if _, err := u.Append(folder.Name, lr, opts); err != nil {
 					return fmt.Errorf("mockimap: append message to %s/%s: %w", acc.Email, folder.Name, err)
@@ -131,6 +155,9 @@ func buildRFC822(m FixtureMessage) []byte {
 }
 
 func buildHeaders(m FixtureMessage) string {
+	// Callers (ApplyWithClock) are expected to resolve zero-dates before
+	// invoking the build chain; if they don't, fall back to wallClock so the
+	// header is still valid.
 	date := m.Date
 	if date.IsZero() {
 		date = time.Now()
