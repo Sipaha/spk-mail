@@ -44,3 +44,18 @@ func (s *Store) ListThreadsRecent(ctx context.Context, limit, offset int) ([]Thr
 	}
 	return out, rows.Err()
 }
+
+// UpdateThreadStats recomputes counters from the messages table.
+// Called by StoreWriter after each insert/update.
+func (s *Store) UpdateThreadStats(ctx context.Context, threadID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE threads SET
+			last_date = (SELECT COALESCE(MAX(date),0) FROM messages WHERE thread_id = ?),
+			msg_count = (SELECT COUNT(*) FROM messages WHERE thread_id = ?),
+			unread_count = (SELECT COUNT(*) FROM messages WHERE thread_id = ? AND flags NOT LIKE '%\Seen%'),
+			has_flagged = CASE WHEN EXISTS(SELECT 1 FROM messages WHERE thread_id = ? AND flags LIKE '%\Flagged%') THEN 1 ELSE 0 END,
+			has_attach  = CASE WHEN EXISTS(SELECT 1 FROM messages WHERE thread_id = ? AND has_attachments = 1) THEN 1 ELSE 0 END
+		WHERE id = ?`,
+		threadID, threadID, threadID, threadID, threadID, threadID)
+	return err
+}
