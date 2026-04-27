@@ -27,3 +27,5 @@ Notifications use `org.freedesktop.Notifications` (D-Bus) and work on all major 
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+
+Required attribution notices for third-party Apache-2.0 dependencies are reproduced in [NOTICE](NOTICE). A complete list of linked Go modules and their licenses is in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
