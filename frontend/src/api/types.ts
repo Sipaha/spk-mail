@@ -13,8 +13,15 @@ export interface AddAccountRequest {
   profile_id?: number;
 }
 export interface ThreadFilter {
-  account_id?: number; folder_id?: number; unread_only?: boolean; limit?: number; offset?: number;
+  account_id?: number; folder_id?: number; unread_only?: boolean; has_flagged?: boolean; limit?: number; offset?: number;
   profile_id?: number;
+}
+export interface FolderDTO {
+  id: number
+  account_id: number
+  name: string
+  role: string  // 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 'trash' | ''
+  unread_count: number
 }
 export type EventType = 'MessageInserted'|'MessageArrived'|'MessageUpdated'|'SyncProgress'|'AccountStatus'|'WriteError'|'AttachmentReady'
 export interface ApiEvent { type: EventType; payload: Record<string, unknown> }

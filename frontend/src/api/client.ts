@@ -1,11 +1,12 @@
 import { Call, Events } from '@wailsio/runtime'
-import type { AccountDTO, AddAccountRequest, AddProfileRequest, ApiEvent, EventType, MessageDTO, ProfileDTO, SearchHitDTO, ThreadDTO, ThreadFilter, UpdateProfileRequest } from './types'
+import type { AccountDTO, AddAccountRequest, AddProfileRequest, ApiEvent, EventType, FolderDTO, MessageDTO, ProfileDTO, SearchHitDTO, ThreadDTO, ThreadFilter, UpdateProfileRequest } from './types'
 
 export interface Client {
   listAccounts(): Promise<AccountDTO[]>
   addAccount(req: AddAccountRequest): Promise<AccountDTO>
   removeAccount(id: number): Promise<void>
   listThreads(filter: ThreadFilter): Promise<ThreadDTO[]>
+  listFolders(accountId: number): Promise<FolderDTO[]>
   getThread(id: number): Promise<MessageDTO[]>
   markRead(ids: number[]): Promise<void>
   allowRemote(id: number): Promise<string>
@@ -34,6 +35,7 @@ const httpClient: Client = {
   addAccount:    (req) => post('/api/AddAccount', req),
   removeAccount: (id) => post('/api/RemoveAccount', { id }),
   listThreads:   (f) => post('/api/ListThreads', f),
+  listFolders:   (accountId) => post('/api/ListFolders', { account_id: accountId }),
   getThread:     (id) => post('/api/GetThread', { id }),
   markRead:      (ids) => post('/api/MarkRead', { ids }),
   allowRemote:   (id) => post('/api/AllowRemoteForMessage', { id }),
@@ -78,6 +80,7 @@ const wailsClient: Client = {
   addAccount:    (req) => Call.ByName(m('AddAccount'), req) as Promise<AccountDTO>,
   removeAccount: (id) => Call.ByName(m('RemoveAccount'), id).then(() => undefined),
   listThreads:   (f) => Call.ByName(m('ListThreads'), f) as Promise<ThreadDTO[]>,
+  listFolders:   (accountId) => Call.ByName(m('ListFolders'), accountId) as Promise<FolderDTO[]>,
   getThread:     (id) => Call.ByName(m('GetThread'), id) as Promise<MessageDTO[]>,
   markRead:      (ids) => Call.ByName(m('MarkRead'), ids).then(() => undefined),
   allowRemote:   (id) => Call.ByName(m('AllowRemoteForMessage'), id) as Promise<string>,
