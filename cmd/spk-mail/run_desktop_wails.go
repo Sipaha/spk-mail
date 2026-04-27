@@ -27,6 +27,10 @@ func runDesktop(ctx context.Context) error {
 	}
 	defer st.Close()
 
+	if err := st.EnsureDefaultProfile(ctx); err != nil {
+		return fmt.Errorf("ensure default profile: %w", err)
+	}
+
 	masterKey, err := secrets.LoadOrCreateMasterKey()
 	if err != nil {
 		return fmt.Errorf("master key: %w", err)

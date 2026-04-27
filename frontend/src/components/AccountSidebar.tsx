@@ -6,7 +6,7 @@ export default function AccountSidebar() {
   const setFilter = useStore(s => s.setFilter)
   const activeProfileId = useStore(s => s.activeProfileId)
   const visibleAccounts = activeProfileId === null
-    ? accounts
+    ? []
     : accounts.filter(a => a.profile_id === activeProfileId)
   return (
     <div className="p-3 space-y-1 text-sm">

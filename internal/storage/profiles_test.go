@@ -37,6 +37,22 @@ func TestProfiles_CRUD(t *testing.T) {
 	require.Len(t, all, 1)
 }
 
+func TestEnsureDefaultProfile_IdempotentAndCreatesWhenEmpty(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.EnsureDefaultProfile(ctx))
+	profs, err := s.ListProfiles(ctx)
+	require.NoError(t, err)
+	require.Len(t, profs, 1)
+	require.Equal(t, "Default", profs[0].Name)
+
+	// Idempotent — second call doesn't add a duplicate.
+	require.NoError(t, s.EnsureDefaultProfile(ctx))
+	profs, _ = s.ListProfiles(ctx)
+	require.Len(t, profs, 1)
+}
+
 func TestProfiles_DeleteRefusedWhenAccountsAttached(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
