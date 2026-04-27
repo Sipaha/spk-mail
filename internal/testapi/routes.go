@@ -20,7 +20,7 @@ type Mount struct {
 // Register adds /api/_test/* routes to mux.
 func (m *Mount) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/_test/seed", &seedHandler{api: m.API, mock: m.Mock, clock: m.Clock})
-	mux.HandleFunc("GET /api/_test/db-dump", dbDumpHandler(m.API, m.Store))
+	mux.HandleFunc("GET /api/_test/db-dump", dbDumpHandler(m.Store))
 	mux.HandleFunc("GET /api/_test/logs", logsHandler(m.Logs))
 	mux.Handle("POST /api/_test/inject-message", &injectHandler{mock: m.Mock})
 	mux.HandleFunc("POST /api/_test/clock", clockHandler(m.Clock))
