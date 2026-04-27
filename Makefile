@@ -23,7 +23,7 @@ build-go:
 build-desktop: build-frontend
 	mkdir -p $(BIN_DIR)
 	rm -rf cmd/spk-mail/dist && cp -r frontend/dist cmd/spk-mail/dist
-	CGO_ENABLED=1 go build -tags wails -trimpath -ldflags="-w -s" -o $(BIN_DIR)/spk-mail-desktop ./cmd/spk-mail
+	CGO_ENABLED=1 go build -tags "wails desktop_only" -trimpath -ldflags="-w -s" -o $(BIN_DIR)/spk-mail-desktop ./cmd/spk-mail
 	rm -rf cmd/spk-mail/dist
 	mkdir -p cmd/spk-mail/dist
 	touch cmd/spk-mail/dist/.gitkeep
