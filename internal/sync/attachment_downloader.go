@@ -105,10 +105,19 @@ func (d *AttachmentDownloader) runOnce(ctx context.Context) {
 			slog.Warn("downloader fetch part", "att", p.AttachmentID, "err", err)
 			continue
 		}
+		// p.Filename is attacker-controlled (Content-Disposition filename
+		// from the email). filepath.Base strips any directory component so
+		// "../../escape.bin" becomes "escape.bin" — preventing the join
+		// below from escaping rootDir. Also reject empty/dot edge cases.
+		safeName := filepath.Base(p.Filename)
+		if safeName == "" || safeName == "." || safeName == "/" || safeName == ".." {
+			slog.Warn("downloader unsafe filename", "att", p.AttachmentID, "filename", p.Filename)
+			continue
+		}
 		path := filepath.Join(d.rootDir,
 			strconv.FormatInt(d.accountID, 10),
 			strconv.FormatInt(p.MessageID, 10),
-			p.Filename)
+			safeName)
 		if err := fsutil.AtomicWrite(path, body, 0o600); err != nil {
 			slog.Warn("downloader write", "att", p.AttachmentID, "err", err)
 			continue
