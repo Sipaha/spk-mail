@@ -27,6 +27,11 @@ export function useEventStream() {
         case 'WriteError':
           // surface in console for now; toast UI is plan 7
           console.error('write error', ev.payload); break
+        case 'AttachmentReady':
+          if (s.openThreadId !== undefined) {
+            s.setOpenThread(s.openThreadId, await client.getThread(s.openThreadId))
+          }
+          break
       }
     })
   }, [])

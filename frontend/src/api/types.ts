@@ -14,7 +14,7 @@ export interface AddAccountRequest {
 export interface ThreadFilter {
   account_id?: number; folder_id?: number; unread_only?: boolean; limit?: number; offset?: number;
 }
-export type EventType = 'MessageInserted'|'MessageArrived'|'MessageUpdated'|'SyncProgress'|'AccountStatus'|'WriteError'
+export type EventType = 'MessageInserted'|'MessageArrived'|'MessageUpdated'|'SyncProgress'|'AccountStatus'|'WriteError'|'AttachmentReady'
 export interface ApiEvent { type: EventType; payload: Record<string, unknown> }
 export interface SearchHitDTO {
   message_id: number; thread_id?: number;

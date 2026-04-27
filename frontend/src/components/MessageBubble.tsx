@@ -1,5 +1,6 @@
 import type { MessageDTO } from '../api/types'
 import MessageBody from './MessageBody'
+import AttachmentChip from './AttachmentChip'
 import { relative } from '../lib/time'
 
 export default function MessageBubble({ msg }: { msg: MessageDTO }) {
@@ -14,9 +15,7 @@ export default function MessageBubble({ msg }: { msg: MessageDTO }) {
       {msg.attachments.length > 0 && (
         <div className="px-4 pb-3 flex flex-wrap gap-2">
           {msg.attachments.map(a => (
-            <span key={a.id} className="text-xs rounded border border-zinc-700 px-2 py-1">
-              📎 {a.filename} <span className="text-zinc-500">({Math.round(a.size_bytes/1024)} KB)</span>
-            </span>
+            <AttachmentChip key={a.id} a={a} />
           ))}
         </div>
       )}
