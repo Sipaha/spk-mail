@@ -20,6 +20,11 @@ import (
 // Callers should trigger a re-download and retry.
 var ErrAttachmentNotReady = errors.New("attachment not yet downloaded")
 
+// ErrProfileInUse is the api-side sentinel returned by DeleteProfile when the
+// underlying storage layer reports that accounts are still attached to the
+// profile. Wraps storage.ErrProfileInUse so callers can errors.Is-detect either.
+var ErrProfileInUse = errors.New("api: profile has attached accounts")
+
 // FlagOp is the API-side representation of a flag mutation request submitted
 // to the sync engine. The concrete sync.FlagOp value is constructed by the
 // engine adapter; using a local type here avoids an import cycle between
@@ -66,7 +71,10 @@ func (s *Stub) ListAccounts(ctx context.Context) ([]AccountDTO, error) {
 	}
 	out := make([]AccountDTO, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, AccountDTO{ID: r.ID, Name: r.Name, Email: r.Email, Color: r.Color, Status: "ok"})
+		out = append(out, AccountDTO{
+			ID: r.ID, Name: r.Name, Email: r.Email, Color: r.Color, Status: "ok",
+			ProfileID: r.ProfileID,
+		})
 	}
 	return out, nil
 }
@@ -76,6 +84,7 @@ func (s *Stub) AddAccount(ctx context.Context, req AddAccountRequest) (AccountDT
 		Name: req.Name, Email: req.Email,
 		IMAPHost: req.IMAPHost, IMAPPort: req.IMAPPort, IMAPUsername: req.IMAPUsername,
 		UseTLS: req.UseTLS, Color: req.Color, CreatedAt: time.Now().Unix(),
+		ProfileID: req.ProfileID,
 	})
 	if err != nil {
 		return AccountDTO{}, err
@@ -89,7 +98,10 @@ func (s *Stub) AddAccount(ctx context.Context, req AddAccountRequest) (AccountDT
 	// "starting" reflects the actual lifecycle: AccountWorker has been
 	// dispatched but has not yet emitted AccountStatus{state:"connecting"} or
 	// "ok". The frontend transitions through these states as events arrive.
-	return AccountDTO{ID: id, Name: req.Name, Email: req.Email, Color: req.Color, Status: "starting"}, nil
+	return AccountDTO{
+		ID: id, Name: req.Name, Email: req.Email, Color: req.Color,
+		Status: "starting", ProfileID: req.ProfileID,
+	}, nil
 }
 
 func (s *Stub) RemoveAccount(ctx context.Context, id int64) error {
@@ -103,8 +115,12 @@ func (s *Stub) RemoveAccount(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *Stub) ListThreads(ctx context.Context, _ ThreadFilter) ([]ThreadDTO, error) {
-	rows, err := s.Store.ListThreadsRecent(ctx, 100, 0)
+func (s *Stub) ListThreads(ctx context.Context, filter ThreadFilter) ([]ThreadDTO, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.Store.ListThreadsByProfile(ctx, filter.ProfileID, limit, filter.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +286,54 @@ func (s *Stub) OpenAttachment(ctx context.Context, id int64) error {
 	}
 	cmd := exec.Command("xdg-open", path)
 	return cmd.Start()
+}
+
+func (s *Stub) ListProfiles(ctx context.Context) ([]ProfileDTO, error) {
+	rows, err := s.Store.ListProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProfileDTO, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ProfileDTO{ID: r.ID, Name: r.Name, Color: r.Color, SortOrder: r.SortOrder})
+	}
+	return out, nil
+}
+
+func (s *Stub) AddProfile(ctx context.Context, req AddProfileRequest) (ProfileDTO, error) {
+	id, err := s.Store.InsertProfile(ctx, storage.ProfileRow{
+		Name: req.Name, Color: req.Color, SortOrder: 0,
+		CreatedAt: time.Now().Unix(),
+	})
+	if err != nil {
+		return ProfileDTO{}, err
+	}
+	row, err := s.Store.GetProfile(ctx, id)
+	if err != nil {
+		return ProfileDTO{}, err
+	}
+	return ProfileDTO{ID: row.ID, Name: row.Name, Color: row.Color, SortOrder: row.SortOrder}, nil
+}
+
+func (s *Stub) UpdateProfile(ctx context.Context, req UpdateProfileRequest) (ProfileDTO, error) {
+	if err := s.Store.UpdateProfile(ctx, req.ID, req.Name, req.Color); err != nil {
+		return ProfileDTO{}, err
+	}
+	row, err := s.Store.GetProfile(ctx, req.ID)
+	if err != nil {
+		return ProfileDTO{}, err
+	}
+	return ProfileDTO{ID: row.ID, Name: row.Name, Color: row.Color, SortOrder: row.SortOrder}, nil
+}
+
+func (s *Stub) DeleteProfile(ctx context.Context, id int64) error {
+	if err := s.Store.DeleteProfile(ctx, id); err != nil {
+		if errors.Is(err, storage.ErrProfileInUse) {
+			return fmt.Errorf("%w (profile %d)", ErrProfileInUse, id)
+		}
+		return err
+	}
+	return nil
 }
 
 func strFrom(p *string) string {

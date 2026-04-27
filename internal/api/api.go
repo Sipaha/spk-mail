@@ -21,11 +21,17 @@ type API interface {
 
 	GetAttachmentLocalPath(ctx context.Context, id int64) (string, error)
 	OpenAttachment(ctx context.Context, id int64) error
+
+	ListProfiles(ctx context.Context) ([]ProfileDTO, error)
+	AddProfile(ctx context.Context, req AddProfileRequest) (ProfileDTO, error)
+	UpdateProfile(ctx context.Context, req UpdateProfileRequest) (ProfileDTO, error)
+	DeleteProfile(ctx context.Context, id int64) error
 }
 
 type ThreadFilter struct {
 	AccountID  *int64 `json:"account_id,omitempty"`
 	FolderID   *int64 `json:"folder_id,omitempty"`
+	ProfileID  *int64 `json:"profile_id,omitempty"`
 	UnreadOnly bool   `json:"unread_only,omitempty"`
 	Limit      int    `json:"limit,omitempty"`
 	Offset     int    `json:"offset,omitempty"`
