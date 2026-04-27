@@ -4,11 +4,30 @@
 package api
 
 type AccountDTO struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Email  string `json:"email"`
-	Color  string `json:"color"`
-	Status string `json:"status"` // ok|error|connecting (plan 2 fills it; plan 1 returns "ok")
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Email     string `json:"email"`
+	Color     string `json:"color"`
+	Status    string `json:"status"` // ok|error|connecting (plan 2 fills it; plan 1 returns "ok")
+	ProfileID *int64 `json:"profile_id,omitempty"`
+}
+
+type ProfileDTO struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Color     string `json:"color"`
+	SortOrder int    `json:"sort_order"`
+}
+
+type AddProfileRequest struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+type UpdateProfileRequest struct {
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
 }
 
 type ThreadDTO struct {
@@ -69,4 +88,5 @@ type AddAccountRequest struct {
 	UseTLS       bool   `json:"use_tls"`
 	Color        string `json:"color"`
 	UseMock      bool   `json:"use_mock,omitempty"`
+	ProfileID    *int64 `json:"profile_id,omitempty"`
 }

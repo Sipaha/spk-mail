@@ -46,5 +46,16 @@ func (w *Wails) OpenAttachment(id int64) error {
 	return w.a.OpenAttachment(context.Background(), id)
 }
 
+func (w *Wails) ListProfiles() ([]api.ProfileDTO, error) {
+	return w.a.ListProfiles(context.Background())
+}
+func (w *Wails) AddProfile(req api.AddProfileRequest) (api.ProfileDTO, error) {
+	return w.a.AddProfile(context.Background(), req)
+}
+func (w *Wails) UpdateProfile(req api.UpdateProfileRequest) (api.ProfileDTO, error) {
+	return w.a.UpdateProfile(context.Background(), req)
+}
+func (w *Wails) DeleteProfile(id int64) error { return w.a.DeleteProfile(context.Background(), id) }
+
 // Events returns the api.Emitter for the desktop runner to bridge to Wails event bus.
 func (w *Wails) Events() *api.Emitter { return w.em }

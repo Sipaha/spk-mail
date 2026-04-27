@@ -65,6 +65,16 @@ func (h *HTTP) routes() {
 	}) (any, error) {
 		return nil, h.api.OpenAttachment(ctx, req.ID)
 	}))
+	h.mux.HandleFunc("POST /api/ListProfiles", httpHandle(func(ctx context.Context, _ *struct{}) (any, error) { return h.api.ListProfiles(ctx) }))
+	h.mux.HandleFunc("POST /api/AddProfile", httpHandle(func(ctx context.Context, req *api.AddProfileRequest) (any, error) { return h.api.AddProfile(ctx, *req) }))
+	h.mux.HandleFunc("POST /api/UpdateProfile", httpHandle(func(ctx context.Context, req *api.UpdateProfileRequest) (any, error) {
+		return h.api.UpdateProfile(ctx, *req)
+	}))
+	h.mux.HandleFunc("POST /api/DeleteProfile", httpHandle(func(ctx context.Context, req *struct {
+		ID int64 `json:"id"`
+	}) (any, error) {
+		return nil, h.api.DeleteProfile(ctx, req.ID)
+	}))
 
 	h.mux.HandleFunc("GET /api/events", h.sse)
 }
