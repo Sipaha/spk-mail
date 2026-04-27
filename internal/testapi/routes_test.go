@@ -6,24 +6,22 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
+	"github.com/spk/spk-mail/internal/api"
 	apitestapi "github.com/spk/spk-mail/internal/api/testapi"
 	"github.com/spk/spk-mail/internal/mockimap"
-	"github.com/spk/spk-mail/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSeed_AccountAppearsInDBDump(t *testing.T) {
 	stub := apitestapi.NewStub(t)
-	dir := t.TempDir()
-	store, _ := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
-	defer store.Close()
 	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
 	require.NoError(t, err)
 	defer mock.Close()
 
+	// Share the stub's store so seed writes are visible to db-dump.
+	store := stub.(*api.Stub).Store
 	m := &Mount{API: stub, Store: store, Mock: mock, Logs: NewRingBuffer(100)}
 	mux := http.NewServeMux()
 	m.Register(mux)
