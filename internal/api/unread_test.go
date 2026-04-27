@@ -3,11 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -21,18 +19,8 @@ func TestUnreadCounts_Empty(t *testing.T) {
 }
 
 func TestUnreadCounts_WithData(t *testing.T) {
-	// Build a stub backed by a real in-memory store so we can seed via Store
-	// methods. Mirrors newStub() from api_test.go but keeps the Store handle.
-	dir := t.TempDir()
-	st, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
-
-	key := make([]byte, 32)
-	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
-	require.NoError(t, err)
-
-	a := NewStub(st, sec, NewEmitter(), nil)
+	a := newStub(t)
+	st := a.Store
 	ctx := context.Background()
 
 	accountID, err := st.InsertAccount(ctx, storage.AccountRow{
