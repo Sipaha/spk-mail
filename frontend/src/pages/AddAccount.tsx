@@ -19,7 +19,10 @@ export default function AddAccount({ onDone }: { onDone: () => void }) {
           const payload = { ...form, profile_id: activeProfileId ?? undefined }
           const a = await client.addAccount(payload)
           upsert(a); onDone()
-        } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          setErr(msg || 'Unknown error')
+        } finally { setBusy(false) }
       }}>
       <h2 className="text-lg font-semibold">Add IMAP account</h2>
       <Field label="Display name" value={form.name} onChange={v => setForm({ ...form, name: v })} required />
