@@ -80,7 +80,7 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 	}
 
 	em := api.NewEmitter()
-	eng := mailsync.NewEngine(st, sec, em)
+	eng := mailsync.NewEngineWithDir(st, sec, em, paths.AttachmentsDir)
 	go eng.Run(ctx)
 	stub := api.NewStub(st, sec, em, engineAdapter{eng: eng})
 

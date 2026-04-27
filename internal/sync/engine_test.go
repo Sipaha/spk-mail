@@ -65,3 +65,47 @@ func TestEngine_TwoAccountsSyncInParallel(t *testing.T) {
 	}
 	t.Fatal("expected 2 threads")
 }
+
+// TestEngine_AttachmentDownloaderWiring verifies that NewEngineWithDir wires
+// the attachDir field and downloaders map, and that StartAccount registers a
+// downloader entry when attachDir is non-empty. End-to-end downloader behavior
+// is covered in attachment_downloader_test.go.
+func TestEngine_AttachmentDownloaderWiring(t *testing.T) {
+	dir := t.TempDir()
+	st, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
+	require.NoError(t, err)
+	defer st.Close()
+	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), make([]byte, 32))
+	require.NoError(t, err)
+
+	em := api.NewEmitter()
+	attachDir := filepath.Join(dir, "attach")
+	e := NewEngineWithDir(st, sec, em, attachDir)
+	require.NotNil(t, e.downloaders)
+	require.Equal(t, attachDir, e.attachDir)
+
+	// Need a writer so AccountWorker construction doesn't panic when
+	// StartAccount kicks supervise off (supervise will fail to find the
+	// account in DB and bounce, but that's fine for a wiring assertion).
+	e.writer = NewStoreWriter(e.store, e.em)
+
+	id, err := st.InsertAccount(context.Background(), storage.AccountRow{
+		Name: "x", Email: "x@x", IMAPHost: "127.0.0.1", IMAPPort: 1, IMAPUsername: "x",
+		UseTLS: false, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.StartAccount(ctx, id)
+
+	e.mu.Lock()
+	_, ok := e.downloaders[id]
+	e.mu.Unlock()
+	require.True(t, ok, "expected downloader registered for account")
+
+	// Plain NewEngine must NOT spawn downloaders.
+	e2 := NewEngine(st, sec, em)
+	require.Equal(t, "", e2.attachDir)
+	require.NotNil(t, e2.downloaders)
+}
