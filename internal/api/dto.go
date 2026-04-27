@@ -35,6 +35,17 @@ type MessageDTO struct {
 	Attachments []AttachmentDTO `json:"attachments"`
 }
 
+type SearchHitDTO struct {
+	MessageID int64  `json:"message_id"`
+	ThreadID  *int64 `json:"thread_id,omitempty"`
+	Subject   string `json:"subject"`
+	FromAddr  string `json:"from_addr"`
+	Date      int64  `json:"date"`
+	// Snippet contains \x01 BEGIN and \x02 END sentinels around matched terms.
+	// Frontend splits on these to render highlights as <mark> React elements.
+	Snippet string `json:"snippet"`
+}
+
 type AttachmentDTO struct {
 	ID          int64  `json:"id"`
 	Filename    string `json:"filename"`

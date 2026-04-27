@@ -33,7 +33,7 @@ func (w *Wails) MarkRead(ids []int64) error { return w.a.MarkRead(context.Backgr
 func (w *Wails) AllowRemoteForMessage(id int64) (string, error) {
 	return w.a.AllowRemoteForMessage(context.Background(), id)
 }
-func (w *Wails) Search(q string, limit, offset int) ([]api.MessageDTO, error) {
+func (w *Wails) Search(q string, limit, offset int) ([]api.SearchHitDTO, error) {
 	return w.a.Search(context.Background(), q, limit, offset)
 }
 func (w *Wails) UnreadCounts() (api.UnreadCountsDTO, error) {
