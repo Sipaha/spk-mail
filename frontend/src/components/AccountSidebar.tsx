@@ -4,6 +4,10 @@ export default function AccountSidebar() {
   const accounts = useStore(s => s.accounts)
   const filter = useStore(s => s.filter)
   const setFilter = useStore(s => s.setFilter)
+  const activeProfileId = useStore(s => s.activeProfileId)
+  const visibleAccounts = activeProfileId === null
+    ? accounts
+    : accounts.filter(a => a.profile_id === activeProfileId)
   return (
     <div className="p-3 space-y-1 text-sm">
       <button
@@ -12,7 +16,7 @@ export default function AccountSidebar() {
         Unified Inbox
       </button>
       <div className="mt-3 mb-1 text-xs uppercase tracking-wide text-zinc-500">Accounts</div>
-      {accounts.map(a => (
+      {visibleAccounts.map(a => (
         <button
           key={a.id}
           onClick={() => setFilter({ accountId: a.id })}
