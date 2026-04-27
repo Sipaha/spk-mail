@@ -3,10 +3,10 @@ package storage
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"testing"
 	"time"
-	"github.com/stretchr/testify/require"
 )
 
 func openTestStore(t *testing.T) *Store {

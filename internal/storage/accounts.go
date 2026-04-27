@@ -78,4 +78,9 @@ func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
 	return nil
 }
 
-func boolToInt(b bool) int { if b { return 1 }; return 0 }
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
