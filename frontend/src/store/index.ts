@@ -1,13 +1,14 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { AccountDTO, MessageDTO, ProfileDTO, ThreadDTO } from '../api/types'
+import type { AccountDTO, FolderDTO, MessageDTO, ProfileDTO, ThreadDTO } from '../api/types'
 
 interface State {
   accounts: AccountDTO[]
   profiles: ProfileDTO[]
   activeProfileId: number | null
   threads: ThreadDTO[]
-  filter: { accountId?: number; folderId?: number; unreadOnly: boolean }
+  folders: Record<number, FolderDTO[]>
+  filter: { accountId?: number; folderId?: number; unreadOnly: boolean; hasFlagged: boolean }
   openThreadId?: number
   openThread?: MessageDTO[]
   syncProgress: Record<number, { folder: string; done: number; total: number }>
@@ -17,6 +18,7 @@ interface State {
   setProfiles: (p: ProfileDTO[]) => void
   setActiveProfile: (id: number | null) => void
   setThreads: (t: ThreadDTO[]) => void
+  setFolders: (accountId: number, fs: FolderDTO[]) => void
   bumpThread: (id: number, lastDate: number) => void
   markThreadRead: (id: number) => void
   setOpenThread: (id: number | undefined, msgs?: MessageDTO[]) => void
@@ -31,7 +33,8 @@ export const useStore = create<State>()(
       profiles: [],
       activeProfileId: null,
       threads: [],
-      filter: { unreadOnly: false },
+      folders: {},
+      filter: { unreadOnly: false, hasFlagged: false },
       syncProgress: {},
 
       setAccounts: (a) => set({ accounts: a }),
@@ -45,6 +48,7 @@ export const useStore = create<State>()(
       }),
       setActiveProfile: (id) => set({ activeProfileId: id }),
       setThreads: (t) => set({ threads: t }),
+      setFolders: (accountId, fs) => set((s) => ({ folders: { ...s.folders, [accountId]: fs } })),
       bumpThread: (id, lastDate) => set((s) => ({ threads: s.threads.map(t => t.id === id ? { ...t, last_date: lastDate } : t).sort((a,b)=>b.last_date-a.last_date) })),
       markThreadRead: (id) => set((s) => ({ threads: s.threads.map(t => t.id === id ? { ...t, unread_count: 0 } : t) })),
       setOpenThread: (id, msgs) => set({ openThreadId: id, openThread: msgs }),
