@@ -17,7 +17,7 @@ func TestOpen_CreatesSchema(t *testing.T) {
 	var v int
 	err = s.DB().QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&v)
 	require.NoError(t, err)
-	require.Equal(t, 1, v)
+	require.Equal(t, 2, v)
 
 	// Tables exist
 	for _, tbl := range []string{"accounts", "folders", "messages", "threads", "attachments", "messages_fts"} {
@@ -38,5 +38,5 @@ func TestOpen_Idempotent(t *testing.T) {
 	defer s2.Close()
 	var v int
 	require.NoError(t, s2.DB().QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&v))
-	require.Equal(t, 1, v)
+	require.Equal(t, 2, v)
 }
