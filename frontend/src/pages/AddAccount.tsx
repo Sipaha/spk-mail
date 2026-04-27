@@ -9,13 +9,15 @@ export default function AddAccount({ onDone }: { onDone: () => void }) {
   const [err, setErr] = useState<string>()
   const [busy, setBusy] = useState(false)
   const upsert = useStore(s => s.upsertAccount)
+  const activeProfileId = useStore(s => s.activeProfileId)
 
   return (
     <form className="max-w-md p-6 space-y-3 text-sm"
       onSubmit={async e => {
         e.preventDefault(); setBusy(true); setErr(undefined)
         try {
-          const a = await client.addAccount(form)
+          const payload = { ...form, profile_id: activeProfileId ?? undefined }
+          const a = await client.addAccount(payload)
           upsert(a); onDone()
         } catch (e) { setErr(String(e)) } finally { setBusy(false) }
       }}>
