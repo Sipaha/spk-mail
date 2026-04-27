@@ -42,3 +42,11 @@ func (e *Emitter) Emit(ev Event) {
 		}
 	}
 }
+
+// Emit a typed event without constructing the struct each time. Used by sync writer.
+func Emit(em *Emitter, kind string, payload map[string]any) {
+	if em == nil {
+		return
+	}
+	em.Emit(Event{Type: kind, Payload: payload})
+}
