@@ -38,9 +38,25 @@ func NewAccountWorker(id int64, s *storage.Store, sec *secrets.Store, w *StoreWr
 	}
 }
 
-// SubmitFlagOp enqueues a flag mutation for this worker's account. The op is
-// translated into a UID STORE on the worker's session.
-func (w *AccountWorker) SubmitFlagOp(op FlagOp) { w.flagOps <- op }
+// SubmitFlagOp queues a flag operation for async UID STORE. It is non-blocking:
+// if the queue is full (cap 64) the op is dropped with a warning.
+//
+// TODO(plan-7): the drain loop lives at the bottom of runOnce and is not entered
+// when runOnce errors before reaching it; under sustained sync errors flagOps
+// can fill faster than they drain. Move the drain loop into its own goroutine
+// scoped to AccountWorker.Run so it survives runOnce restarts.
+func (w *AccountWorker) SubmitFlagOp(op FlagOp) {
+	select {
+	case w.flagOps <- op:
+	default:
+		slog.Warn("flag op dropped: queue full",
+			"account_id", w.accountID,
+			"folder_id", op.FolderUID.FolderID,
+			"uid", op.FolderUID.UID,
+			"add", op.Add,
+			"flags", op.Flags)
+	}
+}
 
 // Run is the worker main loop. It blocks until ctx is cancelled. Errors during
 // connect/sync trigger a coarse 5s backoff before retrying.
@@ -115,6 +131,11 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 	}
 
 	// IDLE on inbox-role folder(s) only — simplest practical default.
+	// TODO(plan-7): IDLE/poll goroutines outlive runOnce restarts. On any error
+	// path that re-enters runOnce, fresh IDLE/poll goroutines spawn while the
+	// previous ones are still alive (only ctx.Done unblocks them). Move
+	// spawning under a supervisor scope tied to runOnce iterations so they're
+	// torn down on restart.
 	for _, f := range folders {
 		if f.Role != "inbox" {
 			continue
