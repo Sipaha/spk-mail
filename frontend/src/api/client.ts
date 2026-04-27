@@ -33,8 +33,17 @@ const httpClient: Client = {
   search:        (query, limit, offset) => post('/api/Search', { query, limit, offset }),
   subscribeEvents: (onEvent) => {
     const es = new EventSource('/api/events')
-    const handler = (ev: MessageEvent) => { try { onEvent(JSON.parse(ev.data) as ApiEvent) } catch {} }
+    const handler = (ev: MessageEvent) => {
+      try {
+        onEvent(JSON.parse(ev.data) as ApiEvent)
+      } catch (err) {
+        console.warn('SSE parse failed', err, ev.data)
+      }
+    }
     ;(['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError'] as const).forEach(t => es.addEventListener(t, handler))
+    es.onerror = (err) => {
+      console.warn('SSE error', err, 'readyState', es.readyState)
+    }
     return () => es.close()
   },
 }
@@ -56,4 +65,10 @@ const wailsClient: Client = {
   },
 }
 
+/**
+ * Selected once at module load. The Wails runtime must be injected before
+ * the first import of this module — typically guaranteed by the v3 bundle
+ * order, but if you see desktop builds falling back to fetch, check inject
+ * order.
+ */
 export const client: Client = window.wails ? wailsClient : httpClient
