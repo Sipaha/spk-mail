@@ -36,6 +36,9 @@ func (w *Wails) AllowRemoteForMessage(id int64) (string, error) {
 func (w *Wails) Search(q string, limit, offset int) ([]api.MessageDTO, error) {
 	return w.a.Search(context.Background(), q, limit, offset)
 }
+func (w *Wails) UnreadCounts() (api.UnreadCountsDTO, error) {
+	return w.a.UnreadCounts(context.Background())
+}
 
 // Events returns the api.Emitter for the desktop runner to bridge to Wails event bus.
 func (w *Wails) Events() *api.Emitter { return w.em }

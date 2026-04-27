@@ -43,6 +43,11 @@ type AttachmentDTO struct {
 	Downloaded  bool   `json:"downloaded"`
 }
 
+type UnreadCountsDTO struct {
+	Total      int64           `json:"total"`
+	PerAccount map[int64]int64 `json:"per_account"`
+}
+
 type AddAccountRequest struct {
 	Name         string `json:"name"`
 	Email        string `json:"email"`
