@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"time"
@@ -85,7 +86,10 @@ func (s *Stub) AddAccount(ctx context.Context, req AddAccountRequest) (AccountDT
 	if s.Engine != nil {
 		s.Engine.StartAccount(ctx, id)
 	}
-	return AccountDTO{ID: id, Name: req.Name, Email: req.Email, Color: req.Color, Status: "ok"}, nil
+	// "starting" reflects the actual lifecycle: AccountWorker has been
+	// dispatched but has not yet emitted AccountStatus{state:"connecting"} or
+	// "ok". The frontend transitions through these states as events arrive.
+	return AccountDTO{ID: id, Name: req.Name, Email: req.Email, Color: req.Color, Status: "starting"}, nil
 }
 
 func (s *Stub) RemoveAccount(ctx context.Context, id int64) error {
@@ -120,10 +124,14 @@ func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
 	for _, r := range rows {
 		var to []string
 		if r.ToAddrs != nil {
-			_ = json.Unmarshal([]byte(*r.ToAddrs), &to)
+			if err := json.Unmarshal([]byte(*r.ToAddrs), &to); err != nil {
+				slog.Warn("GetThread: bad to_addrs JSON", "id", r.ID, "err", err)
+			}
 		}
 		var fl []string
-		_ = json.Unmarshal([]byte(r.Flags), &fl)
+		if err := json.Unmarshal([]byte(r.Flags), &fl); err != nil {
+			slog.Warn("GetThread: bad flags JSON", "id", r.ID, "err", err)
+		}
 		atts, _ := s.Store.ListAttachmentsByMessage(ctx, r.ID)
 		dtoAtts := make([]AttachmentDTO, 0, len(atts))
 		for _, a := range atts {
@@ -147,10 +155,17 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 			return err
 		}
 		var fl []string
-		_ = json.Unmarshal([]byte(m.Flags), &fl)
-		if !contains(fl, `\Seen`) {
-			fl = append(fl, `\Seen`)
+		if err := json.Unmarshal([]byte(m.Flags), &fl); err != nil {
+			slog.Warn("MarkRead: bad flags JSON", "id", id, "err", err)
+			continue
 		}
+		// Idempotency: skip the DB update + IMAP STORE + SSE event if the
+		// message is already \Seen. Saves a round-trip and avoids spurious
+		// MessageUpdated events on repeated marks.
+		if contains(fl, `\Seen`) {
+			continue
+		}
+		fl = append(fl, `\Seen`)
 		b, _ := json.Marshal(fl)
 		if err := s.Store.UpdateFlags(ctx, id, string(b)); err != nil {
 			return err
@@ -164,10 +179,14 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 					Add:       true,
 					Flags:     []string{`\Seen`},
 				})
+			} else {
+				slog.Warn("MarkRead: no worker for account", "account_id", m.AccountID)
 			}
 		}
-		if err := s.Store.UpdateThreadStats(ctx, ptrOr(m.ThreadID)); err != nil {
-			return err
+		if m.ThreadID != nil {
+			if err := s.Store.UpdateThreadStats(ctx, *m.ThreadID); err != nil {
+				return err
+			}
 		}
 		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": id}})
 	}
@@ -183,7 +202,7 @@ func (s *Stub) AllowRemoteForMessage(ctx context.Context, id int64) (string, err
 		return "", nil
 	}
 	updated := mimep.UnblockRemote(*m.BodyHTML)
-	if _, err := s.Store.DB().ExecContext(ctx, `UPDATE messages SET body_html = ? WHERE id = ?`, updated, id); err != nil {
+	if err := s.Store.UpdateBodyHTML(ctx, id, updated); err != nil {
 		return "", err
 	}
 	s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": id}})
@@ -210,26 +229,14 @@ func (s *Stub) Search(ctx context.Context, query string, limit, offset int) ([]S
 }
 
 func (s *Stub) UnreadCounts(ctx context.Context) (UnreadCountsDTO, error) {
-	rows, err := s.Store.DB().QueryContext(ctx, `
-		SELECT m.account_id, COUNT(*)
-		FROM messages m
-		JOIN folders f ON m.folder_id = f.id
-		WHERE f.role = 'inbox' AND m.flags NOT LIKE '%\Seen%'
-		GROUP BY m.account_id`)
+	total, per, err := s.Store.UnreadCountsByAccount(ctx)
 	if err != nil {
 		return UnreadCountsDTO{}, err
 	}
-	defer rows.Close()
-	out := UnreadCountsDTO{PerAccount: map[int64]int64{}}
-	for rows.Next() {
-		var id, n int64
-		if err := rows.Scan(&id, &n); err != nil {
-			return UnreadCountsDTO{}, err
-		}
-		out.PerAccount[id] = n
-		out.Total += n
+	if per == nil {
+		per = map[int64]int64{}
 	}
-	return out, rows.Err()
+	return UnreadCountsDTO{Total: total, PerAccount: per}, nil
 }
 
 // GetAttachmentLocalPath returns the local filesystem path for an attachment
@@ -237,20 +244,19 @@ func (s *Stub) UnreadCounts(ctx context.Context) (UnreadCountsDTO, error) {
 // missing, it returns ErrAttachmentNotReady (after clearing a stale path so
 // the downloader will re-fetch).
 func (s *Stub) GetAttachmentLocalPath(ctx context.Context, id int64) (string, error) {
-	row := s.Store.DB().QueryRowContext(ctx, `SELECT local_path FROM attachments WHERE id = ?`, id)
-	var lp *string
-	if err := row.Scan(&lp); err != nil {
+	path, found, err := s.Store.GetAttachmentLocalPath(ctx, id)
+	if err != nil {
 		return "", err
 	}
-	if lp == nil || *lp == "" {
+	if !found {
 		return "", ErrAttachmentNotReady
 	}
-	if _, err := os.Stat(*lp); err != nil {
+	if _, err := os.Stat(path); err != nil {
 		// File missing — clear so the downloader will re-fetch.
 		_ = s.Store.ClearAttachmentLocalPath(ctx, id)
 		return "", ErrAttachmentNotReady
 	}
-	return *lp, nil
+	return path, nil
 }
 
 // OpenAttachment hands the local file off to xdg-open (Linux). Detached: we
@@ -273,13 +279,6 @@ func strFrom(p *string) string {
 	return *p
 }
 
-func ptrOr(p *int64) int64 {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
-
 func contains(xs []string, v string) bool {
 	for _, x := range xs {
 		if x == v {
@@ -287,10 +286,4 @@ func contains(xs []string, v string) bool {
 		}
 	}
 	return false
-}
-
-// helper that other packages use to JSON-encode flags consistently
-func encodeJSON(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
 }

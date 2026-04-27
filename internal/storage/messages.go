@@ -107,9 +107,46 @@ func (s *Store) UpdateFlags(ctx context.Context, id int64, flagsJSON string) err
 	return err
 }
 
-// FindThreadByMessageIDs returns thread_id for any existing message whose Message-ID
-// matches one of the supplied references (case-insensitive). Used at insert time
-// to attach a new message to an existing thread.
+// UpdateBodyHTML overwrites the cached HTML body of a message. Used by
+// AllowRemoteForMessage to persist the unblocked HTML so subsequent reads see
+// the same image-allowed version without re-running the unblocker.
+func (s *Store) UpdateBodyHTML(ctx context.Context, id int64, html string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE messages SET body_html = ? WHERE id = ?`, html, id)
+	return err
+}
+
+// UnreadCountsByAccount aggregates per-account unread counts across inbox folders.
+// "Unread" = no \Seen flag in the JSON-encoded flags array; uses json_each so that
+// substrings like 'Seenmaybe' or comments do not falsely count as seen.
+func (s *Store) UnreadCountsByAccount(ctx context.Context) (int64, map[int64]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT m.account_id, COUNT(*)
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE f.role = 'inbox'
+		  AND NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')
+		GROUP BY m.account_id`)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+	per := map[int64]int64{}
+	var total int64
+	for rows.Next() {
+		var id, n int64
+		if err := rows.Scan(&id, &n); err != nil {
+			return 0, nil, err
+		}
+		per[id] = n
+		total += n
+	}
+	return total, per, rows.Err()
+}
+
+// FindThreadByMessageIDs returns thread_id for any existing message whose
+// Message-ID matches one of the supplied references. The match is byte-exact;
+// RFC 5322 Message-IDs are case-sensitive in the local-part. Used at insert
+// time to attach a new message to an existing thread.
 func (s *Store) FindThreadByMessageIDs(ctx context.Context, msgIDs []string) (int64, bool, error) {
 	if len(msgIDs) == 0 {
 		return 0, false, nil

@@ -98,3 +98,18 @@ func (s *Store) ClearAttachmentLocalPath(ctx context.Context, id int64) error {
 		`UPDATE attachments SET local_path = NULL, downloaded_at = NULL WHERE id = ?`, id)
 	return err
 }
+
+// GetAttachmentLocalPath returns the local filesystem path stored on an attachment
+// row. found is true only when the column is non-null and non-empty; null/empty
+// returns ("", false, nil) so callers distinguish "row missing local_path" from a
+// real scan error. A missing row surfaces as sql.ErrNoRows from Scan.
+func (s *Store) GetAttachmentLocalPath(ctx context.Context, id int64) (string, bool, error) {
+	var lp *string
+	if err := s.db.QueryRowContext(ctx, `SELECT local_path FROM attachments WHERE id = ?`, id).Scan(&lp); err != nil {
+		return "", false, err
+	}
+	if lp == nil || *lp == "" {
+		return "", false, nil
+	}
+	return *lp, true, nil
+}
