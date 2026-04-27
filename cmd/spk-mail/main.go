@@ -60,9 +60,8 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 	}
 
 	logBuf := testapi.NewRingBuffer(500)
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
-	_ = logBuf // wired into a custom slog handler in plan 7
+	inner := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+	slog.SetDefault(slog.New(testapi.NewSlogHandler(inner, logBuf)))
 
 	st, err := storage.Open(ctx, paths.DBFile)
 	if err != nil {
