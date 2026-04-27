@@ -61,25 +61,33 @@ const httpClient: Client = {
   },
 }
 
-// Wails v3 alpha exposes bindings via @wailsio/runtime. Method names are
-// fully-qualified with the bound service name (see internal/api/transport
-// /wails.go — the service is registered as application.NewService(svc) so
-// methods live under the struct's package-qualified name "api.<Method>").
+// Wails v3 alpha exposes bindings via @wailsio/runtime. Call.ByName takes the
+// fully-qualified Go method name: <package-import-path>.<TypeName>.<MethodName>.
+// Wails computes that FQN with reflect.Type.PkgPath() + "." + Type.Name() +
+// "." + methodName (see pkg/application/bindings.go in wails v3) and uses it
+// as the lookup key in its bound-methods map. ServiceOptions.Name only
+// affects logging — it is NOT used for binding lookup, so we can't shorten
+// the prefix. The prefix below MUST match the package + struct in
+// internal/api/transport/wails.go (`type API` in package transport, located
+// at github.com/spk/spk-mail/internal/api/transport).
+const BIND_NS = 'github.com/spk/spk-mail/internal/api/transport.API'
+const m = (method: string) => `${BIND_NS}.${method}`
+
 const wailsClient: Client = {
-  listAccounts:  () => Call.ByName('api.ListAccounts') as Promise<AccountDTO[]>,
-  addAccount:    (req) => Call.ByName('api.AddAccount', req) as Promise<AccountDTO>,
-  removeAccount: (id) => Call.ByName('api.RemoveAccount', id).then(() => undefined),
-  listThreads:   (f) => Call.ByName('api.ListThreads', f) as Promise<ThreadDTO[]>,
-  getThread:     (id) => Call.ByName('api.GetThread', id) as Promise<MessageDTO[]>,
-  markRead:      (ids) => Call.ByName('api.MarkRead', ids).then(() => undefined),
-  allowRemote:   (id) => Call.ByName('api.AllowRemoteForMessage', id) as Promise<string>,
-  search:        (q, l, o) => Call.ByName('api.Search', q, l, o) as Promise<SearchHitDTO[]>,
-  openAttachment: (id) => Call.ByName('api.OpenAttachment', id).then(() => undefined),
-  listProfiles:  () => Call.ByName('api.ListProfiles') as Promise<ProfileDTO[]>,
-  addProfile:    (req) => Call.ByName('api.AddProfile', req) as Promise<ProfileDTO>,
-  updateProfile: (req) => Call.ByName('api.UpdateProfile', req) as Promise<ProfileDTO>,
-  deleteProfile: (id) => Call.ByName('api.DeleteProfile', id).then(() => undefined),
-  setProfileMuted: (id, muted) => Call.ByName('api.SetProfileMuted', id, muted).then(() => undefined),
+  listAccounts:  () => Call.ByName(m('ListAccounts')) as Promise<AccountDTO[]>,
+  addAccount:    (req) => Call.ByName(m('AddAccount'), req) as Promise<AccountDTO>,
+  removeAccount: (id) => Call.ByName(m('RemoveAccount'), id).then(() => undefined),
+  listThreads:   (f) => Call.ByName(m('ListThreads'), f) as Promise<ThreadDTO[]>,
+  getThread:     (id) => Call.ByName(m('GetThread'), id) as Promise<MessageDTO[]>,
+  markRead:      (ids) => Call.ByName(m('MarkRead'), ids).then(() => undefined),
+  allowRemote:   (id) => Call.ByName(m('AllowRemoteForMessage'), id) as Promise<string>,
+  search:        (q, l, o) => Call.ByName(m('Search'), q, l, o) as Promise<SearchHitDTO[]>,
+  openAttachment: (id) => Call.ByName(m('OpenAttachment'), id).then(() => undefined),
+  listProfiles:  () => Call.ByName(m('ListProfiles')) as Promise<ProfileDTO[]>,
+  addProfile:    (req) => Call.ByName(m('AddProfile'), req) as Promise<ProfileDTO>,
+  updateProfile: (req) => Call.ByName(m('UpdateProfile'), req) as Promise<ProfileDTO>,
+  deleteProfile: (id) => Call.ByName(m('DeleteProfile'), id).then(() => undefined),
+  setProfileMuted: (id, muted) => Call.ByName(m('SetProfileMuted'), id, muted).then(() => undefined),
   subscribeEvents: (onEvent) => {
     const types: readonly EventType[] = ['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady'] as const
     const offs = types.map(t => Events.On(t, (ev) => onEvent({
