@@ -1,0 +1,8 @@
+accounts:
+  - name: "Test Personal"
+    email: "alice@example.com"
+    password: "secret"
+    color: "#3b82f6"
+    use_mock: true
+    folders:
+      - name: INBOX
