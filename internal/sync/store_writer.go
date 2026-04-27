@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"time"
 
 	"github.com/spk/spk-mail/internal/api"
 	mimep "github.com/spk/spk-mail/internal/mime"
@@ -41,6 +40,9 @@ func (w *StoreWriter) Run(ctx context.Context) {
 	}
 }
 
+// TODO: wrap thread+message+attachment inserts in a single transaction so a
+// mid-flight failure doesn't leave an orphan threads row. Requires tx-aware
+// Store.* method variants; deferred to a future change.
 func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 	parsed, err := mimep.Parse(m.Raw)
 	if err != nil {
@@ -58,7 +60,12 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 		}
 	}
 	if threadID == 0 {
-		threadID, _ = w.findThreadBySubject(ctx, parsed.Subject, parsed.Date)
+		// Discard real DB errors here — falling through to "create new thread"
+		// is the right behavior either way; a noisy log would just spam if the
+		// DB is broken (the next InsertThread call surfaces it properly).
+		if id, ok, _ := w.store.FindThreadBySubject(ctx, thread.NormalizeSubject(parsed.Subject), parsed.Date.Unix(), 14*86400); ok {
+			threadID = id
+		}
 	}
 	if threadID == 0 {
 		newID, err := w.store.InsertThread(ctx, storage.ThreadRow{
@@ -101,10 +108,14 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 	}
 
 	for _, a := range parsed.Attachments {
-		_, _ = w.store.InsertAttachment(ctx, storage.AttachmentRow{
+		if _, err := w.store.InsertAttachment(ctx, storage.AttachmentRow{
 			MessageID: msgID, PartID: a.PartID,
 			Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.Size,
-		})
+		}); err != nil {
+			api.Emit(w.em, "WriteError", map[string]any{
+				"err": err.Error(), "uid": m.UID, "folder_id": m.FolderID, "phase": "attachment",
+			})
+		}
 	}
 
 	if err := w.store.UpdateThreadStats(ctx, threadID); err != nil {
@@ -121,23 +132,6 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 		}})
 	}
 	return nil
-}
-
-func (w *StoreWriter) findThreadBySubject(ctx context.Context, subj string, when time.Time) (int64, error) {
-	norm := thread.NormalizeSubject(subj)
-	if norm == "" {
-		return 0, nil
-	}
-	from := when.Unix() - 14*86400
-	to := when.Unix() + 14*86400
-	row := w.store.DB().QueryRowContext(ctx, `
-		SELECT id FROM threads WHERE subject_norm = ? AND last_date BETWEEN ? AND ? LIMIT 1`,
-		norm, from, to)
-	var id int64
-	if err := row.Scan(&id); err != nil {
-		return 0, nil
-	}
-	return id, nil
 }
 
 func contains(xs []string, v string) bool {
