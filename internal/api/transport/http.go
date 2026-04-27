@@ -75,6 +75,12 @@ func (h *HTTP) routes() {
 	}) (any, error) {
 		return nil, h.api.DeleteProfile(ctx, req.ID)
 	}))
+	h.mux.HandleFunc("POST /api/SetProfileMuted", httpHandle(func(ctx context.Context, req *struct {
+		ID    int64 `json:"id"`
+		Muted bool  `json:"muted"`
+	}) (any, error) {
+		return nil, h.api.SetProfileMuted(ctx, req.ID, req.Muted)
+	}))
 
 	h.mux.HandleFunc("GET /api/events", h.sse)
 }

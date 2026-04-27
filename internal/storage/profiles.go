@@ -13,6 +13,7 @@ type ProfileRow struct {
 	Color     string
 	SortOrder int
 	CreatedAt int64
+	Muted     bool
 }
 
 // ErrProfileInUse is returned by DeleteProfile when at least one account is
@@ -22,8 +23,8 @@ var ErrProfileInUse = errors.New("storage: profile has attached accounts")
 
 func (s *Store) InsertProfile(ctx context.Context, p ProfileRow) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO profiles(name, color, sort_order, created_at) VALUES (?,?,?,?)`,
-		p.Name, p.Color, p.SortOrder, p.CreatedAt)
+		`INSERT INTO profiles(name, color, sort_order, created_at, muted) VALUES (?,?,?,?,?)`,
+		p.Name, p.Color, p.SortOrder, p.CreatedAt, boolToInt(p.Muted))
 	if err != nil {
 		return 0, err
 	}
@@ -32,7 +33,7 @@ func (s *Store) InsertProfile(ctx context.Context, p ProfileRow) (int64, error) 
 
 func (s *Store) ListProfiles(ctx context.Context) ([]ProfileRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, color, sort_order, created_at FROM profiles ORDER BY sort_order, id`)
+		`SELECT id, name, color, sort_order, created_at, muted FROM profiles ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +41,7 @@ func (s *Store) ListProfiles(ctx context.Context) ([]ProfileRow, error) {
 	var out []ProfileRow
 	for rows.Next() {
 		var p ProfileRow
-		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.SortOrder, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.SortOrder, &p.CreatedAt, &p.Muted); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -51,12 +52,19 @@ func (s *Store) ListProfiles(ctx context.Context) ([]ProfileRow, error) {
 func (s *Store) GetProfile(ctx context.Context, id int64) (ProfileRow, error) {
 	var p ProfileRow
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, color, sort_order, created_at FROM profiles WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.Color, &p.SortOrder, &p.CreatedAt)
+		`SELECT id, name, color, sort_order, created_at, muted FROM profiles WHERE id = ?`, id).
+		Scan(&p.ID, &p.Name, &p.Color, &p.SortOrder, &p.CreatedAt, &p.Muted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ProfileRow{}, ErrNotFound
 	}
 	return p, err
+}
+
+// SetProfileMuted flips the muted flag on a profile. Muted profiles are
+// excluded from desktop notifications and the tray badge total.
+func (s *Store) SetProfileMuted(ctx context.Context, id int64, muted bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE profiles SET muted = ? WHERE id = ?`, boolToInt(muted), id)
+	return err
 }
 
 func (s *Store) UpdateProfile(ctx context.Context, id int64, name, color string) error {

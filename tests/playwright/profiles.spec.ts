@@ -27,3 +27,18 @@ test('user can create a profile, switch to it, and see only its accounts', async
   const names = (dump.profiles as Array<{ name: string }>).map(p => p.name).sort()
   expect(names).toContain('Work')
 })
+
+test('muted profile dims in the switcher', async ({ page, request }) => {
+  await page.goto('/')
+
+  // Create a "Muted" profile via API for determinism
+  const p = await (await request.post('/api/AddProfile', { data: { name: 'Muted', color: '#ef4444' } })).json()
+  // Mute it via API
+  await request.post('/api/SetProfileMuted', { data: { id: p.id, muted: true } })
+
+  // Reload to pick up the muted state in the switcher
+  await page.reload()
+  const tab = page.getByRole('button', { name: /Muted/ }).first()
+  await expect(tab).toBeVisible({ timeout: 5_000 })
+  await expect(tab).toHaveClass(/opacity-50/)
+})

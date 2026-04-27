@@ -128,11 +128,31 @@ func (c *Controller) consume(ch <-chan api.Event) {
 	for ev := range ch {
 		switch ev.Type {
 		case "MessageArrived":
-			from, _ := ev.Payload["from"].(string)
-			subject, _ := ev.Payload["subject"].(string)
 			if c.notifier != nil {
-				if _, err := c.notifier.Notify("New mail · "+from, subject); err != nil {
-					log.Printf("tray: notify failed: %v", err)
+				// Lookup account_id from payload; tolerate both in-process int64
+				// (Emitter delivers Go values directly) and JSON-decoded float64
+				// (Wails event bus round-trips through JSON).
+				var accID int64
+				switch v := ev.Payload["account_id"].(type) {
+				case int64:
+					accID = v
+				case float64:
+					accID = int64(v)
+				}
+				muted := false
+				if accID > 0 {
+					if m, err := c.api.AccountIsMuted(context.Background(), accID); err == nil {
+						muted = m
+					} else {
+						log.Printf("tray: AccountIsMuted failed: %v", err)
+					}
+				}
+				if !muted {
+					from, _ := ev.Payload["from"].(string)
+					subject, _ := ev.Payload["subject"].(string)
+					if _, err := c.notifier.Notify("New mail · "+from, subject); err != nil {
+						log.Printf("tray: notify failed: %v", err)
+					}
 				}
 			}
 			c.refreshUnread()
@@ -143,12 +163,11 @@ func (c *Controller) consume(ch <-chan api.Event) {
 }
 
 func (c *Controller) refreshUnread() {
-	counts, err := c.api.UnreadCounts(context.Background())
+	total, err := c.api.TotalUnreadExcludingMuted(context.Background())
 	if err != nil {
-		log.Printf("tray: UnreadCounts failed: %v", err)
+		log.Printf("tray: TotalUnreadExcludingMuted failed: %v", err)
 		return
 	}
-	total := counts.Total
 	c.unread.Store(total)
 
 	badge, err := RenderBadge(c.baseIcon, int(total))

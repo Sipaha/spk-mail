@@ -57,5 +57,9 @@ func (w *Wails) UpdateProfile(req api.UpdateProfileRequest) (api.ProfileDTO, err
 }
 func (w *Wails) DeleteProfile(id int64) error { return w.a.DeleteProfile(context.Background(), id) }
 
+func (w *Wails) SetProfileMuted(id int64, muted bool) error {
+	return w.a.SetProfileMuted(context.Background(), id, muted)
+}
+
 // Events returns the api.Emitter for the desktop runner to bridge to Wails event bus.
 func (w *Wails) Events() *api.Emitter { return w.em }
