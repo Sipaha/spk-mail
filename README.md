@@ -23,3 +23,7 @@ spk-mail uses Linux system-tray protocols.
 - Wayland-only sessions: depends on the compositor.
 
 Notifications use `org.freedesktop.Notifications` (D-Bus) and work on all major DEs.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
