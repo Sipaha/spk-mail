@@ -42,20 +42,22 @@ func (s *Store) DB() *sql.DB  { return s.db }
 func (s *Store) Close() error { return s.db.Close() }
 
 func migrate(ctx context.Context, db *sql.DB) error {
-	// Create migrations table if missing
 	if _, err := db.ExecContext(ctx,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
 		return err
 	}
 	var current int
-	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&current); err != nil {
+	if err := db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&current); err != nil {
 		return err
 	}
-	if current >= 1 {
-		return nil
-	}
-	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("apply schema: %w", err)
+	for _, m := range migrationSteps {
+		if m.version <= current {
+			continue
+		}
+		if err := m.apply(ctx, db); err != nil {
+			return fmt.Errorf("migration v%d: %w", m.version, err)
+		}
 	}
 	return nil
 }
