@@ -8,12 +8,24 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"time"
 
 	mimep "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 )
+
+// roleOrder ranks folder roles for the sidebar tree. Lower = earlier.
+var roleOrder = map[string]int{
+	"inbox":   0,
+	"sent":    1,
+	"drafts":  2,
+	"archive": 3,
+	"":        4,
+	"spam":    5,
+	"trash":   6,
+}
 
 // ErrAttachmentNotReady is returned by GetAttachmentLocalPath when the
 // attachment has not yet been downloaded (or its local file disappeared).
@@ -115,18 +127,56 @@ func (s *Stub) RemoveAccount(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *Stub) ListFolders(ctx context.Context, accountID int64) ([]FolderDTO, error) {
+	rows, err := s.Store.ListFolders(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	counts, _ := s.Store.UnreadCountsByFolder(ctx, accountID)
+	out := make([]FolderDTO, 0, len(rows))
+	for _, r := range rows {
+		role := ""
+		if r.Role != nil {
+			role = *r.Role
+		}
+		out = append(out, FolderDTO{
+			ID: r.ID, AccountID: accountID,
+			Name: r.Name, Role: role, UnreadCount: counts[r.ID],
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, rj := roleOrder[out[i].Role], roleOrder[out[j].Role]
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
 func (s *Stub) ListThreads(ctx context.Context, filter ThreadFilter) ([]ThreadDTO, error) {
+	sf := storage.ThreadFilter{
+		AccountID:  filter.AccountID,
+		FolderID:   filter.FolderID,
+		ProfileID:  filter.ProfileID,
+		UnreadOnly: filter.UnreadOnly,
+		HasFlagged: filter.HasFlagged,
+	}
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.Store.ListThreadsByProfile(ctx, filter.ProfileID, limit, filter.Offset)
+	rows, err := s.Store.ListThreads(ctx, sf, limit, filter.Offset)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]ThreadDTO, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, ThreadDTO{ID: r.ID, Subject: r.SubjectNorm, LastDate: r.LastDate, MsgCount: r.MsgCount, UnreadCount: r.UnreadCount, HasFlagged: r.HasFlagged, HasAttach: r.HasAttach})
+		out = append(out, ThreadDTO{
+			ID: r.ID, Subject: r.SubjectNorm, LastDate: r.LastDate,
+			MsgCount: r.MsgCount, UnreadCount: r.UnreadCount,
+			HasFlagged: r.HasFlagged, HasAttach: r.HasAttach,
+		})
 	}
 	return out, nil
 }

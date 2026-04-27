@@ -79,6 +79,14 @@ type UnreadCountsDTO struct {
 	PerAccount map[int64]int64 `json:"per_account"`
 }
 
+type FolderDTO struct {
+	ID          int64  `json:"id"`
+	AccountID   int64  `json:"account_id"`
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	UnreadCount int64  `json:"unread_count"`
+}
+
 type AddAccountRequest struct {
 	Name         string `json:"name"`
 	Email        string `json:"email"`
