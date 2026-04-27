@@ -21,20 +21,46 @@ type ProfileRow struct {
 // or delete those accounts first.
 var ErrProfileInUse = errors.New("storage: profile has attached accounts")
 
-// EnsureDefaultProfile inserts the seed "Default" profile if no profiles
-// exist yet. Idempotent: a no-op when at least one profile already exists.
+// EnsureDefaultProfile guarantees that (a) at least one profile exists, and
+// (b) every account is attached to a profile. Called from app startup; safe
+// to invoke on every boot.
+//
+// Backfill rationale: account rows could end up with profile_id IS NULL in
+// two ways — (1) during the v1→v2 migration window if someone added accounts
+// while the schema was being mid-applied, and (2) historically, when the UI
+// briefly shipped an "All" pseudo-profile that submitted addAccount with
+// profile_id undefined. Re-running this on every boot reattaches such orphans
+// to the Default profile so they remain visible in the per-profile sidebar.
 func (s *Store) EnsureDefaultProfile(ctx context.Context) error {
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM profiles`).Scan(&n); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	if n > 0 {
-		return nil
+	defer tx.Rollback()
+
+	// 1. Ensure a Default profile exists; remember its id.
+	var defaultID int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT id FROM profiles ORDER BY sort_order, id LIMIT 1`).Scan(&defaultID)
+	if errors.Is(err, sql.ErrNoRows) {
+		res, ierr := tx.ExecContext(ctx,
+			`INSERT INTO profiles(name, color, sort_order, muted, created_at)
+			 VALUES ('Default', '#3b82f6', 0, 0, strftime('%s','now'))`)
+		if ierr != nil {
+			return ierr
+		}
+		defaultID, _ = res.LastInsertId()
+	} else if err != nil {
+		return err
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO profiles(name, color, sort_order, muted, created_at)
-		 VALUES ('Default', '#3b82f6', 0, 0, strftime('%s','now'))`)
-	return err
+
+	// 2. Reattach any orphan accounts (profile_id IS NULL) to Default.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE accounts SET profile_id = ? WHERE profile_id IS NULL`, defaultID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (s *Store) InsertProfile(ctx context.Context, p ProfileRow) (int64, error) {
