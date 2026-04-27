@@ -18,13 +18,17 @@ type AccountRow struct {
 	UseTLS       bool
 	Color        string
 	CreatedAt    int64
+	// ProfileID, when non-nil, attaches the account to a profile in the
+	// profiles table. Nullable to support migration backfill and the rare
+	// "no profile" state during account creation.
+	ProfileID *int64
 }
 
 func (s *Store) InsertAccount(ctx context.Context, a AccountRow) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO accounts(name,email,imap_host,imap_port,imap_username,use_tls,color,created_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		a.Name, a.Email, a.IMAPHost, a.IMAPPort, a.IMAPUsername, boolToInt(a.UseTLS), a.Color, a.CreatedAt)
+		INSERT INTO accounts(name,email,imap_host,imap_port,imap_username,use_tls,color,created_at,profile_id)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		a.Name, a.Email, a.IMAPHost, a.IMAPPort, a.IMAPUsername, boolToInt(a.UseTLS), a.Color, a.CreatedAt, a.ProfileID)
 	if err != nil {
 		return 0, err
 	}
