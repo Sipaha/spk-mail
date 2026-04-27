@@ -79,6 +79,7 @@ func NewController(
 		c.app.Quit()
 	})
 	c.tray.SetMenu(menu)
+	c.tray.OnClick(c.toggleWindow)
 
 	ch, unsub := emitter.Subscribe()
 	c.unsub = unsub
@@ -102,6 +103,21 @@ func (c *Controller) Close() {
 
 func (c *Controller) showWindow() {
 	if c.wnd == nil {
+		return
+	}
+	c.wnd.Show()
+	c.wnd.Focus()
+}
+
+// toggleWindow is wired to the tray icon's left-click. It hides the window if
+// it's currently visible, otherwise shows and focuses it. This gives users a
+// one-click way to recover the window after the close-to-tray hook hides it.
+func (c *Controller) toggleWindow() {
+	if c.wnd == nil {
+		return
+	}
+	if c.wnd.IsVisible() {
+		c.wnd.Hide()
 		return
 	}
 	c.wnd.Show()
