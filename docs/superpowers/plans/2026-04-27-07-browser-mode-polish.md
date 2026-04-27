@@ -798,9 +798,9 @@ git commit -m "docs: ui-testing recipe book + project CLAUDE.md"
 
 ---
 
-## Polish Backlog Accumulated During Plans 2–3
+## Polish Backlog Accumulated During Plans 2–4
 
-These items were flagged by code reviewers during plan 2 (sync engine) and plan 3 (UI core) execution. They were deferred to plan 7 as plan-faithful tech debt or post-implementation polish. None are required for the spec end-state but most improve correctness, observability, or maintainability. Group them into the existing plan-7 task flow as fits, or make them a separate Task X "tech-debt sweep".
+These items were flagged by code reviewers during plan 2 (sync engine), plan 3 (UI core), and plan 4 (tray + notifications) execution. They were deferred to plan 7 as plan-faithful tech debt or post-implementation polish. None are required for the spec end-state but most improve correctness, observability, or maintainability. Group them into the existing plan-7 task flow as fits, or make them a separate Task X "tech-debt sweep".
 
 ### Storage layer hygiene
 - `FindThreadByMessageIDs` doc claims "case-insensitive" but SQL is case-sensitive — drop phrase or add COLLATE NOCASE.
@@ -896,3 +896,13 @@ These items were flagged by code reviewers during plan 2 (sync engine) and plan 
 - Frontend bundle size 204 kB — Zustand + React 19 only, no virtualization. Plan 3 calls ThreadList "virtualized" but verbatim code does not virtualize. Add react-window when thread counts grow.
 - Playwright test relies on `XDG_DATA_HOME` isolation — without it, prior dev DB state collides. Document or make `runBrowser` always use a fresh DB in `--imap-mock` mode (since mock-port changes per launch anyway).
 - `reuseExistingServer: !process.env.CI` — local dev re-runs without `CI=1` reuse stale servers. Document as a `make test-ui` make target that sets CI=1.
+
+### Tray + Notifications (plan 4)
+- `internal/api/stub.go` `UnreadCounts` SQL `flags NOT LIKE '%\Seen%'` is fragile — relies on JSON encoding producing `\\Seen` whose substring includes `\Seen`. Tighten to `NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')` or move into a typed `Store.UnreadCountsByAccount` method (alongside the other escapes flagged in the Storage section).
+- `internal/api/stub.go` `UnreadCounts` reaches into raw DB via `s.Store.DB().QueryContext(...)`; promote into a `Store.*` typed method to match the rest of the Stub.
+- `internal/tray/tray.go` — `unread atomic.Int64` field is written but never read. Either expose via a getter (e.g. for a future "N unread" tooltip path) or remove.
+- `internal/tray/tray.go` — `stop chan struct{}` is closed in `Close()` but never selected on. Either select on it inside `consume()` or drop the field.
+- `internal/tray/tray.go` — exported `Close()` is never invoked from `internal/desktop/window.go`. Either `defer ctrl.Close()` in `desktop.Run` for clean shutdown, or drop the export.
+- `internal/desktop/prompt.go` `openPasswordWindow` is a documented TODO stub. Implement the actual password window: either via a Wails frontend route/service callback (HTML form posts to a one-off Go service that resolves a channel), or via a native platform dialog if a future Wails alpha exposes one. After implementation, also wire `cmd/spk-mail/run_desktop_wails.go` to fall back to `desktop.PromptMasterPassword` when `secrets.LoadOrCreateMasterKey` returns `secrets.ErrKeyringUnavailable`.
+- `internal/secrets/keyring.go` `DeriveKeyFromPassword` uses PBKDF2-HMAC-SHA256 (1M iters); plan 4 spec hinted at Argon2id. Consider migrating to Argon2id (RFC 9106 baseline parameters) when the password-prompt path is actually wired — at that point a one-time migration is needed to re-derive existing keys, so it's natural to do them together.
+- `internal/tray/badge.go` `RenderBadge` circle math assumes a square icon (`r := bounds.Dx() / 4`, then `cx := bounds.Max.X - r - 1; cy := bounds.Min.Y + r + 1`). For a non-square icon the badge could clip the top edge or under-fill the right corner. Either document the square-icon precondition or compute `r := min(Dx,Dy)/4` and clamp coordinates.
