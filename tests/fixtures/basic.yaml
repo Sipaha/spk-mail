@@ -9,6 +9,11 @@ accounts:
         messages:
           - from: "Bob <bob@example.com>"
             to: ["alice@example.com"]
+            subject: "Q2 milestones"
+            date: 2026-04-25T09:00:00Z
+            body_text: "These are the milestones for this quarter."
+          - from: "Bob <bob@example.com>"
+            to: ["alice@example.com"]
             subject: "Project update"
             date: 2026-04-26T10:00:00Z
             body_text: "Hi Alice, here's the update on our project."
