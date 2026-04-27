@@ -43,3 +43,58 @@ func (s *Store) ListAttachmentsByMessage(ctx context.Context, msgID int64) ([]At
 	}
 	return out, rows.Err()
 }
+
+type PendingAttachment struct {
+	AttachmentID int64
+	MessageID    int64
+	AccountID    int64
+	FolderID     int64
+	UID          int64
+	PartID       string
+	Filename     string
+	ContentType  string
+	SizeBytes    int64
+}
+
+// ListPendingAttachments returns up to `limit` not-yet-downloaded attachments
+// for the given account, newest message first.
+func (s *Store) ListPendingAttachments(ctx context.Context, accountID int64, limit int) ([]PendingAttachment, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT a.id, a.message_id, m.account_id, m.folder_id, m.uid,
+			a.part_id, a.filename, a.content_type, a.size_bytes
+		FROM attachments a
+		JOIN messages m ON m.id = a.message_id
+		WHERE a.local_path IS NULL AND m.account_id = ?
+		ORDER BY m.date DESC
+		LIMIT ?`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingAttachment
+	for rows.Next() {
+		var p PendingAttachment
+		if err := rows.Scan(&p.AttachmentID, &p.MessageID, &p.AccountID, &p.FolderID, &p.UID,
+			&p.PartID, &p.Filename, &p.ContentType, &p.SizeBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateAttachmentDownloaded(ctx context.Context, id int64, localPath, sha256 string, ts int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE attachments SET local_path = ?, sha256 = ?, downloaded_at = ? WHERE id = ?`,
+		localPath, sha256, ts, id)
+	return err
+}
+
+func (s *Store) ClearAttachmentLocalPath(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE attachments SET local_path = NULL, downloaded_at = NULL WHERE id = ?`, id)
+	return err
+}
