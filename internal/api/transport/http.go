@@ -55,6 +55,16 @@ func (h *HTTP) routes() {
 		return h.api.Search(ctx, req.Query, req.Limit, req.Offset)
 	}))
 	h.mux.HandleFunc("POST /api/UnreadCounts", httpHandle(func(ctx context.Context, _ *struct{}) (any, error) { return h.api.UnreadCounts(ctx) }))
+	h.mux.HandleFunc("POST /api/GetAttachmentLocalPath", httpHandle(func(ctx context.Context, req *struct {
+		ID int64 `json:"id"`
+	}) (any, error) {
+		return h.api.GetAttachmentLocalPath(ctx, req.ID)
+	}))
+	h.mux.HandleFunc("POST /api/OpenAttachment", httpHandle(func(ctx context.Context, req *struct {
+		ID int64 `json:"id"`
+	}) (any, error) {
+		return nil, h.api.OpenAttachment(ctx, req.ID)
+	}))
 
 	h.mux.HandleFunc("GET /api/events", h.sse)
 }
