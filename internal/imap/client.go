@@ -80,9 +80,16 @@ func (c *Client) ListFolders(ctx context.Context) ([]FolderInfo, error) {
 		if mb == nil {
 			break
 		}
+		// RFC 3501 allows a NIL hierarchy delimiter (flat namespace), which
+		// the parser surfaces as rune 0. string(rune(0)) is "\x00", not "",
+		// so guard the conversion to keep flat-namespace folders correct.
+		delim := ""
+		if mb.Delim != 0 {
+			delim = string(mb.Delim)
+		}
 		out = append(out, FolderInfo{
 			Name:      mb.Mailbox,
-			Delimiter: string(mb.Delim),
+			Delimiter: delim,
 			Role:      mailboxRole(mb),
 		})
 	}

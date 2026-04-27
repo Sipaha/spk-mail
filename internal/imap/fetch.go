@@ -62,7 +62,20 @@ func (c *Client) FetchSinceUID(ctx context.Context, sinceUID int64, body bool) (
 		// Note: imapclient.Client.Fetch dispatches to UID FETCH automatically
 		// when numSet is an imap.UIDSet (see imapclient/fetch.go).
 		cmd := c.c.Fetch(seq, opts)
+		// Ensure the command is drained on any early return; the upstream
+		// imapclient read goroutine forwards FETCH responses synchronously
+		// into a bounded channel and would wedge if we abandoned cmd while
+		// it still had pending messages. cmd.Close is idempotent.
+		defer cmd.Close()
+
 		for {
+			select {
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			default:
+			}
+
 			msg := cmd.Next()
 			if msg == nil {
 				break
@@ -87,8 +100,15 @@ func (c *Client) FetchSinceUID(ctx context.Context, sinceUID int64, body bool) (
 					}
 				}
 			}
-			out <- fm
+
+			select {
+			case out <- fm:
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			}
 		}
+
 		if err := cmd.Close(); err != nil {
 			errCh <- err
 		}
