@@ -9,7 +9,6 @@ linters:
     - staticcheck
     - unused
     - revive
-    - gosimple
 issues:
   exclude-dirs:
     - frontend
