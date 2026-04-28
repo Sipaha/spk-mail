@@ -20,10 +20,11 @@ import (
 
 // Options bundles the dependencies the desktop runner needs.
 type Options struct {
-	FrontendFS fs.FS
-	API        api.API
-	Emitter    *api.Emitter
-	IconPNG    []byte
+	FrontendFS    fs.FS
+	API           api.API
+	Emitter       *api.Emitter
+	IconPNG       []byte
+	UnreadIconPNG []byte // optional accent variant; tray uses it when unread > 0
 }
 
 // Run starts the Wails event loop. Closing the window hides it instead of
@@ -74,7 +75,7 @@ func Run(ctx context.Context, opts Options) error {
 		w.Hide()
 	})
 
-	if _, err := tray.NewController(app, opts.API, opts.Emitter, opts.IconPNG, w); err != nil {
+	if _, err := tray.NewController(app, opts.API, opts.Emitter, opts.IconPNG, opts.UnreadIconPNG, w); err != nil {
 		log.Printf("desktop: tray controller unavailable: %v", err)
 	}
 

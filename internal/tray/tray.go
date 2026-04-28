@@ -18,11 +18,12 @@ import (
 // events: it shows desktop notifications for newly arrived mail and refreshes
 // the unread badge whenever account state changes.
 type Controller struct {
-	app      *application.App
-	api      api.API
-	emitter  *api.Emitter
-	baseIcon []byte
-	wnd      *application.WebviewWindow
+	app        *application.App
+	api        api.API
+	emitter    *api.Emitter
+	baseIcon   []byte // neutral state (no unread)
+	unreadIcon []byte // accent state (unread > 0); falls back to baseIcon if nil
+	wnd        *application.WebviewWindow
 
 	tray     *application.SystemTray
 	notifier *Notifier
@@ -37,20 +38,25 @@ type Controller struct {
 // NewController constructs the tray, registers the menu, subscribes to events
 // and starts a goroutine that processes them. Errors from notifier construction
 // are logged but non-fatal; everything else is best-effort.
+//
+// `unreadIcon` may be nil — in that case the tray uses `baseIcon` for both
+// states and only the numeric badge overlay differentiates them.
 func NewController(
 	app *application.App,
 	a api.API,
 	emitter *api.Emitter,
 	icon []byte,
+	unreadIcon []byte,
 	wnd *application.WebviewWindow,
 ) (*Controller, error) {
 	c := &Controller{
-		app:      app,
-		api:      a,
-		emitter:  emitter,
-		baseIcon: icon,
-		wnd:      wnd,
-		stop:     make(chan struct{}),
+		app:        app,
+		api:        a,
+		emitter:    emitter,
+		baseIcon:   icon,
+		unreadIcon: unreadIcon,
+		wnd:        wnd,
+		stop:       make(chan struct{}),
 	}
 
 	notifier, err := NewNotifier()
@@ -170,10 +176,19 @@ func (c *Controller) refreshUnread() {
 	}
 	c.unread.Store(total)
 
-	badge, err := RenderBadge(c.baseIcon, int(total))
+	// Pick base icon by state. Unread > 0 → accent (blue) variant, so the tray
+	// stripe pops out of the desktop chrome at a glance even before the user
+	// looks at the numeric badge. Falls back to the neutral icon if no unread
+	// variant was provided at construction time.
+	base := c.baseIcon
+	if total > 0 && c.unreadIcon != nil {
+		base = c.unreadIcon
+	}
+
+	badge, err := RenderBadge(base, int(total))
 	if err != nil {
 		log.Printf("tray: RenderBadge failed: %v", err)
-		badge = c.baseIcon
+		badge = base
 	}
 	c.tray.SetIcon(badge)
 	c.tray.SetTooltip("spk-mail — " + tooltipText(int(total)))
