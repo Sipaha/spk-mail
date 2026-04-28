@@ -68,6 +68,17 @@ func walk(e *gomsg.Entity, partID string, p *ParsedMessage) {
 				}
 			}
 		}
+		// RFC 2047 encoded names ("=?utf-8?B?...?=") happen for non-ASCII
+		// filenames; ParseMediaType doesn't decode them on its own.
+		fname = decodeHeader(fname)
+		// Fallback: many emails carry an inline image or attachment with no
+		// filename at all (just Content-Type). Synthesize "att-<partID><ext>"
+		// so the downloader has something safe to write — without this the
+		// downloader rejects the row as "unsafe filename" and the attachment
+		// stays pending forever.
+		if strings.TrimSpace(fname) == "" {
+			fname = SynthFilename(partID, mt)
+		}
 		buf, _ := io.ReadAll(e.Body)
 		p.Attachments = append(p.Attachments, ParsedAttachment{
 			PartID: partID, Filename: fname, ContentType: mt, Size: int64(len(buf)),
@@ -169,6 +180,24 @@ func parseRefs(v string) []string {
 		}
 	}
 	return out
+}
+
+// SynthFilename builds a plausible filename for parts that arrive without
+// Content-Disposition filename or Content-Type name. Picks an extension from
+// the MIME registry when available, falls back to ".bin". The id makes the
+// name unique inside one message so multiple unnamed parts don't collide;
+// callers pass either the MIME partID at parse time or the attachment's
+// primary key when retro-fitting at download time.
+func SynthFilename(id, mt string) string {
+	ext := ".bin"
+	if exts, _ := mime.ExtensionsByType(mt); len(exts) > 0 {
+		ext = exts[0]
+	}
+	id = strings.ReplaceAll(id, ".", "-")
+	if id == "" {
+		id = "0"
+	}
+	return "att-" + id + ext
 }
 
 func itoa(n int) string {

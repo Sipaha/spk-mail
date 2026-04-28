@@ -12,6 +12,7 @@ import (
 	"github.com/spk/spk-mail/internal/api"
 	"github.com/spk/spk-mail/internal/fsutil"
 	"github.com/spk/spk-mail/internal/imap"
+	mimeutil "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 )
@@ -108,11 +109,14 @@ func (d *AttachmentDownloader) runOnce(ctx context.Context) {
 		// p.Filename is attacker-controlled (Content-Disposition filename
 		// from the email). filepath.Base strips any directory component so
 		// "../../escape.bin" becomes "escape.bin" — preventing the join
-		// below from escaping rootDir. Also reject empty/dot edge cases.
+		// below from escaping rootDir. For empty / dotted names (inline
+		// images without filename, malformed Content-Disposition, or rows
+		// inserted by older parser versions), synthesize a stable name from
+		// the attachment id + MIME type rather than skipping — otherwise
+		// the row stays pending forever and re-warns every poll cycle.
 		safeName := filepath.Base(p.Filename)
 		if safeName == "" || safeName == "." || safeName == "/" || safeName == ".." {
-			slog.Warn("downloader unsafe filename", "att", p.AttachmentID, "filename", p.Filename)
-			continue
+			safeName = mimeutil.SynthFilename(strconv.FormatInt(p.AttachmentID, 10), p.ContentType)
 		}
 		path := filepath.Join(d.rootDir,
 			strconv.FormatInt(d.accountID, 10),
