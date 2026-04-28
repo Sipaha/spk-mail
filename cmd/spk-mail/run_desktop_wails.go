@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/spk/spk-mail/internal/api"
 	"github.com/spk/spk-mail/internal/appfiles"
@@ -30,9 +29,6 @@ func runDesktop(ctx context.Context) error {
 
 	if err := st.EnsureDefaultProfile(ctx); err != nil {
 		return fmt.Errorf("ensure default profile: %w", err)
-	}
-	if err := st.RecomputeAllThreadStats(ctx); err != nil {
-		slog.Warn("recompute thread stats", "err", err)
 	}
 
 	masterKey, err := secrets.LoadOrCreateMasterKey()
