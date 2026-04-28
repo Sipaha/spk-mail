@@ -47,6 +47,8 @@ func main() {
 
 // engineAdapter bridges *mailsync.Engine to the api.Engine interface, avoiding
 // an import cycle (internal/sync already depends on internal/api for events).
+// Now that both layers share flagop.Op, *mailsync.AccountWorker satisfies
+// api.FlagOpSubmitter structurally — no per-method bridge needed.
 type engineAdapter struct{ eng *mailsync.Engine }
 
 func (a engineAdapter) StartAccount(ctx context.Context, id int64) { a.eng.StartAccount(ctx, id) }
@@ -54,18 +56,10 @@ func (a engineAdapter) StopAccount(id int64)                       { a.eng.StopA
 func (a engineAdapter) WorkerFor(id int64) api.FlagOpSubmitter {
 	w := a.eng.WorkerFor(id)
 	if w == nil {
+		// Return a typed nil interface, not an interface holding a nil
+		// concrete pointer — the caller's `w != nil` check would otherwise
+		// pass and then panic on the SubmitFlagOp call.
 		return nil
 	}
-	return workerAdapter{w: w}
-}
-
-type workerAdapter struct{ w *mailsync.AccountWorker }
-
-func (a workerAdapter) SubmitFlagOp(op api.FlagOp) {
-	a.w.SubmitFlagOp(mailsync.FlagOp{
-		AccountID: op.AccountID,
-		FolderUID: mailsync.FolderUID{FolderID: op.FolderID, UID: op.UID},
-		Add:       op.Add,
-		Flags:     op.Flags,
-	})
+	return w
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spk/spk-mail/internal/flagop"
 	mimep "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -40,22 +41,12 @@ var ErrAttachmentNotReady = errors.New("attachment not yet downloaded")
 // profile. Wraps storage.ErrProfileInUse so callers can errors.Is-detect either.
 var ErrProfileInUse = errors.New("api: profile has attached accounts")
 
-// FlagOp is the API-side representation of a flag mutation request submitted
-// to the sync engine. The concrete sync.FlagOp value is constructed by the
-// engine adapter; using a local type here avoids an import cycle between
-// internal/api and internal/sync (sync depends on api.Emitter).
-type FlagOp struct {
-	AccountID int64
-	FolderID  int64
-	UID       int64
-	Add       bool
-	Flags     []string
-}
-
-// FlagOpSubmitter is implemented by the per-account worker. The engine adapter
-// returns one for a given account ID.
+// FlagOpSubmitter is implemented by the per-account worker. The engine
+// returns one for a given account ID. The Op type lives in
+// internal/flagop so api and sync can share it without an import cycle
+// (sync depends on api.Emitter).
 type FlagOpSubmitter interface {
-	SubmitFlagOp(op FlagOp)
+	SubmitFlagOp(op flagop.Op)
 }
 
 // Engine is the minimal surface the API stub needs from the sync engine.
@@ -247,10 +238,9 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 		}
 		if s.Engine != nil {
 			if w := s.Engine.WorkerFor(m.AccountID); w != nil {
-				w.SubmitFlagOp(FlagOp{
+				w.SubmitFlagOp(flagop.Op{
 					AccountID: m.AccountID,
-					FolderID:  m.FolderID,
-					UID:       m.UID,
+					FolderUID: flagop.FolderUID{FolderID: m.FolderID, UID: m.UID},
 					Add:       true,
 					Flags:     []string{`\Seen`},
 				})
