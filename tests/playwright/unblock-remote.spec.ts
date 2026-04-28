@@ -12,6 +12,15 @@ test('blocked remote image becomes visible after unblock', async ({ page, reques
         body_html: '<p>Hello</p><img src="https://tracker.example.com/p.png" width="1" height="1">' }] }] }] }
   })
   expect(r.ok(), `seed failed: ${r.status()}`).toBeTruthy()
+
+  // Verify the seed actually landed under the unique email — the previous
+  // assertion only checked the rendered subject, which a stale db could
+  // satisfy with a leftover row from a prior run. db-dump is the authoritative
+  // surface for "this exact account exists in this DB right now".
+  const dump = await (await request.get('/api/_test/db-dump')).json()
+  const emails = (dump.accounts as Array<{ email: string }>).map(a => a.email)
+  expect(emails).toContain(uniqueEmail)
+
   await page.goto('/')
   await expect(page.getByText(/Offer/i)).toBeVisible({ timeout: 15_000 })
   await page.getByText(/Offer/i).click()

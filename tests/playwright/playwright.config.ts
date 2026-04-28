@@ -16,7 +16,17 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
-  use: { baseURL: 'http://127.0.0.1:5174' },
+  // Diagnostic artefacts — capture only when something interesting happens
+  // so a green run doesn't bloat CI storage. trace 'on-first-retry' grabs
+  // the playwright trace when a flake retries, which is when we most need
+  // it; screenshot/video only on failure. retain-on-failure keeps the
+  // video file only when the test failed (not for passing retries).
+  use: {
+    baseURL: 'http://127.0.0.1:5174',
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
+  },
   webServer: {
     command: '../../build/bin/spk-mail --browser --port=5174 --imap-mock --test-api --seed=../fixtures/basic.yaml',
     url: 'http://127.0.0.1:5174/',
