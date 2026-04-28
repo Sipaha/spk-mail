@@ -50,3 +50,8 @@ updates:
     labels:
       - dependencies
       - tests
+    # No ignore rule on @playwright/test: the e2e harness is fully
+    # standalone (separate package.json + lockfile, no Wails coupling),
+    # so version bumps land here without a paired bump elsewhere. If you
+    # later add a runtime dep that must lockstep with another tree, mirror
+    # the wails-runtime pattern in the /frontend block above.
