@@ -28,6 +28,9 @@ func (s *Store) UpsertFolder(ctx context.Context, f FolderRow) (int64, error) {
 		return 0, err
 	}
 	var id int64
+	// Re-read on writeDB so the SELECT sees the row we just upserted on this same
+	// connection — going through readDB here would be a needless cross-connection
+	// hop on the hot insert path.
 	err = s.writeDB.QueryRowContext(ctx, `SELECT id FROM folders WHERE account_id=? AND name=?`, f.AccountID, f.Name).Scan(&id)
 	return id, err
 }
