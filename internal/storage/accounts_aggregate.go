@@ -6,7 +6,7 @@ import "context"
 // muted = 1. Accounts with NULL profile_id (no profile) are NEVER muted.
 func (s *Store) AccountIsMuted(ctx context.Context, accountID int64) (bool, error) {
 	var muted int
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT COALESCE(p.muted, 0)
 		FROM accounts a
 		LEFT JOIN profiles p ON p.id = a.profile_id
@@ -21,7 +21,7 @@ func (s *Store) AccountIsMuted(ctx context.Context, accountID int64) (bool, erro
 // account's profile is NOT muted (NULL profile_id is treated as not-muted).
 func (s *Store) TotalUnreadExcludingMuted(ctx context.Context) (int64, error) {
 	var total int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM messages m
 		JOIN folders  f ON m.folder_id  = f.id

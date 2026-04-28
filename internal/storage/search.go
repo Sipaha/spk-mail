@@ -80,7 +80,7 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 	q += " ORDER BY m.date DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.readDB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}

@@ -22,7 +22,7 @@ type dbtx interface {
 // On any error from fn the tx is rolled back; on a clean return it is
 // committed. A panic inside fn is rolled back and re-raised.
 func (s *Store) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (s *Store) InsertParsedMessageBundle(ctx context.Context, b MessageBundle) 
 // Used by the sync layer when UIDVALIDITY changes — the server has reused
 // UID space, so the local cache is forced to re-fetch.
 func (s *Store) DeleteMessagesByFolder(ctx context.Context, folderID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID)
+	_, err := s.writeDB.ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID)
 	return err
 }
 
@@ -104,7 +104,7 @@ func (s *Store) DeleteMessagesByFolder(ctx context.Context, folderID int64) erro
 // without re-fetching messages already on disk.
 func (s *Store) MaxUIDByFolder(ctx context.Context, folderID int64) (int64, error) {
 	var n int64
-	err := s.db.QueryRowContext(ctx,
+	err := s.readDB.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(uid), 0) FROM messages WHERE folder_id = ?`, folderID).Scan(&n)
 	return n, err
 }

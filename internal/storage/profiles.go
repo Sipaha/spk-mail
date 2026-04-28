@@ -32,7 +32,7 @@ var ErrProfileInUse = errors.New("storage: profile has attached accounts")
 // profile_id undefined. Re-running this on every boot reattaches such orphans
 // to the Default profile so they remain visible in the per-profile sidebar.
 func (s *Store) EnsureDefaultProfile(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func (s *Store) EnsureDefaultProfile(ctx context.Context) error {
 }
 
 func (s *Store) InsertProfile(ctx context.Context, p ProfileRow) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.writeDB.ExecContext(ctx,
 		`INSERT INTO profiles(name, color, sort_order, created_at, muted) VALUES (?,?,?,?,?)`,
 		p.Name, p.Color, p.SortOrder, p.CreatedAt, boolToInt(p.Muted))
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *Store) InsertProfile(ctx context.Context, p ProfileRow) (int64, error) 
 }
 
 func (s *Store) ListProfiles(ctx context.Context) ([]ProfileRow, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.readDB.QueryContext(ctx,
 		`SELECT id, name, color, sort_order, created_at, muted FROM profiles ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func (s *Store) ListProfiles(ctx context.Context) ([]ProfileRow, error) {
 
 func (s *Store) GetProfile(ctx context.Context, id int64) (ProfileRow, error) {
 	var p ProfileRow
-	err := s.db.QueryRowContext(ctx,
+	err := s.readDB.QueryRowContext(ctx,
 		`SELECT id, name, color, sort_order, created_at, muted FROM profiles WHERE id = ?`, id).
 		Scan(&p.ID, &p.Name, &p.Color, &p.SortOrder, &p.CreatedAt, &p.Muted)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -105,12 +105,12 @@ func (s *Store) GetProfile(ctx context.Context, id int64) (ProfileRow, error) {
 // SetProfileMuted flips the muted flag on a profile. Muted profiles are
 // excluded from desktop notifications and the tray badge total.
 func (s *Store) SetProfileMuted(ctx context.Context, id int64, muted bool) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE profiles SET muted = ? WHERE id = ?`, boolToInt(muted), id)
+	_, err := s.writeDB.ExecContext(ctx, `UPDATE profiles SET muted = ? WHERE id = ?`, boolToInt(muted), id)
 	return err
 }
 
 func (s *Store) UpdateProfile(ctx context.Context, id int64, name, color string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.writeDB.ExecContext(ctx,
 		`UPDATE profiles SET name = ?, color = ? WHERE id = ?`, name, color, id)
 	return err
 }

@@ -15,7 +15,7 @@ type AttachmentRow struct {
 }
 
 func (s *Store) InsertAttachment(ctx context.Context, a AttachmentRow) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO attachments(message_id,part_id,filename,content_type,size_bytes,sha256,local_path,downloaded_at)
 		VALUES (?,?,?,?,?,?,?,?)`,
 		a.MessageID, a.PartID, a.Filename, a.ContentType, a.SizeBytes, a.SHA256, a.LocalPath, a.DownloadedAt)
@@ -26,7 +26,7 @@ func (s *Store) InsertAttachment(ctx context.Context, a AttachmentRow) (int64, e
 }
 
 func (s *Store) ListAttachmentsByMessage(ctx context.Context, msgID int64) ([]AttachmentRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id,message_id,part_id,filename,content_type,size_bytes,sha256,local_path,downloaded_at
 		FROM attachments WHERE message_id = ? ORDER BY id`, msgID)
 	if err != nil {
@@ -62,7 +62,7 @@ func (s *Store) ListPendingAttachments(ctx context.Context, accountID int64, lim
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT a.id, a.message_id, m.account_id, m.folder_id, m.uid,
 			a.part_id, a.filename, a.content_type, a.size_bytes
 		FROM attachments a
@@ -87,14 +87,14 @@ func (s *Store) ListPendingAttachments(ctx context.Context, accountID int64, lim
 }
 
 func (s *Store) UpdateAttachmentDownloaded(ctx context.Context, id int64, localPath, sha256 string, ts int64) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.writeDB.ExecContext(ctx,
 		`UPDATE attachments SET local_path = ?, sha256 = ?, downloaded_at = ? WHERE id = ?`,
 		localPath, sha256, ts, id)
 	return err
 }
 
 func (s *Store) ClearAttachmentLocalPath(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.writeDB.ExecContext(ctx,
 		`UPDATE attachments SET local_path = NULL, downloaded_at = NULL WHERE id = ?`, id)
 	return err
 }
@@ -105,11 +105,17 @@ func (s *Store) ClearAttachmentLocalPath(ctx context.Context, id int64) error {
 // real scan error. A missing row surfaces as sql.ErrNoRows from Scan.
 func (s *Store) GetAttachmentLocalPath(ctx context.Context, id int64) (string, bool, error) {
 	var lp *string
-	if err := s.db.QueryRowContext(ctx, `SELECT local_path FROM attachments WHERE id = ?`, id).Scan(&lp); err != nil {
+	if err := s.readDB.QueryRowContext(ctx, `SELECT local_path FROM attachments WHERE id = ?`, id).Scan(&lp); err != nil {
 		return "", false, err
 	}
 	if lp == nil || *lp == "" {
 		return "", false, nil
 	}
 	return *lp, true, nil
+}
+
+// ListAttachmentsByMessages is the batch counterpart to ListAttachmentsByMessage.
+// Real implementation lands in Task 2 of the split-connections plan.
+func (s *Store) ListAttachmentsByMessages(ctx context.Context, msgIDs []int64) (map[int64][]AttachmentRow, error) {
+	panic("ListAttachmentsByMessages: implementation pending — see plan Task 2")
 }
