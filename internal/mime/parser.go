@@ -12,6 +12,7 @@ import (
 	"time"
 
 	gomsg "github.com/emersion/go-message"
+	gocharset "github.com/emersion/go-message/charset"
 	gomail "github.com/emersion/go-message/mail"
 )
 
@@ -166,11 +167,12 @@ func walk(e *gomsg.Entity, partID string, p *ParsedMessage, depth int) error {
 // no addresses at all — in which case the raw `h.Get(key)` value still has the
 // encoded-word in it. Using mime.WordDecoder explicitly fixes both cases.
 //
-// CharsetReader is intentionally nil: stdlib supports UTF-8 (the common case
-// for modern email); foreign charsets like windows-1251 fall through and the
-// caller sees the raw encoded-word, which is acceptable degradation versus
-// crashing on import.
-var wordDecoder = new(mime.WordDecoder)
+// CharsetReader delegates to go-message/charset, which knows the legacy 8-bit
+// charsets (koi8-r, windows-1251, iso-8859-*) common in Russian/European mail
+// archives. Without this wiring the body parts came through as "unhandled
+// charset" parse failures and headers like Subject left their =?…?= form
+// raw, breaking display + thread-bucket subject normalization.
+var wordDecoder = &mime.WordDecoder{CharsetReader: gocharset.Reader}
 
 // decodeHeader runs s through mime.WordDecoder. On any error returns s
 // verbatim. Safe to call on already-decoded text — it's a no-op when there
