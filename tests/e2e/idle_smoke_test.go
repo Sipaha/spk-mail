@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+
 func TestSmoke_InjectTriggersThread(t *testing.T) {
 	bin := os.Getenv("SPKMAIL_BIN")
 	if bin == "" {
@@ -44,32 +45,18 @@ func TestSmoke_InjectTriggersThread(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 	readBody(resp)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		r := postJSON(t, base, "/api/ListThreads", []byte("{}"))
+		defer r.Body.Close()
 		var threads []map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&threads); err == nil {
-			for _, th := range threads {
-				if th["subject"] == "injected" {
-					return
-				}
+		if err := json.NewDecoder(r.Body).Decode(&threads); err != nil {
+			return false
+		}
+		for _, th := range threads {
+			if th["subject"] == "injected" {
+				return true
 			}
 		}
-		_ = r.Body.Close()
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatal("injected thread did not appear")
-}
-
-func waitURL(t *testing.T, url string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if r, err := http.Get(url); err == nil {
-			_ = r.Body.Close()
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatal("server did not start")
+		return false
+	}, 5*time.Second, 100*time.Millisecond, "injected thread did not appear")
 }

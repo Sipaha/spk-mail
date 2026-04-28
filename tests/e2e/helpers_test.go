@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // freePort returns a local TCP port the OS just confirmed was free, by
@@ -49,4 +52,19 @@ func postJSON(t *testing.T, base, path string, body []byte) *http.Response {
 func readBody(r *http.Response) {
 	_, _ = io.Copy(io.Discard, r.Body)
 	_ = r.Body.Close()
+}
+
+// waitURL blocks until the URL serves any HTTP response (or times out),
+// the universal "wait for the binary's listener to come up after exec".
+// Used by every e2e test that launches the binary.
+func waitURL(t *testing.T, url string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		r, err := http.Get(url)
+		if err != nil {
+			return false
+		}
+		_ = r.Body.Close()
+		return true
+	}, 5*time.Second, 100*time.Millisecond, "server at %s never came up", url)
 }

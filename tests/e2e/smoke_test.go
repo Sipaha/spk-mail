@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -37,16 +36,7 @@ func TestSmoke_BrowserMode(t *testing.T) {
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
-
-	// Wait for listener
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if r, err := http.Get(base + "/"); err == nil {
-			_ = r.Body.Close()
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitURL(t, base+"/")
 
 	fixture := []byte(`{"accounts":[{"name":"X","email":"alice@example.com","color":"#fff","use_mock":true,"folders":[{"name":"INBOX"}]}]}`)
 	r := postJSON(t, base, "/api/_test/seed", fixture)
