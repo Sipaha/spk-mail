@@ -125,7 +125,11 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := w.syncFolder(ctx, c, fid, f.Name, f.Role); err != nil {
+		// Initial bulk sync — notifications are suppressed. The user just
+		// started the app; flooding them with N notifications for N unread
+		// messages from before this session is noise. Real-time arrivals
+		// (runIDLE post-EXISTS) re-call syncFolder with notify=true.
+		if err := w.syncFolder(ctx, c, fid, f.Name, f.Role, false); err != nil {
 			return err
 		}
 	}
@@ -169,7 +173,14 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 	}
 }
 
-func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID int64, name, role string) error {
+// syncFolder fetches new messages from the given folder and persists them.
+// When notify=true, MessageArrived events are emitted for newly-fetched unread
+// inbox messages — this is the real-time-arrival path, called from runIDLE
+// after a server-pushed EXISTS notification. When notify=false, fetched
+// messages are stored silently — used for initial bulk catch-up at startup
+// and for polling-based discovery (where multiple unread messages may be
+// pulled at once and we don't want to spam N system notifications).
+func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID int64, name, role string, notify bool) error {
 	state, err := c.Select(ctx, name)
 	if err != nil {
 		return err
@@ -216,7 +227,12 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			w.writer.Submit(IncomingMessage{
 				AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
 				Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
-				IsResync: prev.UIDValidity == 0,
+				// IsResync gates the MessageArrived event in StoreWriter: true
+				// means "stored silently". Driven by the syncFolder caller's
+				// notify flag, not by UIDValidity (UIDValidity only signals
+				// "this is the very first fetch ever for this folder", not
+				// "this fetch is a real-time arrival").
+				IsResync: !notify,
 			})
 		}
 		if err := <-errCh; err != nil {
@@ -296,7 +312,11 @@ func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, fol
 							UseTLS: acc.UseTLS,
 						})
 						if err == nil {
-							_ = w.syncFolder(ctx, syncC, f.ID, folder, role)
+							// runIDLE post-EXISTS — these messages just landed
+							// on the server while we were connected, so they
+							// are real-time arrivals and should produce a
+							// MessageArrived notification.
+							_ = w.syncFolder(ctx, syncC, f.ID, folder, role, true)
 							_ = syncC.Close()
 						}
 						break
@@ -324,7 +344,12 @@ func (w *AccountWorker) runPoll(ctx context.Context, acc storage.AccountRow, fol
 						Username: acc.IMAPUsername, Password: string(pw), UseTLS: acc.UseTLS,
 					})
 					if err == nil {
-						_ = w.syncFolder(ctx, c, f.ID, folder, role)
+						// runPoll catches up on folders without IDLE. Could
+						// see N new messages at once if several arrived
+						// between ticks — keep notifications quiet here to
+						// avoid bursts. The frontend's per-folder unread
+						// badge still updates via SyncProgress / refresh.
+						_ = w.syncFolder(ctx, c, f.ID, folder, role, false)
 						_ = c.Close()
 					}
 				}
