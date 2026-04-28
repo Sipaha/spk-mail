@@ -40,6 +40,7 @@ export default function ProfileSwitcher() {
         {profiles.map(p => (
           <span key={p.id} className="group inline-flex items-center">
             <button
+              data-muted={p.muted ? 'true' : undefined}
               className={tabClass(activeProfileId === p.id) + (p.muted ? ' opacity-50' : '')}
               onClick={() => setActiveProfile(p.id)}>
               <span className="inline-block size-2 rounded-full mr-1.5 align-middle" style={{ background: p.color }} />
