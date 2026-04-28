@@ -63,10 +63,31 @@ export default function ThreadList() {
     ? [...threads, pinned].sort((a, b) => b.last_date - a.last_date)
     : threads
 
+  // filterSig fingerprints the current view context. When it changes (user
+  // switched folder/profile/Unread-toggle/etc.), the whole list legitimately
+  // belongs to a different scope — animating every row out would be visual
+  // noise. We detect such transitions and do an instant replace instead of a
+  // diff with leave-animation. Inside the same context (same filterSig) the
+  // diff path runs and animates only the rows that actually leave.
+  const filterSig = `${activeProfileId}|${filter.accountId ?? ''}|${filter.folderId ?? ''}|${filter.unreadOnly}|${filter.hasFlagged}`
+  const prevSig = useRef(filterSig)
+
   // Diff visible against the currently-rendered rows. Newcomers are appended
   // immediately, rows that disappear from visible flip to `leaving` and a
   // setTimeout schedules the actual removal after the CSS transition window.
   useEffect(() => {
+    const sigChanged = prevSig.current !== filterSig
+    prevSig.current = filterSig
+
+    if (sigChanged) {
+      // Filter context changed — drop pending leave-animations and snap to
+      // the new visible set directly. No fades, no slide-outs.
+      for (const t of leaveTimers.current.values()) clearTimeout(t)
+      leaveTimers.current.clear()
+      setRows(visible.map(t => ({ thread: t, leaving: false })))
+      return
+    }
+
     const visibleMap = new Map(visible.map(t => [t.id, t]))
     setRows(prev => {
       const seen = new Set<number>()
@@ -97,7 +118,7 @@ export default function ThreadList() {
       }
       return out.sort((a, b) => b.thread.last_date - a.thread.last_date)
     })
-  }, [visible])
+  }, [visible, filterSig])
 
   // Cleanup pending timers on unmount.
   useEffect(() => () => {
