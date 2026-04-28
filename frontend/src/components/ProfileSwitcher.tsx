@@ -3,6 +3,23 @@ import { client } from '../api/client'
 import { useStore } from '../store'
 import NewProfileDialog from './NewProfileDialog'
 
+// Heroicons-style bell / bell-slash inline SVG (licensed MIT, traced from heroicons.com).
+// Kept inline so we don't pull in an icon package for two glyphs.
+function BellIcon({ slashed, className = '' }: { slashed: boolean; className?: string }) {
+  if (slashed) {
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.143 17.082a24.25 24.25 0 0 0 3.844.148m-3.844-.148a23.86 23.86 0 0 1-5.455-1.31 8.96 8.96 0 0 0 2.3-5.542m3.155 6.852a3 3 0 0 0 5.667 1.97m1.965-2.277L21 21M4.281 15.772a14.94 14.94 0 0 1-.831-1.252M6 9.75V9c0-.43.045-.85.13-1.255M7.5 5.25v.005a6.013 6.013 0 0 1 4.5-2.005 6 6 0 0 1 5.85 7.503M3 3l18 18" />
+      </svg>
+    )
+  }
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
+    </svg>
+  )
+}
+
 export default function ProfileSwitcher() {
   const profiles = useStore(s => s.profiles)
   const setProfiles = useStore(s => s.setProfiles)
@@ -21,23 +38,29 @@ export default function ProfileSwitcher() {
     <>
       <div className="flex items-center gap-1 px-3 pt-2 border-b border-zinc-800 overflow-x-auto">
         {profiles.map(p => (
-          <span key={p.id} className="inline-flex items-center">
+          <span key={p.id} className="group inline-flex items-center">
             <button
               className={tabClass(activeProfileId === p.id) + (p.muted ? ' opacity-50' : '')}
               onClick={() => setActiveProfile(p.id)}>
-              <span className="inline-block size-2 rounded-full mr-1 align-middle" style={{ background: p.color }} />
-              {p.muted && <span className="mr-1" title="Muted">🔕</span>}
+              <span className="inline-block size-2 rounded-full mr-1.5 align-middle" style={{ background: p.color }} />
               {p.name}
             </button>
+            {/* Mute toggle. Hidden by default, revealed on hover. Always visible
+                when the profile IS muted so the user can find it again to unmute. */}
             <button
               title={p.muted ? 'Unmute' : 'Mute'}
-              className="px-1 text-xs text-zinc-500 hover:text-zinc-200"
+              aria-label={p.muted ? 'Unmute' : 'Mute'}
+              className={`p-1 transition-opacity duration-150 ${
+                p.muted
+                  ? 'text-zinc-300 hover:text-zinc-100 opacity-100'
+                  : 'text-zinc-500 hover:text-zinc-200 opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+              }`}
               onClick={async (e) => {
                 e.stopPropagation()
                 await client.setProfileMuted(p.id, !p.muted)
                 setProfiles(await client.listProfiles())
               }}>
-              {p.muted ? '🔔' : '🔕'}
+              <BellIcon slashed={p.muted} className="size-3.5" />
             </button>
           </span>
         ))}

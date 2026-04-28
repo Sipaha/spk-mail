@@ -110,31 +110,36 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
 
   return (
     <div className="px-4 py-3">
-      <div className="flex gap-2 mb-2">
-        {hasBlocked && (
+      <div className={`relative rounded overflow-hidden ${wrapperBg}`}>
+        {/* Floating controls in the top-right corner of the body card —
+            keeps the chrome out of the message header but right at hand
+            for when the user wants to flip styling or unblock images.
+            "Show remote content" (less common, more weighty action) sits
+            on the left; the style toggle on the right. */}
+        <div className="absolute top-2 right-2 z-10 flex gap-1.5">
+          {hasBlocked && (
+            <button
+              onClick={async () => {
+                const updated = await client.allowRemote(msg.id)
+                setHtml(updated); setHasBlocked(false)
+              }}
+              className="text-[11px] rounded border border-zinc-700/80 bg-zinc-900/80 backdrop-blur px-2 py-0.5 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800">
+              Show remote content
+            </button>
+          )}
           <button
-            onClick={async () => {
-              const updated = await client.allowRemote(msg.id)
-              setHtml(updated); setHasBlocked(false)
-            }}
-            className="text-xs rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-800">
-            Show remote content
+            onClick={() => setAdapted(v => !v)}
+            title={adapted ? 'Show as authored (light card)' : 'Adapt to dark theme'}
+            className="text-[11px] rounded border border-zinc-700/80 bg-zinc-900/80 backdrop-blur px-2 py-0.5 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800">
+            {adapted ? 'Original' : 'Dark adapt'}
           </button>
-        )}
-        <button
-          onClick={() => setAdapted(v => !v)}
-          title={adapted ? 'Show as authored (light card)' : 'Adapt to dark theme'}
-          className="text-xs rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-800 ml-auto">
-          {adapted ? 'Original' : 'Dark adapt'}
-        </button>
-      </div>
-      <div className={`rounded overflow-hidden ${wrapperBg}`}>
+        </div>
         <iframe
           ref={ref}
           sandbox="allow-same-origin"
           srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>${css}</style></head><body>${html}</body></html>`}
           className="w-full border-0"
-          style={{ minHeight: '200px', background: 'transparent' }}
+          style={{ height: 0, background: 'transparent' }}
         />
       </div>
     </div>
