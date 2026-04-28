@@ -15,12 +15,12 @@ import (
 )
 
 type StoreWriter struct {
-	store *storage.Store
+	store storage.Writer
 	em    *api.Emitter
 	in    chan IncomingMessage
 }
 
-func NewStoreWriter(s *storage.Store, em *api.Emitter) *StoreWriter {
+func NewStoreWriter(s storage.Writer, em *api.Emitter) *StoreWriter {
 	return &StoreWriter{store: s, em: em, in: make(chan IncomingMessage, 256)}
 }
 

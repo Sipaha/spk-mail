@@ -11,6 +11,7 @@ import (
 	"github.com/spk/spk-mail/internal/api"
 	apitestapi "github.com/spk/spk-mail/internal/api/testapi"
 	"github.com/spk/spk-mail/internal/mockimap"
+	"github.com/spk/spk-mail/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +22,8 @@ func TestSeed_AccountAppearsInDBDump(t *testing.T) {
 	defer mock.Close()
 
 	// Share the stub's store so seed writes are visible to db-dump.
-	store := stub.(*api.Stub).Store
+	// Mount.Store is *storage.Store (needs DB() etc.); assert from the Writer interface.
+	store := stub.(*api.Stub).Store.(*storage.Store)
 	m := &Mount{API: stub, Store: store, Mock: mock, Logs: NewRingBuffer(100)}
 	mux := http.NewServeMux()
 	m.Register(mux)

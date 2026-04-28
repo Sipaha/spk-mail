@@ -64,8 +64,10 @@ func TestListThreads_HonorsFolderAndUnreadFilters(t *testing.T) {
 	fInbox, _ := a.Store.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &inbox, UIDValidity: 1, UIDNext: 1})
 	fSent, _ := a.Store.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "Sent", Delimiter: "/", Role: &sent, UIDValidity: 1, UIDNext: 1})
 
-	tInbox, _ := a.Store.InsertThread(ctx, storage.ThreadRow{SubjectNorm: "in", LastDate: 100, MsgCount: 1, UnreadCount: 1})
-	tSent, _ := a.Store.InsertThread(ctx, storage.ThreadRow{SubjectNorm: "sent", LastDate: 200, MsgCount: 1, UnreadCount: 0})
+	// InsertThread is test scaffolding not on the Writer interface; assert to concrete type.
+	concreteStore := a.Store.(*storage.Store)
+	tInbox, _ := concreteStore.InsertThread(ctx, storage.ThreadRow{SubjectNorm: "in", LastDate: 100, MsgCount: 1, UnreadCount: 1})
+	tSent, _ := concreteStore.InsertThread(ctx, storage.ThreadRow{SubjectNorm: "sent", LastDate: 200, MsgCount: 1, UnreadCount: 0})
 
 	_, _ = a.Store.InsertMessage(ctx, storage.MessageRow{AccountID: accID, FolderID: fInbox, UID: 1, ThreadID: &tInbox, Date: 100, Flags: `[]`})
 	_, _ = a.Store.InsertMessage(ctx, storage.MessageRow{AccountID: accID, FolderID: fSent, UID: 1, ThreadID: &tSent, Date: 200, Flags: `["\\Seen"]`})
