@@ -2,16 +2,43 @@ import { useEffect, useRef, useState } from 'react'
 import { client } from '../api/client'
 import type { MessageDTO } from '../api/types'
 
-// adaptedCSS: render the email HTML on a virtual white background, then invert
-// the whole body so it visually appears dark. img/video/canvas/inline-bg-image
-// elements are re-inverted so photos and logos look normal. This mirrors
-// Mailspring 2.0 / Outlook dark mode — colors shift slightly (red→cyan etc.)
-// but contrast stays readable on a dark UI.
+// adaptedCSS: render the email HTML on a dark surface by REWRITING common
+// light-background and dark-text rules with !important, NOT by using
+// `filter: invert(...)`. The filter approach disables subpixel font AA on
+// every major browser, which makes text look fuzzy on LCD panels. Targeted
+// overrides keep text crisp while still neutralizing the white "card" look
+// of typical email templates (Jira / GitHub / Atlassian / Outlook). Inline
+// tag colors (Jira's "Medium"/"Urgent" badges, etc.) are preserved.
 const adaptedCSS = `
-  html{background:#0a0a0a;color-scheme:dark}
-  body{margin:0;padding:12px 16px;background:#ffffff;color:#000;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5;filter:invert(1) hue-rotate(180deg)}
-  img,video,picture,canvas,iframe,svg,[style*="background-image"]{filter:invert(1) hue-rotate(180deg)}
-  a{color:#1d4ed8}
+  :root{color-scheme:dark}
+  html,body{background:#0a0a0a !important;color:#e4e4e7 !important}
+  body{margin:0;padding:12px 16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5}
+  /* Nuke generic light backgrounds — covers ~all email templates without
+     wrecking colored badge backgrounds (those use specific colors, not white). */
+  table,tbody,thead,tfoot,tr,td,th,div,p,span,section,article,header,footer,nav,main,aside,blockquote,li,ul,ol{background-color:transparent}
+  [bgcolor="#FFFFFF" i],[bgcolor="#FFF" i],[bgcolor="white" i],
+  [bgcolor="#F4F5F7" i],[bgcolor="#F8F9FA" i],[bgcolor="#FAFAFA" i],
+  [bgcolor="#EEEEEE" i],[bgcolor="#F0F0F0" i]{background-color:transparent !important}
+  [style*="background-color:#fff" i],[style*="background-color: #fff" i],
+  [style*="background-color:white" i],[style*="background-color: white" i],
+  [style*="background:#fff" i],[style*="background: #fff" i],
+  [style*="background:white" i],[style*="background: white" i],
+  [style*="background-color:#f4f5f7" i],[style*="background-color: #f4f5f7" i],
+  [style*="background-color:#f8f9fa" i],[style*="background-color: #f8f9fa" i]{background-color:transparent !important}
+  /* Black-on-white text → light. Specific colors (e.g. red error / green ok) stay. */
+  [color="#000000" i],[color="#000" i],[color="black" i],
+  [style*="color:#000;" i],[style*="color: #000;" i],[style*="color:black;" i],[style*="color: black;" i]{color:#e4e4e7 !important}
+  /* Lighten dark hex text that's nearly black (#1f2937 / #2d3748 / #111 etc.) */
+  [style*="color:#111" i],[style*="color: #111" i],
+  [style*="color:#1f" i],[style*="color: #1f" i],
+  [style*="color:#1a" i],[style*="color: #1a" i],
+  [style*="color:#222" i],[style*="color: #222" i],
+  [style*="color:#333" i],[style*="color: #333" i]{color:#d4d4d8 !important}
+  /* Hairline / divider colors — emails often use #e5e7eb / #ddd / #ccc */
+  hr{border-color:#3f3f46 !important}
+  /* Links: keep blue but readable on dark. */
+  a,a *{color:#60a5fa !important}
+  img{max-width:100%;height:auto}
 `
 
 // originalCSS: white card, no filters. Email renders exactly as authored.
