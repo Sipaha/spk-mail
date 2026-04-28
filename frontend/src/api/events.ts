@@ -14,7 +14,17 @@ export function useEventStream() {
           if (Number.isFinite(accId) && accId > 0) {
             client.listFolders(accId).then(fs => useStore.getState().setFolders(accId, fs))
           }
-          s.setThreads(await client.listThreads({ account_id: s.filter.accountId, limit: 200 }))
+          // Refetch using the FULL active filter, not just account_id —
+          // otherwise an Unread / Flagged / per-folder view would silently
+          // get replaced by the unfiltered list on every Mark-Read event.
+          s.setThreads(await client.listThreads({
+            account_id: s.filter.accountId,
+            folder_id: s.filter.folderId,
+            unread_only: s.filter.unreadOnly,
+            has_flagged: s.filter.hasFlagged,
+            profile_id: s.activeProfileId ?? undefined,
+            limit: 200,
+          }))
           if (s.openThreadId !== undefined) {
             s.setOpenThread(s.openThreadId, await client.getThread(s.openThreadId))
           }

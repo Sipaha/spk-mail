@@ -1,6 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
+import * as wails from '@wailsio/runtime'
 import { client } from '../api/client'
 import type { MessageDTO } from '../api/types'
+
+// openExternal opens a URL in the user's system browser. In Wails desktop we
+// route through the runtime's Browser API (which calls xdg-open / open / start
+// on the host); in browser-mode we fall back to window.open in a new tab.
+function openExternal(url: string) {
+  try {
+    const isWails = typeof window !== 'undefined' && window.location.protocol === 'wails:'
+    if (isWails && wails.Browser?.OpenURL) {
+      wails.Browser.OpenURL(url)
+      return
+    }
+  } catch {
+    // fall through to window.open
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
 
 // adaptedCSS: render the email HTML on a dark surface by REWRITING common
 // light-background and dark-text rules with !important, NOT by using
@@ -59,14 +76,26 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
     setHasBlocked(/data-spk-original-src/.test(msg.body_html))
   }, [msg.body_html])
 
-  // Resize iframe to its content
+  // On every iframe (re)load: resize to content height AND wire up a click
+  // interceptor so <a> taps open in the system browser instead of trying to
+  // navigate inside the sandboxed iframe (which silently does nothing).
   useEffect(() => {
     const f = ref.current; if (!f) return
     const onLoad = () => {
+      const doc = f.contentDocument
+      if (!doc) return
       try {
-        const h = f.contentDocument?.body.scrollHeight ?? 0
-        f.style.height = (h + 8) + 'px'
-      } catch {}
+        f.style.height = (doc.body.scrollHeight + 8) + 'px'
+      } catch { /* noop */ }
+      const onClick = (e: Event) => {
+        const target = (e.target as Element | null)?.closest?.('a') as HTMLAnchorElement | null
+        if (!target) return
+        const href = target.getAttribute('href') || ''
+        if (!href || href.startsWith('#') || href.startsWith('mailto:')) return
+        e.preventDefault()
+        openExternal(href)
+      }
+      doc.addEventListener('click', onClick)
     }
     f.addEventListener('load', onLoad)
     return () => f.removeEventListener('load', onLoad)
