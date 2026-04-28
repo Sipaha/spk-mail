@@ -228,9 +228,14 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 // messages are stored silently — used for initial bulk catch-up at startup
 // and for polling-based discovery (where multiple unread messages may be
 // pulled at once and we don't want to spam N system notifications).
+//
+// syncMu is taken per-batch (not function-wide) so a long bulk catch-up
+// against a 90k-message mailbox can yield to an IDLE-driven inbox sync
+// between batches, instead of pinning that other-folder sync for minutes.
+// Each batch is one UID FETCH range + one Submit drain + one UpsertFolder
+// checkpoint, so per-batch granularity preserves the "one bulk fetch in
+// flight per account" property the lock was originally there for.
 func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID int64, name, role string, notify bool) error {
-	w.syncMu.Lock()
-	defer w.syncMu.Unlock()
 	state, err := c.Select(ctx, name)
 	if err != nil {
 		return err
@@ -292,71 +297,82 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		if batchEnd > serverUIDNext {
 			batchEnd = serverUIDNext
 		}
-		msgCh, errCh := c.FetchSinceUIDRange(ctx, cursor, batchEnd, true)
-		// batchAck tracks how many of this batch's messages are still
-		// in-flight in the StoreWriter. We Wait on it before emitting
-		// SyncProgress so the frontend can't see "all synced" before
-		// the matching MessageInserted events have fired.
-		var batchAck stdsync.WaitGroup
-		for msg := range msgCh {
-			if msg.UID > maxUID {
-				maxUID = msg.UID
+		// Per-batch lock — see syncFolder doc comment. The closure form
+		// keeps `defer Unlock()` straightforward across the four early-
+		// return paths (Submit error, errCh err, drain ctx-done,
+		// UpsertFolder err) without an explicit Unlock at every site.
+		err := func() error {
+			w.syncMu.Lock()
+			defer w.syncMu.Unlock()
+			msgCh, errCh := c.FetchSinceUIDRange(ctx, cursor, batchEnd, true)
+			// batchAck tracks how many of this batch's messages are still
+			// in-flight in the StoreWriter. We Wait on it before emitting
+			// SyncProgress so the frontend can't see "all synced" before
+			// the matching MessageInserted events have fired.
+			var batchAck stdsync.WaitGroup
+			for msg := range msgCh {
+				if msg.UID > maxUID {
+					maxUID = msg.UID
+				}
+				batchAck.Add(1)
+				if err := w.writer.Submit(ctx, IncomingMessage{
+					AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
+					Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
+					// IsResync gates the MessageArrived event in StoreWriter: true
+					// means "stored silently". Driven by the syncFolder caller's
+					// notify flag, not by UIDValidity (UIDValidity only signals
+					// "this is the very first fetch ever for this folder", not
+					// "this fetch is a real-time arrival").
+					IsResync: !notify,
+					Ack:      batchAck.Done,
+				}); err != nil {
+					batchAck.Done() // never enqueued
+					return err
+				}
 			}
-			batchAck.Add(1)
-			if err := w.writer.Submit(ctx, IncomingMessage{
-				AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
-				Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
-				// IsResync gates the MessageArrived event in StoreWriter: true
-				// means "stored silently". Driven by the syncFolder caller's
-				// notify flag, not by UIDValidity (UIDValidity only signals
-				// "this is the very first fetch ever for this folder", not
-				// "this fetch is a real-time arrival").
-				IsResync: !notify,
-				Ack:      batchAck.Done,
-			}); err != nil {
-				batchAck.Done() // never enqueued
+			if err := <-errCh; err != nil {
 				return err
 			}
-		}
-		if err := <-errCh; err != nil {
+			// Wait for the writer to finish persisting every message in this
+			// batch before we tell the UI we're done with it. Plain Wait()
+			// would block on a stuck writer past ctx cancellation, so wrap it
+			// in a goroutine + select.
+			drained := make(chan struct{})
+			go func() { batchAck.Wait(); close(drained) }()
+			select {
+			case <-drained:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			// Checkpoint after every batch — keeps partial progress if the next
+			// batch dies. UIDValidity is set unconditionally so subsequent runs
+			// don't treat the folder as fresh. last_synced_at gives the UI a
+			// "last synced N seconds ago" handle for per-folder status.
+			now := time.Now().Unix()
+			if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+				AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
+				UIDValidity: state.UIDValidity, UIDNext: maxUID, LastSyncedAt: &now,
+			}); err != nil {
+				return err
+			}
+			// Emit SyncProgress so the UI can show a per-account "Syncing
+			// <folder>: done/total" status line. total is the server-side UIDNext
+			// (next UID the server will assign on new messages); done is the
+			// highest UID we have ingested so far. They converge as the bulk
+			// sync catches up. UI hides the line once done >= total.
+			if w.em != nil {
+				w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
+					"account_id": w.accountID,
+					"folder_id":  folderID,
+					"folder":     name,
+					"done":       maxUID,
+					"total":      int64(state.UIDNext),
+				}})
+			}
+			return nil
+		}()
+		if err != nil {
 			return err
-		}
-		// Wait for the writer to finish persisting every message in this
-		// batch before we tell the UI we're done with it. Plain Wait()
-		// would block on a stuck writer past ctx cancellation, so wrap it
-		// in a goroutine + select.
-		drained := make(chan struct{})
-		go func() { batchAck.Wait(); close(drained) }()
-		select {
-		case <-drained:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		// Checkpoint after every batch — keeps partial progress if the next
-		// batch dies. UIDValidity is set unconditionally so subsequent runs
-		// don't treat the folder as fresh. last_synced_at gives the UI a
-		// "last synced N seconds ago" handle for per-folder status.
-		now := time.Now().Unix()
-		if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
-			AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-			UIDValidity: state.UIDValidity, UIDNext: maxUID, LastSyncedAt: &now,
-		}); err != nil {
-			return err
-		}
-		// Emit SyncProgress so the UI can show a per-account "Syncing
-		// <folder>: done/total" status line. total is the server-side UIDNext
-		// (next UID the server will assign on new messages); done is the
-		// highest UID we have ingested so far. They converge as the bulk sync
-		// catches up. For very small mailboxes total may be ~equal to done on
-		// the first iteration — UI hides the line once done >= total.
-		if w.em != nil {
-			w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
-				"account_id": w.accountID,
-				"folder_id":  folderID,
-				"folder":     name,
-				"done":       maxUID,
-				"total":      int64(state.UIDNext),
-			}})
 		}
 		cursor = batchEnd
 	}
