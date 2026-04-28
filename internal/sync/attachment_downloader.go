@@ -24,14 +24,14 @@ import (
 // hashes the bytes, updates the attachments row, and emits AttachmentReady.
 type AttachmentDownloader struct {
 	accountID int64
-	store     *storage.Store
+	store     storage.Writer
 	secrets   *secrets.Store
 	em        *api.Emitter
 	rootDir   string
 }
 
 // NewAttachmentDownloader constructs the worker. It performs no I/O.
-func NewAttachmentDownloader(accountID int64, s *storage.Store, sec *secrets.Store, em *api.Emitter, rootDir string) *AttachmentDownloader {
+func NewAttachmentDownloader(accountID int64, s storage.Writer, sec *secrets.Store, em *api.Emitter, rootDir string) *AttachmentDownloader {
 	return &AttachmentDownloader{accountID: accountID, store: s, secrets: sec, em: em, rootDir: rootDir}
 }
 

@@ -15,7 +15,7 @@ import (
 // StoreWriter and one AccountWorker per active account, restarting crashed
 // workers with exponential backoff.
 type Engine struct {
-	store   *storage.Store
+	store   storage.Writer
 	secrets *secrets.Store
 	em      *api.Emitter
 
@@ -39,7 +39,7 @@ type Engine struct {
 }
 
 // NewEngine constructs an Engine. It performs no I/O.
-func NewEngine(s *storage.Store, sec *secrets.Store, em *api.Emitter) *Engine {
+func NewEngine(s storage.Writer, sec *secrets.Store, em *api.Emitter) *Engine {
 	return &Engine{
 		store:           s,
 		secrets:         sec,
@@ -54,7 +54,7 @@ func NewEngine(s *storage.Store, sec *secrets.Store, em *api.Emitter) *Engine {
 // NewEngineWithDir constructs an Engine that will additionally start an
 // AttachmentDownloader per account, writing blobs under attachDir. If
 // attachDir is empty no downloaders are spawned (matching NewEngine).
-func NewEngineWithDir(s *storage.Store, sec *secrets.Store, em *api.Emitter, attachDir string) *Engine {
+func NewEngineWithDir(s storage.Writer, sec *secrets.Store, em *api.Emitter, attachDir string) *Engine {
 	e := NewEngine(s, sec, em)
 	e.attachDir = attachDir
 	return e

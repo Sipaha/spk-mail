@@ -21,7 +21,7 @@ import (
 // through to the live IMAP session.
 type AccountWorker struct {
 	accountID int64
-	store     *storage.Store
+	store     storage.Writer
 	secrets   *secrets.Store
 	writer    *StoreWriter
 	em        *api.Emitter
@@ -36,7 +36,7 @@ type AccountWorker struct {
 }
 
 // NewAccountWorker constructs a worker. It does no I/O.
-func NewAccountWorker(id int64, s *storage.Store, sec *secrets.Store, w *StoreWriter, em *api.Emitter) *AccountWorker {
+func NewAccountWorker(id int64, s storage.Writer, sec *secrets.Store, w *StoreWriter, em *api.Emitter) *AccountWorker {
 	return &AccountWorker{
 		accountID: id,
 		store:     s,

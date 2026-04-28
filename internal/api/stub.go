@@ -50,12 +50,12 @@ type Engine interface {
 //	profile_stub.go     ListProfiles / AddProfile / UpdateProfile /
 //	                    DeleteProfile / SetProfileMuted
 type Stub struct {
-	Store   *storage.Store
+	Store   storage.Writer
 	Secrets *secrets.Store
 	Emitter *Emitter
 	Engine  Engine
 }
 
-func NewStub(s *storage.Store, sec *secrets.Store, em *Emitter, eng Engine) *Stub {
+func NewStub(s storage.Writer, sec *secrets.Store, em *Emitter, eng Engine) *Stub {
 	return &Stub{Store: s, Secrets: sec, Emitter: em, Engine: eng}
 }
