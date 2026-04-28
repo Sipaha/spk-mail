@@ -29,6 +29,11 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
     return <pre className="whitespace-pre-wrap text-sm text-zinc-200 px-4 py-3">{msg.body_text}</pre>
   }
 
+  // The iframe renders the email's HTML on a WHITE background — emails are
+  // authored against light themes, and forcing dark mode here mangles inline
+  // colors used for tags, badges, dividers, etc. (Jira / Mailspring / Outlook
+  // all do the same: a white "card" inside the dark UI shell.) Plain-text
+  // bodies above stay on the dark theme since they render as our `<pre>`.
   return (
     <div className="px-4 py-3">
       {hasBlocked && (
@@ -41,13 +46,15 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
           Show remote content
         </button>
       )}
-      <iframe
-        ref={ref}
-        sandbox="allow-same-origin"
-        srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>body{margin:0;padding:0;color-scheme:dark;background:#0a0a0a;color:#e4e4e7;font-family:system-ui,sans-serif;font-size:14px}a{color:#60a5fa}</style></head><body>${html}</body></html>`}
-        className="w-full border-0"
-        style={{ minHeight: '200px' }}
-      />
+      <div className="rounded bg-white overflow-hidden">
+        <iframe
+          ref={ref}
+          sandbox="allow-same-origin"
+          srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>body{margin:0;padding:12px 16px;color-scheme:light;background:#ffffff;color:#1f2937;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5}a{color:#1d4ed8}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`}
+          className="w-full border-0"
+          style={{ minHeight: '200px' }}
+        />
+      </div>
     </div>
   )
 }
