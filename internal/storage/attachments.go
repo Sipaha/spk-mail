@@ -25,7 +25,6 @@ func (s *Store) InsertAttachment(ctx context.Context, a AttachmentRow) (int64, e
 	return res.LastInsertId()
 }
 
-
 type PendingAttachment struct {
 	AttachmentID int64
 	MessageID    int64
