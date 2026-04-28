@@ -35,6 +35,14 @@ type ThreadFilter struct {
 	HasFlagged bool
 }
 
+// InsertThread is test scaffolding: production writes go through
+// InsertParsedMessageBundle (tx.go), which uses the unexported insertThread
+// helper inside its single transaction so a thread is never inserted
+// without the matching message row. Test files across multiple packages
+// (internal/storage, internal/api) drive thread state through this entry
+// point — keeping it exported is the price of not making them go through
+// the bundle (which they don't actually want, since they're testing thread
+// queries in isolation).
 func (s *Store) InsertThread(ctx context.Context, t ThreadRow) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO threads(subject_norm,last_date,msg_count,unread_count,has_flagged,has_attach)

@@ -52,8 +52,19 @@ test-go:
 test-front:
 	cd frontend && npm test --silent || true
 
+# test-e2e gates the chromium download on a marker file so re-runs skip
+# the ~150MB pull. CI caches the playwright browser dir in
+# .github/workflows/e2e.yml; this branch is the local-dev mirror. Bump
+# the playwright pin in tests/playwright/package.json and the marker
+# stays — `rm tests/playwright/node_modules/.playwright-browsers` to
+# force a fresh install after a version bump.
 test-e2e: build
-	cd tests/playwright && npm install --silent && npx playwright install --with-deps chromium && npx playwright test
+	cd tests/playwright && npm install --silent
+	@if [ ! -f tests/playwright/node_modules/.playwright-browsers ]; then \
+		echo "  PLAYWRIGHT  installing chromium (one-time per node_modules)"; \
+		cd tests/playwright && npx playwright install --with-deps chromium && touch node_modules/.playwright-browsers; \
+	fi
+	cd tests/playwright && npx playwright test
 
 lint:
 	golangci-lint run
