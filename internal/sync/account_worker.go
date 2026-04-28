@@ -231,6 +231,21 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		}); err != nil {
 			return err
 		}
+		// Emit SyncProgress so the UI can show a per-account "Syncing
+		// <folder>: done/total" status line. total is the server-side UIDNext
+		// (next UID the server will assign on new messages); done is the
+		// highest UID we have ingested so far. They converge as the bulk sync
+		// catches up. For very small mailboxes total may be ~equal to done on
+		// the first iteration — UI hides the line once done >= total.
+		if w.em != nil {
+			w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
+				"account_id": w.accountID,
+				"folder_id":  folderID,
+				"folder":     name,
+				"done":       maxUID,
+				"total":      int64(state.UIDNext),
+			}})
+		}
 		if !anySeen {
 			// No more messages above batchEnd — we're caught up.
 			break

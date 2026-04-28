@@ -52,6 +52,8 @@ func TestListFolders_UnreadCounts(t *testing.T) {
 	require.Len(t, fs, 1)
 	require.Equal(t, "INBOX", fs[0].Name)
 	require.Equal(t, int64(2), fs[0].UnreadCount)
+	require.Equal(t, int64(3), fs[0].TotalCount)
+	require.Equal(t, int64(0), fs[0].FlaggedCount)
 }
 
 func TestListThreads_HonorsFolderAndUnreadFilters(t *testing.T) {

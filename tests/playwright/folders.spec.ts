@@ -10,8 +10,8 @@ test('Unread view filters threads to unread only', async ({ page }) => {
   await page.goto('/')
   // wait for list to populate
   await expect(page.getByText('INBOX').first()).toBeVisible({ timeout: 10_000 })
-  // click Unread
-  await page.getByRole('button', { name: 'Unread', exact: true }).click()
+  // click the virtual Unread row in the FolderTree (first account's row)
+  await page.getByText('Unread').first().click()
   // there are unread threads in basic.yaml; assert at least one row remains
   await expect(page.locator('button').filter({ hasText: /milestones|Project|Weekly/ }).first()).toBeVisible({ timeout: 5_000 })
 })

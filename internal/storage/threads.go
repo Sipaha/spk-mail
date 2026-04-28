@@ -141,27 +141,38 @@ func (s *Store) ListThreadsByProfile(ctx context.Context, profileID *int64, limi
 	return s.ListThreads(ctx, ThreadFilter{ProfileID: profileID}, limit, offset)
 }
 
-// UnreadCountsByFolder returns per-folder counts of unread (no \Seen flag)
-// messages for the given account. Folders with zero unread messages are
-// omitted from the result.
-func (s *Store) UnreadCountsByFolder(ctx context.Context, accountID int64) (map[int64]int64, error) {
+// FolderCounts captures total/unread/flagged message counts for a single
+// folder. Returned by MessageCountsByFolder.
+type FolderCounts struct {
+	Total   int64
+	Unread  int64
+	Flagged int64
+}
+
+// MessageCountsByFolder returns per-folder total/unread/flagged message counts
+// for the given account. Folders with zero messages are omitted. Flag
+// membership is checked via json_each(m.flags) so it is robust to any JSON
+// escape encoding of the flags array.
+func (s *Store) MessageCountsByFolder(ctx context.Context, accountID int64) (map[int64]FolderCounts, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.folder_id, COUNT(*)
+		SELECT m.folder_id,
+		       COUNT(*) AS total,
+		       SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen') THEN 1 ELSE 0 END) AS unread,
+		       SUM(CASE WHEN     EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Flagged') THEN 1 ELSE 0 END) AS flagged
 		FROM messages m
 		WHERE m.account_id = ?
-		  AND NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')
 		GROUP BY m.folder_id`, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[int64]int64{}
+	out := map[int64]FolderCounts{}
 	for rows.Next() {
-		var fid, n int64
-		if err := rows.Scan(&fid, &n); err != nil {
+		var fid, total, unread, flagged int64
+		if err := rows.Scan(&fid, &total, &unread, &flagged); err != nil {
 			return nil, err
 		}
-		out[fid] = n
+		out[fid] = FolderCounts{Total: total, Unread: unread, Flagged: flagged}
 	}
 	return out, rows.Err()
 }

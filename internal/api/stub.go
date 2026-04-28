@@ -133,16 +133,20 @@ func (s *Stub) ListFolders(ctx context.Context, accountID int64) ([]FolderDTO, e
 	if err != nil {
 		return nil, err
 	}
-	counts, _ := s.Store.UnreadCountsByFolder(ctx, accountID)
+	counts, _ := s.Store.MessageCountsByFolder(ctx, accountID)
 	out := make([]FolderDTO, 0, len(rows))
 	for _, r := range rows {
 		role := ""
 		if r.Role != nil {
 			role = *r.Role
 		}
+		c := counts[r.ID]
 		out = append(out, FolderDTO{
 			ID: r.ID, AccountID: accountID,
-			Name: r.Name, Role: role, UnreadCount: counts[r.ID],
+			Name: r.Name, Role: role,
+			UnreadCount:  c.Unread,
+			TotalCount:   c.Total,
+			FlaggedCount: c.Flagged,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
