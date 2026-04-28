@@ -101,13 +101,24 @@ export function useEventStream() {
           // once more after getThread resolves so a thread close DURING the
           // fetch is honored (same race as the MessageInserted branch).
           const fresh = useStore.getState()
-          if (fresh.openThreadId !== undefined) {
-            const id = fresh.openThreadId
-            const msgs = await client.getThread(id)
-            const final = useStore.getState()
-            if (final.openThreadId === id) {
-              final.setOpenThread(id, msgs)
-            }
+          if (fresh.openThreadId === undefined) break
+          // Gate the refetch on whether the ready message is part of the
+          // currently-open thread. AttachmentReady fires for every download
+          // across every account; without this gate, opening a single thread
+          // re-fetches it on every background download anywhere in the app.
+          // When payload.message_id is missing (older event format) we fall
+          // back to refetching — better a redundant fetch than a stale view.
+          const msgId = ev.payload && (ev.payload as { message_id?: unknown }).message_id
+          const msgIdNum = typeof msgId === 'number' ? msgId : Number(msgId)
+          if (Number.isFinite(msgIdNum) && fresh.openThread) {
+            const inThread = fresh.openThread.some(m => m.id === msgIdNum)
+            if (!inThread) break
+          }
+          const id = fresh.openThreadId
+          const msgs = await client.getThread(id)
+          const final = useStore.getState()
+          if (final.openThreadId === id) {
+            final.setOpenThread(id, msgs)
           }
           break
         }

@@ -202,6 +202,14 @@ func (e *Engine) supervise(ctx context.Context, id int64, w *AccountWorker) {
 			return
 		default:
 		}
+		// Belt-and-braces against the StopAccount → re-add race. ctx
+		// cancellation is the primary stop signal, but if StopAccount has
+		// already removed our entry (mutex held during the map mutation)
+		// we must not start another iteration and resurrect a worker for
+		// an account the engine no longer owns.
+		if e.WorkerFor(id) != w {
+			return
+		}
 		d := delays[min(attempt, len(delays)-1)]
 		attempt++
 		slog.Info("restart account worker", "id", id, "in", d)
