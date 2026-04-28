@@ -265,7 +265,7 @@ func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, fol
 }
 
 func (w *AccountWorker) runPoll(ctx context.Context, acc storage.AccountRow, folder, role string) {
-	t := time.NewTicker(60 * time.Second)
+	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
 	for {
 		select {
