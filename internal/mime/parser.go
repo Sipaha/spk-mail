@@ -42,7 +42,8 @@ func Parse(raw []byte) (*ParsedMessage, error) {
 	hdr := mr.Header
 
 	p := &ParsedMessage{}
-	p.Subject, _ = hdr.Subject()
+	subj, _ := hdr.Subject()
+	p.Subject = decodeHeader(subj) // belt-and-braces; emersion decodes most cases but bails on malformed headers
 	p.From = headerAddrFirst(hdr, "From")
 	p.To = headerAddrAll(hdr, "To")
 	p.Cc = headerAddrAll(hdr, "Cc")
@@ -103,14 +104,40 @@ func walk(e *gomsg.Entity, partID string, p *ParsedMessage) {
 	}
 }
 
+// wordDecoder decodes RFC 2047 encoded-words (=?charset?B?…?= / =?charset?Q?…?=)
+// in header field values. emersion's AddressList sometimes leaves Name fields
+// undecoded for malformed-but-common header forms, and falls back to returning
+// no addresses at all — in which case the raw `h.Get(key)` value still has the
+// encoded-word in it. Using mime.WordDecoder explicitly fixes both cases.
+//
+// CharsetReader is intentionally nil: stdlib supports UTF-8 (the common case
+// for modern email); foreign charsets like windows-1251 fall through and the
+// caller sees the raw encoded-word, which is acceptable degradation versus
+// crashing on import.
+var wordDecoder = new(mime.WordDecoder)
+
+// decodeHeader runs s through mime.WordDecoder. On any error returns s
+// verbatim. Safe to call on already-decoded text — it's a no-op when there
+// are no encoded-word markers.
+func decodeHeader(s string) string {
+	if !strings.Contains(s, "=?") {
+		return s
+	}
+	if d, err := wordDecoder.DecodeHeader(s); err == nil {
+		return d
+	}
+	return s
+}
+
 func headerAddrFirst(h gomail.Header, key string) string {
 	addrs, _ := h.AddressList(key)
 	if len(addrs) == 0 {
-		return strings.TrimSpace(h.Get(key))
+		return decodeHeader(strings.TrimSpace(h.Get(key)))
 	}
 	a := addrs[0]
-	if a.Name != "" {
-		return a.Name + " <" + a.Address + ">"
+	name := decodeHeader(a.Name)
+	if name != "" {
+		return name + " <" + a.Address + ">"
 	}
 	return a.Address
 }
@@ -119,8 +146,9 @@ func headerAddrAll(h gomail.Header, key string) []string {
 	addrs, _ := h.AddressList(key)
 	out := make([]string, 0, len(addrs))
 	for _, a := range addrs {
-		if a.Name != "" {
-			out = append(out, a.Name+" <"+a.Address+">")
+		name := decodeHeader(a.Name)
+		if name != "" {
+			out = append(out, name+" <"+a.Address+">")
 		} else {
 			out = append(out, a.Address)
 		}
