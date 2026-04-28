@@ -3,7 +3,10 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 )
 
 type MessageRow struct {
@@ -119,8 +122,88 @@ func (s *Store) FindThreadByMessageIDs(ctx context.Context, msgIDs []string) (in
 	return tid, err == nil, err
 }
 
-// MarkMessagesRead is the batched mark-as-read writer. Real implementation
-// lands in Task 3 of the split-connections plan.
+// MarkMessagesRead marks all supplied message IDs as \Seen in a single
+// writer transaction. Messages that already carry \Seen are skipped.
+// Returns MarkReadOutcome with the per-message metadata needed by the API
+// layer to emit MessageUpdated events and submit IMAP STORE flag ops.
 func (s *Store) MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutcome, error) {
-	panic("MarkMessagesRead: implementation pending — see plan Task 3")
+	if len(ids) == 0 {
+		return MarkReadOutcome{}, nil
+	}
+	var out MarkReadOutcome
+	threadSet := make(map[int64]struct{})
+
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		// SELECT current state of all candidate messages in one shot.
+		q := `SELECT id, account_id, folder_id, uid, thread_id, flags
+		      FROM messages WHERE id IN (`
+		args := make([]any, len(ids))
+		for i, id := range ids {
+			if i > 0 {
+				q += ","
+			}
+			q += "?"
+			args[i] = id
+		}
+		q += `)`
+		rows, err := tx.QueryContext(ctx, q, args...)
+		if err != nil {
+			return err
+		}
+		type cand struct {
+			id, accountID, folderID, uid int64
+			threadID                     *int64
+			flags                        string
+		}
+		var cands []cand
+		for rows.Next() {
+			var c cand
+			if err := rows.Scan(&c.id, &c.accountID, &c.folderID, &c.uid, &c.threadID, &c.flags); err != nil {
+				rows.Close()
+				return err
+			}
+			cands = append(cands, c)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		// For each candidate not already \Seen: append flag, UPDATE, record change.
+		for _, c := range cands {
+			var fl []string
+			if err := json.Unmarshal([]byte(c.flags), &fl); err != nil {
+				return fmt.Errorf("MarkMessagesRead: bad flags JSON for id %d: %w", c.id, err)
+			}
+			if slices.Contains(fl, `\Seen`) {
+				continue
+			}
+			fl = append(fl, `\Seen`)
+			b, _ := json.Marshal(fl)
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
+				return err
+			}
+			out.Changed = append(out.Changed, MarkReadChange{
+				MessageID: c.id, AccountID: c.accountID, FolderID: c.folderID,
+				UID: c.uid, ThreadID: c.threadID,
+			})
+			if c.threadID != nil {
+				threadSet[*c.threadID] = struct{}{}
+			}
+		}
+
+		// Refresh thread stats for each affected thread (in the same tx).
+		for tid := range threadSet {
+			if err := updateThreadStats(ctx, tx, tid); err != nil {
+				return err
+			}
+			out.ChangedThreadIDs = append(out.ChangedThreadIDs, tid)
+		}
+		return nil
+	})
+	if err != nil {
+		return MarkReadOutcome{}, err
+	}
+	return out, nil
 }
