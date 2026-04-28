@@ -385,6 +385,15 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 // large enough that a 100k-message mailbox completes in ~500 round-trips.
 const fetchBatchSize int64 = 200
 
+// idleSessionMaxLifetime caps how long we keep one IMAP connection in IDLE
+// before tearing it down and dialing a fresh one. Servers, NATs, and home
+// routers silently kill TCP after their own idle thresholds (30 min is a
+// common low end); the existing 28-min IDLE refresh inside imap.Idle issues
+// another IDLE on the SAME connection, which doesn't help if the connection
+// is already dead. A full reconnect at 25 min sidesteps the silent-death
+// window without churning live connections.
+const idleSessionMaxLifetime = 25 * time.Minute
+
 func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, folder, role string) {
 	// Cache the password once at goroutine start. The previous code re-fetched
 	// from the secrets store on every EXISTS notification, which is wasted
@@ -393,23 +402,58 @@ func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, fol
 	// fails → connection error → Run returns → restart picks up the fresh
 	// secret), so caching here doesn't pin a stale credential indefinitely.
 	pw, _ := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
-	c, err := imap.Dial(ctx, imap.DialOpts{
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		w.runIDLESession(ctx, acc, pw, folder, role)
+		// Brief backoff so a hard-failing dial doesn't busy-loop. The
+		// supervise loop applies its own tier table when Run() returns
+		// on a real error; this is the inner pause for the in-runIDLE
+		// reconnect cycle.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// runIDLESession holds one IMAP connection in IDLE for at most
+// idleSessionMaxLifetime, then returns. Errors are surfaced via slog
+// (not propagated) so the outer reconnect loop can keep going.
+func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountRow, pw []byte, folder, role string) {
+	sessionCtx, cancel := context.WithTimeout(ctx, idleSessionMaxLifetime)
+	defer cancel()
+
+	c, err := imap.Dial(sessionCtx, imap.DialOpts{
 		Host: acc.IMAPHost, Port: acc.IMAPPort,
 		Username: acc.IMAPUsername, Password: string(pw), UseTLS: acc.UseTLS,
 	})
 	if err != nil {
+		// Distinguish "real connect failure" from "parent ctx cancelled
+		// while dialing" — the latter is the worker shutting down and
+		// shouldn't generate a noisy log entry.
+		if ctx.Err() == nil {
+			slog.Warn("IDLE dial failed", "account_id", acc.ID, "err", err)
+		}
 		return
 	}
 	defer c.Close()
-	if _, err := c.Select(ctx, folder); err != nil {
+	if _, err := c.Select(sessionCtx, folder); err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("IDLE Select failed", "account_id", acc.ID, "folder", folder, "err", err)
+		}
 		return
 	}
 	notifs := make(chan imap.IdleNotification, 8)
-	stop := c.Idle(ctx, notifs)
+	stop := c.Idle(sessionCtx, notifs)
 	defer stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-sessionCtx.Done():
 			return
 		case n, ok := <-notifs:
 			if !ok {
