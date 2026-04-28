@@ -2,8 +2,11 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -212,12 +215,38 @@ func httpHandle[Req any](fn func(context.Context, *Req) (any, error)) http.Handl
 		}
 		out, err := fn(r.Context(), &req)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			// Don't echo err.Error() into the response body. Go errors here
+			// often carry IMAP hostnames, filesystem paths, sql driver text,
+			// and other internals that aren't useful to the user but ARE
+			// useful to anyone who pastes a screenshot into a public bug
+			// report. Log the full error server-side, return a short sentinel
+			// plus a correlation id the user can quote when reporting.
+			id := newErrorID()
+			slog.Error("api handler failed",
+				"path", r.URL.Path, "method", r.Method,
+				"err_id", id, "err", err.Error())
+			http.Error(w, "internal error ("+id+")", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
 	}
+}
+
+// newErrorID returns a short opaque identifier suitable for printing in an
+// HTTP error body so a user-reported "internal error (deadbeef)" can be
+// grepped against the logs. 4 random bytes (8 hex chars) is wide enough to
+// disambiguate within a single log buffer; collisions across runs do not
+// matter because logs are rotated.
+func newErrorID() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure on Linux is a kernel-level emergency; fall
+		// back to a fixed id so we don't return an empty string and lose
+		// the visible signal in the response.
+		return "00000000"
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // ssePingInterval bounds how long the connection can stay idle before we
