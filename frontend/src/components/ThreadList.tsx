@@ -80,11 +80,16 @@ export default function ThreadList() {
     prevSig.current = filterSig
 
     if (sigChanged) {
-      // Filter context changed — drop pending leave-animations and snap to
-      // the new visible set directly. No fades, no slide-outs.
+      // Filter context changed (profile / folder / view toggle). The store
+      // still holds the PREVIOUS scope's threads until the refetch resolves,
+      // so `visible` here is stale. If we snap rows=visible we'd briefly show
+      // the old list and then animate every old thread out when the new data
+      // lands. Instead clear rows immediately — the next render after the
+      // refetch will populate via the diff path with prev=[] and treat new
+      // threads as newcomers (instant, no leave-anim).
       for (const t of leaveTimers.current.values()) clearTimeout(t)
       leaveTimers.current.clear()
-      setRows(visible.map(t => ({ thread: t, leaving: false })))
+      setRows([])
       return
     }
 
