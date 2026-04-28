@@ -16,6 +16,7 @@ var migrationSteps = []migrationStep{
 	{version: 2, apply: applyMigrationV2},
 	{version: 3, apply: applyMigrationV3},
 	{version: 4, apply: applyMigrationV4},
+	{version: 5, apply: applyMigrationV5},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -159,6 +160,30 @@ func applyMigrationV4(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations(version, applied_at) VALUES (4, strftime('%s','now'))`); err != nil {
 		return fmt.Errorf("v4 record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// applyMigrationV5 deletes orphan thread rows — those with no messages
+// attached. They appear as ghost entries at the bottom of the inbox
+// (subject="", last_date=0, msg_count=0) and are leftovers from earlier
+// partial-write paths in StoreWriter.process where InsertThread succeeded
+// but InsertMessage failed and never retried. Wrapped in the same migrations
+// pipeline so it runs once and is recorded in schema_migrations.
+func applyMigrationV5(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM threads WHERE id NOT IN (SELECT DISTINCT thread_id FROM messages WHERE thread_id IS NOT NULL)`); err != nil {
+		return fmt.Errorf("v5 delete orphan threads: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (5, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v5 record version: %w", err)
 	}
 	return tx.Commit()
 }
