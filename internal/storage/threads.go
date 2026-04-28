@@ -202,7 +202,7 @@ func (s *Store) UpdateThreadStats(ctx context.Context, threadID int64) error {
 // has_attach (e.g. left behind by an older LIKE-based query, or by a partial
 // write) is repaired without user action.
 func (s *Store) RecomputeAllThreadStats(ctx context.Context) error {
-	rows, err := s.writeDB.QueryContext(ctx, `SELECT id FROM threads`)
+	rows, err := s.readDB.QueryContext(ctx, `SELECT id FROM threads`)
 	if err != nil {
 		return err
 	}

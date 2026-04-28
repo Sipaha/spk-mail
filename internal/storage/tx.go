@@ -16,8 +16,8 @@ type dbtx interface {
 }
 
 // WithTx runs fn inside a single SQLite transaction. The closure must use the
-// supplied *sql.Tx for ALL its writes; mixing s.db and the tx inside fn would
-// deadlock because the Store is configured with MaxOpenConns=1.
+// supplied *sql.Tx for ALL its writes; mixing s.writeDB and the tx inside fn
+// would deadlock because the writer is configured with MaxOpenConns=1.
 //
 // On any error from fn the tx is rolled back; on a clean return it is
 // committed. A panic inside fn is rolled back and re-raised.

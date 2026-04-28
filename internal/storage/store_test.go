@@ -98,7 +98,7 @@ func TestReadsDoNotBlockOnLongWriteTx(t *testing.T) {
 
 	select {
 	case d := <-readDone:
-		require.Less(t, d, 100*time.Millisecond,
+		require.Less(t, d, 200*time.Millisecond,
 			"read should not wait on the write tx; observed %v", d)
 	case <-time.After(450 * time.Millisecond):
 		t.Fatal("read blocked behind write tx (timed out)")

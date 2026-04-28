@@ -31,6 +31,10 @@ var ErrProfileInUse = errors.New("storage: profile has attached accounts")
 // briefly shipped an "All" pseudo-profile that submitted addAccount with
 // profile_id undefined. Re-running this on every boot reattaches such orphans
 // to the Default profile so they remain visible in the per-profile sidebar.
+//
+// Not on storage.Writer — startup-only helper called by cmd/spk-mail, which
+// holds the concrete *Store; narrowing consumers to Writer should not pull in
+// startup bootstrap.
 func (s *Store) EnsureDefaultProfile(ctx context.Context) error {
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {

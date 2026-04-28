@@ -76,13 +76,21 @@ var (
 	_ Writer = (*Store)(nil)
 )
 
-// MarkReadOutcome is the return type of Writer.MarkMessagesRead. Defined here
-// so the Writer assertion compiles before the implementation lands in Task 3.
+// MarkReadOutcome reports the side-effects of MarkMessagesRead so the API
+// layer can emit MessageUpdated events and submit IMAP STORE flag ops without
+// re-reading the messages.
 type MarkReadOutcome struct {
-	Changed          []MarkReadChange
+	// Changed lists messages that flipped from !\Seen → \Seen. Already-seen
+	// IDs in the input are absent.
+	Changed []MarkReadChange
+	// ChangedThreadIDs is the deduped set of thread_ids whose stats were
+	// recomputed (only threads of messages in Changed are touched).
 	ChangedThreadIDs []int64
 }
 
+// MarkReadChange carries the per-message metadata the API layer needs after
+// a successful flag flip: the IMAP folder/UID coordinates for STORE, and the
+// thread_id (nullable in the schema — nil means the message was never threaded).
 type MarkReadChange struct {
 	MessageID int64
 	AccountID int64
