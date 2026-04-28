@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/flagop"
 	"github.com/spk/spk-mail/internal/imap"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -24,7 +25,7 @@ type AccountWorker struct {
 	secrets   *secrets.Store
 	writer    *StoreWriter
 	em        *api.Emitter
-	flagOps   chan FlagOp
+	flagOps   chan flagop.Op
 	// syncMu serializes syncFolder per account: while one folder is being
 	// fetched, IDLE/poll-driven syncs of other folders queue up rather than
 	// running in parallel. This makes the per-account "Syncing X: done/total"
@@ -42,13 +43,13 @@ func NewAccountWorker(id int64, s *storage.Store, sec *secrets.Store, w *StoreWr
 		secrets:   sec,
 		writer:    w,
 		em:        em,
-		flagOps:   make(chan FlagOp, 64),
+		flagOps:   make(chan flagop.Op, 64),
 	}
 }
 
 // SubmitFlagOp queues a flag operation for async UID STORE. It is non-blocking:
 // if the queue is full (cap 64) the op is dropped with a warning.
-func (w *AccountWorker) SubmitFlagOp(op FlagOp) {
+func (w *AccountWorker) SubmitFlagOp(op flagop.Op) {
 	select {
 	case w.flagOps <- op:
 	default:
