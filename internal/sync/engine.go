@@ -122,23 +122,35 @@ func (e *Engine) StartAccount(parent context.Context, id int64) {
 		e.supervise(ctx, id, w)
 	}()
 
-	// Spawn an AttachmentDownloader on a per-account context derived from
-	// the engine's root ctx so it survives worker restarts but stops on
-	// StopAccount (no goroutine leak after account removal). Guard against
-	// double-spawn when an account is stopped and re-started.
-	if e.attachDir != "" {
-		if _, ok := e.downloaders[id]; !ok {
-			dCtx, dCancel := context.WithCancel(base)
-			d := NewAttachmentDownloader(id, e.store, e.secrets, e.em, e.attachDir)
-			e.downloaders[id] = d
-			e.downloaderStops[id] = dCancel
-			e.wg.Add(1)
-			go func() {
-				defer e.wg.Done()
-				d.Run(dCtx)
-			}()
-		}
+	e.registerDownloaderForAccountLocked(base, id)
+}
+
+// registerDownloaderForAccountLocked spawns an AttachmentDownloader for id
+// under base ctx. Idempotent (no-op when one is already registered), and a
+// no-op when attachDir is empty (NewEngine without an attachment dir).
+//
+// Tests that just want to assert the wiring (account → downloader entry)
+// can call this directly under e.mu.Lock and avoid spawning supervise +
+// its tier-table dial-retry loop, which busy-loops imap.Dial against the
+// fake account's port=1 until ctx cancel.
+//
+// Caller must hold e.mu.
+func (e *Engine) registerDownloaderForAccountLocked(base context.Context, id int64) {
+	if e.attachDir == "" {
+		return
 	}
+	if _, ok := e.downloaders[id]; ok {
+		return
+	}
+	dCtx, dCancel := context.WithCancel(base)
+	d := NewAttachmentDownloader(id, e.store, e.secrets, e.em, e.attachDir)
+	e.downloaders[id] = d
+	e.downloaderStops[id] = dCancel
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		d.Run(dCtx)
+	}()
 }
 
 // StopAccount cancels the worker and the AttachmentDownloader for the given

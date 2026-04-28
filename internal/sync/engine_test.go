@@ -65,9 +65,14 @@ func TestEngine_TwoAccountsSyncInParallel(t *testing.T) {
 }
 
 // TestEngine_AttachmentDownloaderWiring verifies that NewEngineWithDir wires
-// the attachDir field and downloaders map, and that StartAccount registers a
-// downloader entry when attachDir is non-empty. End-to-end downloader behavior
-// is covered in attachment_downloader_test.go.
+// the attachDir field and downloaders map, and that account registration
+// adds a downloader entry when attachDir is non-empty. End-to-end downloader
+// behavior is covered in attachment_downloader_test.go.
+//
+// We deliberately do NOT call StartAccount here: that would spawn the
+// supervise goroutine, which in turn busy-loops imap.Dial against the
+// fixture's port=1 until ctx cancel. Calling registerDownloaderForAccountLocked
+// directly exercises the wiring path without the dial-retry storm.
 func TestEngine_AttachmentDownloaderWiring(t *testing.T) {
 	dir := t.TempDir()
 	st, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
@@ -82,11 +87,6 @@ func TestEngine_AttachmentDownloaderWiring(t *testing.T) {
 	require.NotNil(t, e.downloaders)
 	require.Equal(t, attachDir, e.attachDir)
 
-	// Need a writer so AccountWorker construction doesn't panic when
-	// StartAccount kicks supervise off (supervise will fail to find the
-	// account in DB and bounce, but that's fine for a wiring assertion).
-	e.writer = NewStoreWriter(e.store, e.em)
-
 	id, err := st.InsertAccount(context.Background(), storage.AccountRow{
 		Name: "x", Email: "x@x", IMAPHost: "127.0.0.1", IMAPPort: 1, IMAPUsername: "x",
 		UseTLS: false, Color: "#fff", CreatedAt: 0,
@@ -94,16 +94,21 @@ func TestEngine_AttachmentDownloaderWiring(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	e.StartAccount(ctx, id)
+	t.Cleanup(cancel)
 
 	e.mu.Lock()
+	e.registerDownloaderForAccountLocked(ctx, id)
 	_, ok := e.downloaders[id]
 	e.mu.Unlock()
 	require.True(t, ok, "expected downloader registered for account")
 
-	// Plain NewEngine must NOT spawn downloaders.
+	// Plain NewEngine must NOT spawn downloaders even when register is called.
 	e2 := NewEngine(st, sec, em)
 	require.Equal(t, "", e2.attachDir)
 	require.NotNil(t, e2.downloaders)
+	e2.mu.Lock()
+	e2.registerDownloaderForAccountLocked(ctx, id)
+	_, ok2 := e2.downloaders[id]
+	e2.mu.Unlock()
+	require.False(t, ok2, "NewEngine without attachDir must not spawn downloader")
 }
