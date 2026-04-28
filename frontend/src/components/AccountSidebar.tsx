@@ -27,17 +27,17 @@ export default function AccountSidebar() {
                 {a.status}
               </span>
             </button>
-            {/* Sync status line: always rendered so the folder tree below
-                does not jump when sync starts/finishes. When idle, the row is
-                visually hidden (opacity-0) but still occupies its height. */}
+            {/* Sync status line: always rendered (with meaningful text in both
+                states) so the folder tree below never jumps when sync starts
+                or finishes. Idle shows a soft "all synced" affordance instead
+                of empty whitespace, so users aren't left wondering. */}
             <div
-              aria-hidden={!isSyncing}
-              className={`text-[10px] px-3 py-0.5 truncate transition-opacity duration-150 pointer-events-none ${
-                isSyncing ? 'text-zinc-500 opacity-100' : 'opacity-0'
+              className={`text-[10px] px-3 py-0.5 truncate pointer-events-none ${
+                isSyncing ? 'text-zinc-500' : 'text-emerald-500/70'
               }`}>
               {isSyncing
                 ? `Syncing ${progress.folder}: ${progress.done.toLocaleString()} / ${progress.total.toLocaleString()}`
-                : ' ' /* nbsp — keeps the row height identical when idle */}
+                : '✓ All synced'}
             </div>
             <FolderTree accountId={a.id} />
           </div>
