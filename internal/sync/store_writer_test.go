@@ -39,10 +39,23 @@ func TestStoreWriter_InsertsAndCreatesThread(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "expected exactly one thread after submit")
 }
 
-// TestStoreWriter_DuplicateInsert verifies that submitting the same
-// (account_id, folder_id, uid) tuple twice does not crash the writer or
-// leave a partial row. The second submit hits the UNIQUE constraint and
-// the bundle's transaction rolls back; the first row remains intact.
+// TestStoreWriter_DuplicateInsert verifies that submitting two messages
+// that resolve to the same (folder_id, uid) tuple but to DIFFERENT thread
+// buckets does not leave an orphan thread row when the message insert
+// rolls back. The first submit creates thread T1 and message M(uid=42).
+// The second submit has a fresh Message-ID and a fresh subject, so
+// FindThreadByMessageIDs and FindThreadBySubject both miss; the writer
+// sets ExistingThreadID=0 and InsertParsedMessageBundle starts a tx
+// that:
+//
+//   1. inserts a new thread T2 (succeeds within the tx),
+//   2. tries to insert the message with UID=42 (fails on UNIQUE
+//      folder_id+uid),
+//   3. rolls back the entire tx — T2 must NOT survive.
+//
+// Without this, the rollback would leave an orphan thread with no
+// messages, and the thread list would show a ghost row. Asserting on
+// `threadCount == 1` after both submits is the regression sentry.
 func TestStoreWriter_DuplicateInsert(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -56,31 +69,51 @@ func TestStoreWriter_DuplicateInsert(t *testing.T) {
 	w := NewStoreWriter(st, em)
 	go w.Run(ctx)
 
-	raw := strings.Join([]string{
-		"From: B <b@x>", "Subject: dup", "Date: Mon, 27 Apr 2026 10:30:00 +0000",
-		"Message-ID: <dup@x>", "Content-Type: text/plain", "", "hi",
-	}, "\r\n")
-	msg := IncomingMessage{AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 42, Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw)}
-	require.NoError(t, w.Submit(ctx, msg))
-	require.NoError(t, w.Submit(ctx, msg)) // duplicate UID — must not panic the writer
+	mkRaw := func(msgID, subject string) []byte {
+		return []byte(strings.Join([]string{
+			"From: B <b@x>", "Subject: " + subject, "Date: Mon, 27 Apr 2026 10:30:00 +0000",
+			"Message-ID: <" + msgID + ">", "Content-Type: text/plain", "", "hi",
+		}, "\r\n"))
+	}
+
+	// First submit: creates thread T1 + message M(uid=42).
+	require.NoError(t, w.Submit(ctx, IncomingMessage{
+		AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 42,
+		Flags: []string{}, InternalAt: time.Now(), Raw: mkRaw("orig@x", "first topic"),
+	}))
+	// Second submit: same (folder_id, uid), but Message-ID and Subject are
+	// new so the writer cannot reuse T1. The tx will create T2, fail to
+	// insert the message, and roll back — T2 must vanish with the rollback.
+	require.NoError(t, w.Submit(ctx, IncomingMessage{
+		AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 42,
+		Flags: []string{}, InternalAt: time.Now(), Raw: mkRaw("collide@x", "second topic"),
+	}))
 
 	require.Eventually(t, func() bool {
 		var rowCount int
 		_ = st.DB().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM messages WHERE folder_id=? AND uid=?`, fID, 42).Scan(&rowCount)
 		return rowCount == 1
-	}, 2*time.Second, 20*time.Millisecond, "duplicate UID must not create a second row")
+	}, 2*time.Second, 20*time.Millisecond, "second submit must not create a second message row")
 
-	// A subsequent fresh submit on a different UID must still succeed —
-	// the writer survived the duplicate without going into a bad state.
-	raw2 := strings.Replace(raw, "<dup@x>", "<dup2@x>", 1)
-	require.NoError(t, w.Submit(ctx, IncomingMessage{AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 43, Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw2)}))
+	// The actual rollback assertion: only the first thread survives.
+	// A regression where the new-thread insert escapes the rolled-back
+	// tx would push this to 2.
+	var threadCount int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM threads`).Scan(&threadCount))
+	require.Equal(t, 1, threadCount, "rolled-back new-thread insert must NOT leave an orphan thread row")
+
+	// Writer is still alive — a third, non-colliding submit lands cleanly.
+	require.NoError(t, w.Submit(ctx, IncomingMessage{
+		AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 43,
+		Flags: []string{}, InternalAt: time.Now(), Raw: mkRaw("third@x", "third topic"),
+	}))
 	require.Eventually(t, func() bool {
 		var rowCount int
 		_ = st.DB().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM messages WHERE folder_id=?`, fID).Scan(&rowCount)
 		return rowCount == 2
-	}, 2*time.Second, 20*time.Millisecond, "writer is stuck after duplicate insert (expected 2 rows)")
+	}, 2*time.Second, 20*time.Millisecond, "writer is stuck after duplicate-uid attempt")
 }
 
 // TestStoreWriter_IsResyncGatesArrived locks in the rule that MessageArrived
