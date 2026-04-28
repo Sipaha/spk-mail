@@ -40,5 +40,9 @@ test('muted profile dims in the switcher', async ({ page, request }) => {
   await page.reload()
   const tab = page.getByRole('button', { name: /Muted/ }).first()
   await expect(tab).toBeVisible({ timeout: 5_000 })
-  await expect(tab).toHaveClass(/opacity-50/)
+  // Assert via data-muted (set by ProfileSwitcher.tsx) rather than the
+  // Tailwind `opacity-50` class — the data-attr is the contract; the
+  // class is the implementation. A theme tweak that swaps opacity-50
+  // for, say, brightness-75 would falsely fail the class assertion.
+  await expect(tab).toHaveAttribute('data-muted', 'true')
 })

@@ -50,10 +50,12 @@ describe('ProfileSwitcher', () => {
     const bells = await screen.findAllByTitle('Mute')
     expect(bells.length).toBeGreaterThan(0)
     fireEvent.click(bells[0])
-    // After the click, Work should now be muted; the tab gains opacity-50
+    // After the click, Work should now be muted; the tab gains
+    // data-muted="true" (the visual `opacity-50` class follows from
+    // that, but the data-attr is the contract for tests).
     await waitFor(() => {
-      const dimmed = document.querySelectorAll('.opacity-50')
-      expect(dimmed.length).toBeGreaterThan(0)
+      const muted = document.querySelectorAll('[data-muted="true"]')
+      expect(muted.length).toBeGreaterThan(0)
     })
   })
 })
