@@ -15,6 +15,7 @@ var migrationSteps = []migrationStep{
 	{version: 1, apply: applyMigrationV1},
 	{version: 2, apply: applyMigrationV2},
 	{version: 3, apply: applyMigrationV3},
+	{version: 4, apply: applyMigrationV4},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -105,6 +106,59 @@ func applyMigrationV3(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations(version, applied_at) VALUES (3, strftime('%s','now'))`); err != nil {
 		return fmt.Errorf("v3 record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// applyMigrationV4 recomputes thread stats for every existing thread once.
+// Earlier versions used a LIKE-based check for the \Seen flag that silently
+// missed flags arriving in different escape forms; the result was that
+// `unread_count` and `last_date` could drift on already-synced threads. The
+// json_each rewrite (Plan 9) fixes the SQL going forward, but already-broken
+// rows need a one-time pass — which is what this migration does. Cheap enough
+// for tens of thousands of threads (single transaction; one UPDATE per row).
+func applyMigrationV4(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM threads`)
+	if err != nil {
+		return fmt.Errorf("v4 list threads: %w", err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("v4 scan thread id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+
+	const recompute = `UPDATE threads SET
+		last_date = (SELECT COALESCE(MAX(date),0) FROM messages WHERE thread_id = ?),
+		msg_count = (SELECT COUNT(*) FROM messages WHERE thread_id = ?),
+		unread_count = (SELECT COUNT(*) FROM messages m WHERE m.thread_id = ?
+			AND NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')),
+		has_flagged = CASE WHEN EXISTS(
+			SELECT 1 FROM messages m WHERE m.thread_id = ?
+			AND EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Flagged')
+		) THEN 1 ELSE 0 END,
+		has_attach  = CASE WHEN EXISTS(SELECT 1 FROM messages WHERE thread_id = ? AND has_attachments = 1) THEN 1 ELSE 0 END
+		WHERE id = ?`
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, recompute, id, id, id, id, id, id); err != nil {
+			return fmt.Errorf("v4 recompute thread %d: %w", id, err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (4, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v4 record version: %w", err)
 	}
 	return tx.Commit()
 }
