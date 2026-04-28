@@ -57,7 +57,8 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 		whereSQL = append(whereSQL, "m.has_attachments = 1")
 	}
 	if spec.UnreadOnly {
-		whereSQL = append(whereSQL, "m.flags NOT LIKE '%\\Seen%'")
+		whereSQL = append(whereSQL,
+			`NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')`)
 	}
 	if len(spec.AccountIDs) > 0 {
 		ph := strings.Repeat("?,", len(spec.AccountIDs))

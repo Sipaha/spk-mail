@@ -115,15 +115,21 @@ func (s *Store) UpdateProfile(ctx context.Context, id int64, name, color string)
 	return err
 }
 
+// DeleteProfile removes a profile that has no attached accounts. The count
+// check and the DELETE run inside one transaction so a concurrent
+// AddAccount(profile_id=…) cannot land between the two statements and
+// leave the deleted profile's id orphaned on a fresh account row.
 func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
-	var attached int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM accounts WHERE profile_id = ?`, id).Scan(&attached); err != nil {
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		var attached int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM accounts WHERE profile_id = ?`, id).Scan(&attached); err != nil {
+			return err
+		}
+		if attached > 0 {
+			return fmt.Errorf("%w: %d accounts attached to profile %d", ErrProfileInUse, attached, id)
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, id)
 		return err
-	}
-	if attached > 0 {
-		return fmt.Errorf("%w: %d accounts attached to profile %d", ErrProfileInUse, attached, id)
-	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, id)
-	return err
+	})
 }

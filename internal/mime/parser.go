@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/mail"
 	"strings"
@@ -115,7 +116,16 @@ func walk(e *gomsg.Entity, partID string, p *ParsedMessage, depth int) error {
 		i := 1
 		for {
 			sub, err := mr.NextPart()
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
 			if err != nil {
+				// Malformed boundary / truncated message: surface as a warn so
+				// it shows up in the testapi log buffer, but keep whatever
+				// parts we already collected — losing the entire message
+				// because the last sub-part is corrupt would be worse than a
+				// best-effort partial parse.
+				slog.Warn("mime: multipart NextPart failed", "part", partID, "err", err)
 				return nil
 			}
 			subID := partID
