@@ -203,6 +203,22 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		prev.UIDNext = 0
 	}
 
+	// Resume from MAX(uid) actually present in messages, not just the
+	// persisted folders.uid_next. Older sync paths could insert messages
+	// without ever reaching the final UpsertFolder (e.g. partial bulk sync
+	// against a 90k mailbox where the connection died mid-stream), leaving
+	// uid_next=0 even though messages 1..N are already stored. Without this
+	// check, every restart would re-fetch those N messages from the server
+	// and hit UNIQUE(account_id, folder_id, uid) violations on insert.
+	var dbMaxUID int64
+	if err := w.store.DB().QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(uid), 0) FROM messages WHERE folder_id = ?`, folderID).Scan(&dbMaxUID); err != nil {
+		return err
+	}
+	if dbMaxUID > prev.UIDNext {
+		prev.UIDNext = dbMaxUID
+	}
+
 	// Batch fetch in chunks of fetchBatchSize UIDs. A single open-ended
 	// "UID FETCH N:*" works for small mailboxes but breaks on huge ones
 	// (>~3000 messages we observed Yandex closing the connection mid-stream).
