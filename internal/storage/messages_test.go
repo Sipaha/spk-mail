@@ -153,3 +153,39 @@ func TestMarkMessagesRead_EmptyInput(t *testing.T) {
 	require.Empty(t, out.Changed)
 	require.Empty(t, out.ChangedThreadIDs)
 }
+
+// TestMarkMessagesRead_NilThreadID covers a message with thread_id IS NULL
+// (e.g. mid-flight during sync, before threading runs). The flag flip must
+// still happen and the change must appear in out.Changed with ThreadID=nil,
+// but no thread-stats refresh fires and ChangedThreadIDs stays empty.
+func TestMarkMessagesRead_NilThreadID(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	accID, err := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+
+	// ThreadID left as nil — message exists but isn't threaded yet.
+	msgID, err := s.InsertMessage(ctx, MessageRow{
+		AccountID: accID, FolderID: folderID, UID: 1, Date: 1, Flags: "[]",
+	})
+	require.NoError(t, err)
+
+	out, err := s.MarkMessagesRead(ctx, []int64{msgID})
+	require.NoError(t, err)
+
+	require.Len(t, out.Changed, 1)
+	require.Equal(t, msgID, out.Changed[0].MessageID)
+	require.Nil(t, out.Changed[0].ThreadID, "no-thread message must propagate ThreadID=nil")
+	require.Empty(t, out.ChangedThreadIDs, "no thread → no stats refresh")
+
+	row, err := s.GetMessage(ctx, msgID)
+	require.NoError(t, err)
+	require.Contains(t, row.Flags, `\Seen`)
+}

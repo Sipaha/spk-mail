@@ -84,7 +84,8 @@ type MarkReadOutcome struct {
 	// IDs in the input are absent.
 	Changed []MarkReadChange
 	// ChangedThreadIDs is the deduped set of thread_ids whose stats were
-	// recomputed (only threads of messages in Changed are touched).
+	// recomputed (only threads of messages in Changed are touched). Order
+	// is unspecified — populated from a map iteration.
 	ChangedThreadIDs []int64
 }
 
