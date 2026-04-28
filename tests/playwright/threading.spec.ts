@@ -14,7 +14,12 @@ test('reply lands in the same thread', async ({ page, request }) => {
   })
   expect(r2.ok(), `inject reply failed: ${r2.status()}`).toBeTruthy()
 
-  // Both subjects normalize to "topic a" so they share a thread; the inbox row shows "topic a" (lowercased — known issue tracked in plan-7 backlog)
+  // Both subjects normalize to "topic a" so they share a thread. The
+  // inbox row shows "topic a" lowercased because the thread row uses
+  // threads.subject_norm (already lowercased by NormalizeSubject for
+  // bucket-matching) instead of the original message subject. Cosmetic
+  // mismatch we accept here; fix would require carrying the original
+  // case through to the row.
   await expect(page.getByText(/topic a/i)).toBeVisible({ timeout: 10_000 })
   await page.getByText(/topic a/i).first().click()
   // After click, the thread view (<main>) shows both message bodies as <pre>.
