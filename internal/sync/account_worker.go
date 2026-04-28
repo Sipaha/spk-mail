@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	stdsync "sync"
 	"strings"
 	"time"
 
@@ -24,6 +25,13 @@ type AccountWorker struct {
 	writer    *StoreWriter
 	em        *api.Emitter
 	flagOps   chan FlagOp
+	// syncMu serializes syncFolder per account: while one folder is being
+	// fetched, IDLE/poll-driven syncs of other folders queue up rather than
+	// running in parallel. This makes the per-account "Syncing X: done/total"
+	// status line truthful (otherwise the last folder to emit progress would
+	// hide ongoing work on another folder) and keeps server load steady — only
+	// one bulk fetch in flight per account at a time.
+	syncMu stdsync.Mutex
 }
 
 // NewAccountWorker constructs a worker. It does no I/O.
@@ -181,6 +189,8 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 // and for polling-based discovery (where multiple unread messages may be
 // pulled at once and we don't want to spam N system notifications).
 func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID int64, name, role string, notify bool) error {
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
 	state, err := c.Select(ctx, name)
 	if err != nil {
 		return err
