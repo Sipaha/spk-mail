@@ -14,7 +14,7 @@ type FolderRow struct {
 }
 
 func (s *Store) UpsertFolder(ctx context.Context, f FolderRow) (int64, error) {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO folders(account_id,name,delimiter,role,uid_validity,uid_next,last_synced_at)
 		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(account_id,name) DO UPDATE SET
@@ -28,12 +28,12 @@ func (s *Store) UpsertFolder(ctx context.Context, f FolderRow) (int64, error) {
 		return 0, err
 	}
 	var id int64
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM folders WHERE account_id=? AND name=?`, f.AccountID, f.Name).Scan(&id)
+	err = s.writeDB.QueryRowContext(ctx, `SELECT id FROM folders WHERE account_id=? AND name=?`, f.AccountID, f.Name).Scan(&id)
 	return id, err
 }
 
 func (s *Store) ListFolders(ctx context.Context, accountID int64) ([]FolderRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id,account_id,name,delimiter,role,uid_validity,uid_next,last_synced_at
 		FROM folders WHERE account_id = ? ORDER BY name`, accountID)
 	if err != nil {

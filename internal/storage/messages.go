@@ -28,7 +28,7 @@ type MessageRow struct {
 }
 
 func (s *Store) InsertMessage(ctx context.Context, m MessageRow) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO messages(account_id,folder_id,uid,message_id,in_reply_to,references_,thread_id,
 			subject,from_addr,to_addrs,cc_addrs,date,flags,has_attachments,size_bytes,body_text,body_html)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -41,7 +41,7 @@ func (s *Store) InsertMessage(ctx context.Context, m MessageRow) (int64, error) 
 }
 
 func (s *Store) GetMessage(ctx context.Context, id int64) (MessageRow, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.readDB.QueryRowContext(ctx, `
 		SELECT id,account_id,folder_id,uid,message_id,in_reply_to,references_,thread_id,
 			subject,from_addr,to_addrs,cc_addrs,date,flags,has_attachments,size_bytes,body_text,body_html
 		FROM messages WHERE id = ?`, id)
@@ -57,7 +57,7 @@ func (s *Store) GetMessage(ctx context.Context, id int64) (MessageRow, error) {
 }
 
 func (s *Store) GetMessagesByThread(ctx context.Context, threadID int64) ([]MessageRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id,account_id,folder_id,uid,message_id,in_reply_to,references_,thread_id,
 			subject,from_addr,to_addrs,cc_addrs,date,flags,has_attachments,size_bytes,body_text,body_html
 		FROM messages WHERE thread_id = ? ORDER BY date`, threadID)
@@ -80,7 +80,7 @@ func (s *Store) GetMessagesByThread(ctx context.Context, threadID int64) ([]Mess
 }
 
 func (s *Store) UpdateFlags(ctx context.Context, id int64, flagsJSON string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE messages SET flags = ? WHERE id = ?`, flagsJSON, id)
+	_, err := s.writeDB.ExecContext(ctx, `UPDATE messages SET flags = ? WHERE id = ?`, flagsJSON, id)
 	return err
 }
 
@@ -88,7 +88,7 @@ func (s *Store) UpdateFlags(ctx context.Context, id int64, flagsJSON string) err
 // AllowRemoteForMessage to persist the unblocked HTML so subsequent reads see
 // the same image-allowed version without re-running the unblocker.
 func (s *Store) UpdateBodyHTML(ctx context.Context, id int64, html string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE messages SET body_html = ? WHERE id = ?`, html, id)
+	_, err := s.writeDB.ExecContext(ctx, `UPDATE messages SET body_html = ? WHERE id = ?`, html, id)
 	return err
 }
 
@@ -112,9 +112,15 @@ func (s *Store) FindThreadByMessageIDs(ctx context.Context, msgIDs []string) (in
 	}
 	q += `) LIMIT 1`
 	var tid int64
-	err := s.db.QueryRowContext(ctx, q, args...).Scan(&tid)
+	err := s.readDB.QueryRowContext(ctx, q, args...).Scan(&tid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
 	return tid, err == nil, err
+}
+
+// MarkMessagesRead is the batched mark-as-read writer. Real implementation
+// lands in Task 3 of the split-connections plan.
+func (s *Store) MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutcome, error) {
+	panic("MarkMessagesRead: implementation pending — see plan Task 3")
 }

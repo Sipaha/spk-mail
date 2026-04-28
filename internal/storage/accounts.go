@@ -25,7 +25,7 @@ type AccountRow struct {
 }
 
 func (s *Store) InsertAccount(ctx context.Context, a AccountRow) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO accounts(name,email,imap_host,imap_port,imap_username,use_tls,color,created_at,profile_id)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
 		a.Name, a.Email, a.IMAPHost, a.IMAPPort, a.IMAPUsername, boolToInt(a.UseTLS), a.Color, a.CreatedAt, a.ProfileID)
@@ -38,7 +38,7 @@ func (s *Store) InsertAccount(ctx context.Context, a AccountRow) (int64, error) 
 func (s *Store) GetAccount(ctx context.Context, id int64) (AccountRow, error) {
 	var a AccountRow
 	var useTLS int
-	err := s.db.QueryRowContext(ctx,
+	err := s.readDB.QueryRowContext(ctx,
 		`SELECT id,name,email,imap_host,imap_port,imap_username,use_tls,color,created_at,profile_id
 		 FROM accounts WHERE id = ?`, id).
 		Scan(&a.ID, &a.Name, &a.Email, &a.IMAPHost, &a.IMAPPort, &a.IMAPUsername, &useTLS, &a.Color, &a.CreatedAt, &a.ProfileID)
@@ -50,7 +50,7 @@ func (s *Store) GetAccount(ctx context.Context, id int64) (AccountRow, error) {
 }
 
 func (s *Store) ListAccounts(ctx context.Context) ([]AccountRow, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.readDB.QueryContext(ctx,
 		`SELECT id,name,email,imap_host,imap_port,imap_username,use_tls,color,created_at,profile_id
 		 FROM accounts ORDER BY id`)
 	if err != nil {
@@ -71,7 +71,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]AccountRow, error) {
 }
 
 func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, id)
+	res, err := s.writeDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}

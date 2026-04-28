@@ -44,7 +44,7 @@ type ThreadFilter struct {
 // the bundle (which they don't actually want, since they're testing thread
 // queries in isolation).
 func (s *Store) InsertThread(ctx context.Context, t ThreadRow) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO threads(subject_norm,last_date,msg_count,unread_count,has_flagged,has_attach)
 		VALUES (?,?,?,?,?,?)`,
 		t.SubjectNorm, t.LastDate, t.MsgCount, t.UnreadCount, boolToInt(t.HasFlagged), boolToInt(t.HasAttach))
@@ -110,7 +110,7 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 	q += " ORDER BY t.last_date DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.readDB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ type FolderCounts struct {
 // membership is checked via json_each(m.flags) so it is robust to any JSON
 // escape encoding of the flags array.
 func (s *Store) MessageCountsByFolder(ctx context.Context, accountID int64) (map[int64]FolderCounts, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT m.folder_id,
 		       COUNT(*) AS total,
 		       SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen') THEN 1 ELSE 0 END) AS unread,
@@ -193,7 +193,7 @@ func (s *Store) MessageCountsByFolder(ctx context.Context, accountID int64) (map
 // inside an InsertParsedMessageBundle transaction; keeping a single source
 // avoids the two going out of sync.
 func (s *Store) UpdateThreadStats(ctx context.Context, threadID int64) error {
-	return updateThreadStats(ctx, s.db, threadID)
+	return updateThreadStats(ctx, s.writeDB, threadID)
 }
 
 // RecomputeAllThreadStats walks every thread row and re-runs UpdateThreadStats.
@@ -202,7 +202,7 @@ func (s *Store) UpdateThreadStats(ctx context.Context, threadID int64) error {
 // has_attach (e.g. left behind by an older LIKE-based query, or by a partial
 // write) is repaired without user action.
 func (s *Store) RecomputeAllThreadStats(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM threads`)
+	rows, err := s.writeDB.QueryContext(ctx, `SELECT id FROM threads`)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (s *Store) FindThreadBySubject(ctx context.Context, accountID int64, subjec
 	from := dateUnix - windowSeconds
 	to := dateUnix + windowSeconds
 	var id int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.readDB.QueryRowContext(ctx, `
 		SELECT t.id FROM threads t
 		WHERE t.subject_norm = ? AND t.last_date BETWEEN ? AND ?
 		  AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.account_id = ?)
