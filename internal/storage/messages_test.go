@@ -154,6 +154,53 @@ func TestMarkMessagesRead_EmptyInput(t *testing.T) {
 	require.Empty(t, out.ChangedThreadIDs)
 }
 
+// TestMarkMessagesRead_AtomicityRollback proves that a mid-tx failure rolls
+// back EVERY flag update — none of the earlier-in-loop messages stays \Seen.
+// Forcing scenario: poison one input row's flags column with malformed JSON
+// so json.Unmarshal returns an error after some prior rows in the same tx
+// have already been UPDATEd.
+func TestMarkMessagesRead_AtomicityRollback(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, err := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+
+	mkMsg := func(uid int64, flags string) int64 {
+		id, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: uid, Flags: flags,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	good := mkMsg(1, `[]`)
+	// Poison: not valid JSON. Insert with valid flags first (InsertMessage
+	// doesn't validate), then overwrite the column directly via writeDB to
+	// bypass any future validation.
+	bad := mkMsg(2, `[]`)
+	_, err = s.DB().ExecContext(ctx, `UPDATE messages SET flags = ? WHERE id = ?`, "not-json", bad)
+	require.NoError(t, err)
+
+	out, err := s.MarkMessagesRead(ctx, []int64{good, bad})
+	require.Error(t, err, "malformed JSON in one row must surface as an error")
+	require.Empty(t, out.Changed, "outcome must not leak partial state on rollback")
+	require.Empty(t, out.ChangedThreadIDs)
+
+	// The good row must still be unread — the UPDATE inside the rolled-back tx
+	// did not commit.
+	row, err := s.GetMessage(ctx, good)
+	require.NoError(t, err)
+	require.Equal(t, `[]`, row.Flags,
+		"good message must remain byte-identical — tx rolled back after bad row failed mid-loop")
+}
+
 // TestMarkMessagesRead_NilThreadID covers a message with thread_id IS NULL
 // (e.g. mid-flight during sync, before threading runs). The flag flip must
 // still happen and the change must appear in out.Changed with ThreadID=nil,
