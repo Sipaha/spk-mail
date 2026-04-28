@@ -63,3 +63,8 @@ attachments/
 # direnv
 .direnv/
 .envrc.local
+
+# Local development plans / specs (kept on disk for personal reference,
+# but not version-controlled — the README + CLAUDE.md + docs/ui-testing.md
+# and the source itself are the source of truth for anything still in scope).
+docs/superpowers/
