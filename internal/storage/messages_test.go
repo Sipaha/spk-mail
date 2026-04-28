@@ -72,3 +72,84 @@ func TestFindThreadByMessageIDs_MatchesInReplyTo(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, threadID, id)
 }
+
+func TestMarkMessagesRead_Batch(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	// Setup: account, folder, two threads, four messages.
+	//   m1, m2 — unread in thread T1
+	//   m3 — unread in thread T2
+	//   m4 — already \Seen in thread T1 (must NOT appear in Changed)
+	accID, err := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+
+	// Insert threads via direct SQL (test-only convenience — no public Insert helper).
+	threadInsert := func(subj string, lastDate int64) int64 {
+		res, err := s.DB().ExecContext(ctx,
+			`INSERT INTO threads(subject_norm, last_date, msg_count, unread_count) VALUES (?,?,0,0)`,
+			subj, lastDate)
+		require.NoError(t, err)
+		id, _ := res.LastInsertId()
+		return id
+	}
+	t1 := threadInsert("t1", 100)
+	t2 := threadInsert("t2", 200)
+
+	mkMsg := func(uid int64, threadID int64, flags string) int64 {
+		id, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: uid,
+			ThreadID: &threadID, Flags: flags,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	m1 := mkMsg(1, t1, `[]`)
+	m2 := mkMsg(2, t1, `["\\Flagged"]`)       // unread, has another flag
+	m3 := mkMsg(3, t2, `[]`)
+	m4 := mkMsg(4, t1, `["\\Seen"]`)           // already seen — must skip
+
+	out, err := s.MarkMessagesRead(ctx, []int64{m1, m2, m3, m4})
+	require.NoError(t, err)
+
+	require.Len(t, out.Changed, 3, "m4 was already seen and must be excluded")
+	changedIDs := make([]int64, len(out.Changed))
+	for i, c := range out.Changed {
+		changedIDs[i] = c.MessageID
+	}
+	require.ElementsMatch(t, []int64{m1, m2, m3}, changedIDs)
+	require.ElementsMatch(t, []int64{t1, t2}, out.ChangedThreadIDs,
+		"both touched threads must be reported, deduped")
+
+	// DB state: each changed message has \Seen appended; m4 unchanged.
+	for _, id := range []int64{m1, m2, m3} {
+		row, err := s.GetMessage(ctx, id)
+		require.NoError(t, err)
+		require.Contains(t, row.Flags, `\Seen`, "m%d should have \\Seen", id)
+	}
+	row4, err := s.GetMessage(ctx, m4)
+	require.NoError(t, err)
+	require.Equal(t, `["\\Seen"]`, row4.Flags, "m4 must be byte-identical (no double-seen)")
+
+	// Per-message metadata propagated for IMAP STORE.
+	for _, ch := range out.Changed {
+		require.Equal(t, accID, ch.AccountID)
+		require.Equal(t, folderID, ch.FolderID)
+		require.NotNil(t, ch.ThreadID)
+	}
+}
+
+func TestMarkMessagesRead_EmptyInput(t *testing.T) {
+	s := openTestStore(t)
+	out, err := s.MarkMessagesRead(context.Background(), nil)
+	require.NoError(t, err)
+	require.Empty(t, out.Changed)
+	require.Empty(t, out.ChangedThreadIDs)
+}

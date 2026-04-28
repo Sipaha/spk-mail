@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"slices"
 	"sort"
 	"strings"
 
@@ -136,45 +135,24 @@ func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
 }
 
 func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
-	for _, id := range ids {
-		m, err := s.Store.GetMessage(ctx, id)
-		if err != nil {
-			return err
-		}
-		var fl []string
-		if err := json.Unmarshal([]byte(m.Flags), &fl); err != nil {
-			slog.Warn("MarkRead: bad flags JSON", "id", id, "err", err)
-			continue
-		}
-		// Idempotency: skip the DB update + IMAP STORE + SSE event if the
-		// message is already \Seen. Saves a round-trip and avoids spurious
-		// MessageUpdated events on repeated marks.
-		if slices.Contains(fl, `\Seen`) {
-			continue
-		}
-		fl = append(fl, `\Seen`)
-		b, _ := json.Marshal(fl)
-		if err := s.Store.UpdateFlags(ctx, id, string(b)); err != nil {
-			return err
-		}
+	out, err := s.Store.MarkMessagesRead(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, ch := range out.Changed {
 		if s.Engine != nil {
-			if w := s.Engine.WorkerFor(m.AccountID); w != nil {
+			if w := s.Engine.WorkerFor(ch.AccountID); w != nil {
 				w.SubmitFlagOp(flagop.Op{
-					AccountID: m.AccountID,
-					FolderUID: flagop.FolderUID{FolderID: m.FolderID, UID: m.UID},
+					AccountID: ch.AccountID,
+					FolderUID: flagop.FolderUID{FolderID: ch.FolderID, UID: ch.UID},
 					Add:       true,
 					Flags:     []string{`\Seen`},
 				})
 			} else {
-				slog.Warn("MarkRead: no worker for account", "account_id", m.AccountID)
+				slog.Warn("MarkRead: no worker for account", "account_id", ch.AccountID)
 			}
 		}
-		if m.ThreadID != nil {
-			if err := s.Store.UpdateThreadStats(ctx, *m.ThreadID); err != nil {
-				return err
-			}
-		}
-		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": id}})
+		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": ch.MessageID}})
 	}
 	return nil
 }
