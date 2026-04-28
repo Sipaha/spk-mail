@@ -58,15 +58,10 @@ func TestEngine_TwoAccountsSyncInParallel(t *testing.T) {
 	eng := NewEngine(st, sec, em)
 	go eng.Run(runCtx)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		threads, _ := st.ListThreadsRecent(context.Background(), 100, 0)
-		if len(threads) >= 2 {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatal("expected 2 threads")
+		return len(threads) >= 2
+	}, 5*time.Second, 100*time.Millisecond, "expected at least 2 threads from two parallel mock servers")
 }
 
 // TestEngine_AttachmentDownloaderWiring verifies that NewEngineWithDir wires

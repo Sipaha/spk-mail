@@ -59,13 +59,8 @@ func TestAccountWorker_InitialSync(t *testing.T) {
 	w := NewAccountWorker(accID, st, sec, writer, em)
 	go w.Run(runCtx)
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		threads, _ := st.ListThreadsRecent(context.Background(), 10, 0)
-		if len(threads) >= 1 {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatal("timeout waiting for sync")
+		return len(threads) >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected at least one thread after sync")
 }

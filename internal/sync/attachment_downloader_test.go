@@ -77,15 +77,11 @@ func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 
 	// Wait for the AccountWorker + StoreWriter to insert the message and its
 	// attachment row.
-	deadline := time.Now().Add(5 * time.Second)
 	var attID int64
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		row := st.DB().QueryRow(`SELECT id FROM attachments LIMIT 1`)
-		if err := row.Scan(&attID); err == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return row.Scan(&attID) == nil
+	}, 5*time.Second, 50*time.Millisecond, "attachment row was never inserted")
 	require.NotZero(t, attID, "attachment row was never inserted")
 
 	// Drive the downloader directly via runOnce — calling Run would have us
@@ -166,15 +162,11 @@ func TestAttachmentDownloader_RejectsPathTraversal(t *testing.T) {
 	w := NewAccountWorker(accID, st, sec, writer, em)
 	go w.Run(runCtx)
 
-	deadline := time.Now().Add(5 * time.Second)
 	var attID int64
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		row := st.DB().QueryRow(`SELECT id FROM attachments LIMIT 1`)
-		if err := row.Scan(&attID); err == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return row.Scan(&attID) == nil
+	}, 5*time.Second, 50*time.Millisecond, "attachment row was never inserted")
 	require.NotZero(t, attID, "attachment row was never inserted")
 
 	attachRoot := filepath.Join(dir, "attachments")

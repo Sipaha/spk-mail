@@ -33,16 +33,10 @@ func TestStoreWriter_InsertsAndCreatesThread(t *testing.T) {
 	}, "\r\n")
 	require.NoError(t, w.Submit(runCtx, IncomingMessage{AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 1, Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw)}))
 
-	// Wait briefly for processing
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		threads, _ := st.ListThreadsRecent(context.Background(), 10, 0)
-		if len(threads) == 1 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("no thread created within timeout")
+		return len(threads) == 1
+	}, 2*time.Second, 20*time.Millisecond, "expected exactly one thread after submit")
 }
 
 // TestStoreWriter_DuplicateInsert verifies that submitting the same
@@ -70,32 +64,23 @@ func TestStoreWriter_DuplicateInsert(t *testing.T) {
 	require.NoError(t, w.Submit(ctx, msg))
 	require.NoError(t, w.Submit(ctx, msg)) // duplicate UID — must not panic the writer
 
-	deadline := time.Now().Add(2 * time.Second)
-	var rowCount int
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
+		var rowCount int
 		_ = st.DB().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM messages WHERE folder_id=? AND uid=?`, fID, 42).Scan(&rowCount)
-		if rowCount == 1 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	require.Equal(t, 1, rowCount, "duplicate UID must not create a second row")
+		return rowCount == 1
+	}, 2*time.Second, 20*time.Millisecond, "duplicate UID must not create a second row")
 
 	// A subsequent fresh submit on a different UID must still succeed —
 	// the writer survived the duplicate without going into a bad state.
 	raw2 := strings.Replace(raw, "<dup@x>", "<dup2@x>", 1)
 	require.NoError(t, w.Submit(ctx, IncomingMessage{AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 43, Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw2)}))
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
+		var rowCount int
 		_ = st.DB().QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM messages WHERE folder_id=?`, fID).Scan(&rowCount)
-		if rowCount == 2 {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("writer is stuck after duplicate insert: only %d rows", rowCount)
+		return rowCount == 2
+	}, 2*time.Second, 20*time.Millisecond, "writer is stuck after duplicate insert (expected 2 rows)")
 }
 
 // TestStoreWriter_IsResyncGatesArrived locks in the rule that MessageArrived
