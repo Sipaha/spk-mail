@@ -192,31 +192,59 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		prev.UIDNext = 0
 	}
 
-	msgCh, errCh := c.FetchSinceUID(ctx, prev.UIDNext, true)
-	maxUID := prev.UIDNext
-	for msg := range msgCh {
-		if msg.UID > maxUID {
-			maxUID = msg.UID
-		}
-		w.writer.Submit(IncomingMessage{
-			AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
-			Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
-			IsResync: prev.UIDValidity == 0,
-		})
-	}
-	if err := <-errCh; err != nil {
-		return err
-	}
-
+	// Batch fetch in chunks of fetchBatchSize UIDs. A single open-ended
+	// "UID FETCH N:*" works for small mailboxes but breaks on huge ones
+	// (>~3000 messages we observed Yandex closing the connection mid-stream).
+	// Persisting maxUID after each batch makes partial sync survive crashes.
 	rolePtr := prev.Role
-	if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
-		AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-		UIDValidity: state.UIDValidity, UIDNext: maxUID,
-	}); err != nil {
-		return err
+	cursor := prev.UIDNext
+	maxUID := cursor
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		batchEnd := cursor + fetchBatchSize
+		msgCh, errCh := c.FetchSinceUIDRange(ctx, cursor, batchEnd, true)
+		anySeen := false
+		for msg := range msgCh {
+			anySeen = true
+			if msg.UID > maxUID {
+				maxUID = msg.UID
+			}
+			w.writer.Submit(IncomingMessage{
+				AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
+				Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
+				IsResync: prev.UIDValidity == 0,
+			})
+		}
+		if err := <-errCh; err != nil {
+			return err
+		}
+		// Checkpoint after every batch — keeps partial progress if the next
+		// batch dies. UIDValidity is set unconditionally so subsequent runs
+		// don't treat the folder as fresh.
+		if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+			AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
+			UIDValidity: state.UIDValidity, UIDNext: maxUID,
+		}); err != nil {
+			return err
+		}
+		if !anySeen {
+			// No more messages above batchEnd — we're caught up.
+			break
+		}
+		cursor = batchEnd
 	}
 	return nil
 }
+
+// fetchBatchSize bounds each UID FETCH range. 500 keeps a single FETCH well
+// under the typical IMAP server's per-command timeout / response budget while
+// still being efficient enough that a 100k-message mailbox finishes in ~200
+// round-trips.
+const fetchBatchSize int64 = 500
 
 func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, folder, role string) {
 	pw, _ := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))

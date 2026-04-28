@@ -43,9 +43,23 @@ type FetchedMessage struct {
 	Raw      []byte
 }
 
-// FetchSinceUID streams messages with UID > sinceUID via UID FETCH.
+// FetchSinceUID streams messages with UID > sinceUID via UID FETCH using an
+// open-ended `n:*` range. Use FetchSinceUIDRange for a bounded range.
 // `body` true = include full RFC822 (used during initial sync); false = envelope only (not used yet).
 func (c *Client) FetchSinceUID(ctx context.Context, sinceUID int64, body bool) (<-chan FetchedMessage, <-chan error) {
+	return c.fetchUIDRange(ctx, imap.UID(sinceUID+1), 0, body)
+}
+
+// FetchSinceUIDRange streams messages with UID in (sinceUID, untilUID]. Both
+// bounds are inclusive on the upper side per IMAP convention. Used by callers
+// that want to bound the response size of a single FETCH (e.g. batched bulk
+// sync of a 90k-message mailbox where one open-ended FETCH would otherwise
+// time out).
+func (c *Client) FetchSinceUIDRange(ctx context.Context, sinceUID, untilUID int64, body bool) (<-chan FetchedMessage, <-chan error) {
+	return c.fetchUIDRange(ctx, imap.UID(sinceUID+1), imap.UID(untilUID), body)
+}
+
+func (c *Client) fetchUIDRange(ctx context.Context, fromUID, toUID imap.UID, body bool) (<-chan FetchedMessage, <-chan error) {
 	out := make(chan FetchedMessage, 16)
 	errCh := make(chan error, 1)
 
@@ -53,9 +67,9 @@ func (c *Client) FetchSinceUID(ctx context.Context, sinceUID int64, body bool) (
 		defer close(out)
 		defer close(errCh)
 
-		// Build "n:*" UID range. AddRange's stop=0 represents '*'.
+		// Build the UID range. AddRange's stop=0 represents '*'.
 		var seq imap.UIDSet
-		seq.AddRange(imap.UID(sinceUID+1), 0)
+		seq.AddRange(fromUID, toUID)
 
 		opts := &imap.FetchOptions{
 			Flags:        true,
