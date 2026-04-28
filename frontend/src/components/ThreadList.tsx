@@ -32,6 +32,15 @@ export default function ThreadList() {
   const leaveTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
 
   useEffect(() => {
+    // Clear the store's thread list synchronously before kicking off the new
+    // fetch. Without this, threads from the previous filter scope linger in
+    // the store until the new request resolves — and any unrelated re-render
+    // in that window (pinned cleared, an event-driven refetch fires, etc.)
+    // re-derives `visible` and the diff path repopulates rows with the OLD
+    // scope's data for one frame. That's the "flash of Default profile on
+    // an empty profile" glitch. Clearing first guarantees the only thing the
+    // user can see between switch and load is the empty state.
+    setThreads([])
     client.listThreads({
       account_id: filter.accountId,
       folder_id: filter.folderId,
