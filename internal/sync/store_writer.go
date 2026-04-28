@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -74,15 +75,29 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 	candidates := thread.CandidateMessageIDs(parsed.InReplyTo, parsed.References)
 	var existingThreadID int64
 	if len(candidates) > 0 {
-		if id, ok, _ := w.store.FindThreadByMessageIDs(ctx, candidates); ok {
+		// Surface transient busy-timeout / disk errors as a warn so a
+		// silent split-into-singleton (reply landing in its own thread
+		// because the lookup failed, not because nothing matched) shows
+		// up in the testapi log buffer. Fallthrough to subject + bundle
+		// insert is unchanged — this is observation, not behavior.
+		id, ok, err := w.store.FindThreadByMessageIDs(ctx, candidates)
+		if err != nil {
+			slog.Warn("FindThreadByMessageIDs failed; falling through to subject match",
+				"account_id", m.AccountID, "uid", m.UID, "err", err)
+		}
+		if ok {
 			existingThreadID = id
 		}
 	}
 	if existingThreadID == 0 {
-		// Discard real DB errors here — falling through to "create new thread"
-		// is the right behavior either way; a noisy log would just spam if the
-		// DB is broken (InsertParsedMessageBundle below surfaces it properly).
-		if id, ok, _ := w.store.FindThreadBySubject(ctx, m.AccountID, thread.NormalizeSubject(parsed.Subject), parsed.Date.Unix(), 14*86400); ok {
+		// As above, log warn but keep going — InsertParsedMessageBundle below
+		// will surface a real DB outage as a WriteError event regardless.
+		id, ok, err := w.store.FindThreadBySubject(ctx, m.AccountID, thread.NormalizeSubject(parsed.Subject), parsed.Date.Unix(), 14*86400)
+		if err != nil {
+			slog.Warn("FindThreadBySubject failed; will create a new thread",
+				"account_id", m.AccountID, "uid", m.UID, "err", err)
+		}
+		if ok {
 			existingThreadID = id
 		}
 	}

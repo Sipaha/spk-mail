@@ -18,6 +18,11 @@ To regenerate:
     GOFLAGS='-tags=wails' go-licenses csv ./cmd/spk-mail > /tmp/wails.csv
     sort -u /tmp/default.csv /tmp/wails.csv
 
+The `sort -u` output is raw CSV (`module,LICENSE-url,license`); paste each
+row into the `### Modules` table below as `| <module> | <license> | <url> |`,
+then re-run `make build` to confirm nothing was lost. The `### Summary`
+counts must be re-tallied by hand from the new module list.
+
 Apache-2.0 modules with their own NOTICE files have their attribution
 notices reproduced verbatim in the project's `NOTICE` file at the repo
 root.

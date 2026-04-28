@@ -1,6 +1,7 @@
 package mime
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -107,4 +108,32 @@ func TestSanitize_KeepsSafeInlineStyle(t *testing.T) {
 	// match the canonical form rather than the input.
 	require.Contains(t, out, "color: red")
 	require.Contains(t, out, "font-size: 14px")
+}
+
+// TestSanitize_StripsDangerousStyleValues pins each branch of the AllowStyles
+// MatchingHandler explicitly. The url() branch is already exercised by
+// TestSanitize_StripsUrlInInlineStyle; the others (expression, behavior,
+// @import, javascript:) had only indirect coverage and a regression in any
+// one branch would silently re-open a side-channel into network/script.
+func TestSanitize_StripsDangerousStyleValues(t *testing.T) {
+	// Each input contains one safe property + one dangerous property; the
+	// safe one must survive (proves bluemonday parsed the style block) and
+	// the dangerous one must be dropped (proves the handler rejected it).
+	cases := []struct {
+		name        string
+		input       string
+		mustNotHave string
+	}{
+		{"expression()", `<p style="color:red; width:expression(alert(1))">x</p>`, "expression"},
+		{"behavior",     `<p style="color:red; behavior:url(#default#VML)">x</p>`, "behavior"},
+		{"@import",      `<p style="color:red; background:@import url(https://x/y.css)">x</p>`, "@import"},
+		{"javascript:",  `<p style="color:red; background:javascript:alert(1)">x</p>`, "javascript:"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := Sanitize(tc.input)
+			require.NotContainsf(t, strings.ToLower(out), tc.mustNotHave, "out=%s", out)
+			require.Containsf(t, out, "color: red", "safe property dropped — handler regressed; out=%s", out)
+		})
+	}
 }

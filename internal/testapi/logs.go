@@ -6,8 +6,10 @@ package testapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,28 +20,43 @@ type LogEntry struct {
 	Message string `json:"message"`
 }
 
+// RingBuffer is a fixed-size ring of LogEntry rows. The underlying array is
+// allocated once at NewRingBuffer time; Append never reslices, so the
+// original backing memory cannot leak past `size` entries.
 type RingBuffer struct {
-	mu   sync.Mutex
-	buf  []LogEntry
-	size int
+	mu    sync.Mutex
+	buf   []LogEntry
+	size  int
+	next  int  // index of the next write slot
+	full  bool // true once we have wrapped past `size` writes
 }
 
-func NewRingBuffer(size int) *RingBuffer { return &RingBuffer{size: size} }
+func NewRingBuffer(size int) *RingBuffer {
+	return &RingBuffer{buf: make([]LogEntry, size), size: size}
+}
 
 func (r *RingBuffer) Append(e LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.buf) >= r.size {
-		r.buf = r.buf[1:]
+	r.buf[r.next] = e
+	r.next++
+	if r.next == r.size {
+		r.next = 0
+		r.full = true
 	}
-	r.buf = append(r.buf, e)
 }
 
 func (r *RingBuffer) Snapshot() []LogEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]LogEntry, len(r.buf))
-	copy(out, r.buf)
+	if !r.full {
+		out := make([]LogEntry, r.next)
+		copy(out, r.buf[:r.next])
+		return out
+	}
+	out := make([]LogEntry, r.size)
+	copy(out, r.buf[r.next:])
+	copy(out[r.size-r.next:], r.buf[:r.next])
 	return out
 }
 
@@ -64,8 +81,28 @@ func (h *SlogHandler) Enabled(ctx context.Context, l slog.Level) bool {
 	return h.inner.Enabled(ctx, l)
 }
 func (h *SlogHandler) Handle(ctx context.Context, r slog.Record) error {
-	h.rb.Append(LogEntry{Time: time.Now().Unix(), Level: r.Level.String(), Message: r.Message})
+	h.rb.Append(LogEntry{Time: time.Now().Unix(), Level: r.Level.String(), Message: formatRecord(r)})
 	return h.inner.Handle(ctx, r)
+}
+
+// formatRecord renders the slog.Record's message with all attached attrs
+// appended as `key=value` pairs. Without this the testapi log buffer drops
+// every structured field, so Playwright assertions can match only on the
+// hand-written part of slog.Warn(...) calls.
+func formatRecord(r slog.Record) string {
+	if r.NumAttrs() == 0 {
+		return r.Message
+	}
+	var b strings.Builder
+	b.WriteString(r.Message)
+	r.Attrs(func(a slog.Attr) bool {
+		b.WriteByte(' ')
+		b.WriteString(a.Key)
+		b.WriteByte('=')
+		fmt.Fprint(&b, a.Value.Any())
+		return true
+	})
+	return b.String()
 }
 func (h *SlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &SlogHandler{inner: h.inner.WithAttrs(attrs), rb: h.rb}

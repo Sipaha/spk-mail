@@ -33,6 +33,9 @@ func (e *Emitter) Subscribe() (<-chan Event, func()) {
 }
 
 func (e *Emitter) Emit(ev Event) {
+	if e == nil {
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, ch := range e.subs {
