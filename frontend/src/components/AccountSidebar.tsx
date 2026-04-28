@@ -27,11 +27,18 @@ export default function AccountSidebar() {
                 {a.status}
               </span>
             </button>
-            {isSyncing && (
-              <div className="text-[10px] text-zinc-500 px-3 py-0.5 truncate">
-                Syncing {progress.folder}: {progress.done.toLocaleString()} / {progress.total.toLocaleString()}
-              </div>
-            )}
+            {/* Sync status line: always rendered so the folder tree below
+                does not jump when sync starts/finishes. When idle, the row is
+                visually hidden (opacity-0) but still occupies its height. */}
+            <div
+              aria-hidden={!isSyncing}
+              className={`text-[10px] px-3 py-0.5 truncate transition-opacity duration-150 pointer-events-none ${
+                isSyncing ? 'text-zinc-500 opacity-100' : 'opacity-0'
+              }`}>
+              {isSyncing
+                ? `Syncing ${progress.folder}: ${progress.done.toLocaleString()} / ${progress.total.toLocaleString()}`
+                : ' ' /* nbsp — keeps the row height identical when idle */}
+            </div>
             <FolderTree accountId={a.id} />
           </div>
         )
