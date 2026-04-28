@@ -77,10 +77,10 @@ func TestInsertParsedMessageBundle_HappyPath(t *testing.T) {
 	require.Greater(t, msgID, int64(0))
 	require.Greater(t, threadID, int64(0))
 
-	atts, err := s.ListAttachmentsByMessage(ctx, msgID)
+	got, err := s.ListAttachmentsByMessages(ctx, []int64{msgID})
 	require.NoError(t, err)
-	require.Len(t, atts, 1)
-	require.Equal(t, "a.pdf", atts[0].Filename)
+	require.Len(t, got[msgID], 1)
+	require.Equal(t, "a.pdf", got[msgID][0].Filename)
 
 	msg, err := s.GetMessage(ctx, msgID)
 	require.NoError(t, err)

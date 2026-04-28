@@ -91,6 +91,19 @@ func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(rows) == 0 {
+		return []MessageDTO{}, nil
+	}
+
+	msgIDs := make([]int64, len(rows))
+	for i, r := range rows {
+		msgIDs[i] = r.ID
+	}
+	attsByMsg, err := s.Store.ListAttachmentsByMessages(ctx, msgIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	out := make([]MessageDTO, 0, len(rows))
 	for _, r := range rows {
 		var to []string
@@ -103,10 +116,13 @@ func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
 		if err := json.Unmarshal([]byte(r.Flags), &fl); err != nil {
 			slog.Warn("GetThread: bad flags JSON", "id", r.ID, "err", err)
 		}
-		atts, _ := s.Store.ListAttachmentsByMessage(ctx, r.ID)
+		atts := attsByMsg[r.ID] // nil-slice-friendly: missing key → nil
 		dtoAtts := make([]AttachmentDTO, 0, len(atts))
 		for _, a := range atts {
-			dtoAtts = append(dtoAtts, AttachmentDTO{ID: a.ID, Filename: a.Filename, ContentType: a.ContentType, SizeBytes: a.SizeBytes, Downloaded: a.LocalPath != nil})
+			dtoAtts = append(dtoAtts, AttachmentDTO{
+				ID: a.ID, Filename: a.Filename, ContentType: a.ContentType,
+				SizeBytes: a.SizeBytes, Downloaded: a.LocalPath != nil,
+			})
 		}
 		out = append(out, MessageDTO{
 			ID: r.ID, AccountID: r.AccountID, FolderID: r.FolderID,

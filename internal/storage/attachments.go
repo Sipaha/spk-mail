@@ -25,24 +25,6 @@ func (s *Store) InsertAttachment(ctx context.Context, a AttachmentRow) (int64, e
 	return res.LastInsertId()
 }
 
-func (s *Store) ListAttachmentsByMessage(ctx context.Context, msgID int64) ([]AttachmentRow, error) {
-	rows, err := s.readDB.QueryContext(ctx, `
-		SELECT id,message_id,part_id,filename,content_type,size_bytes,sha256,local_path,downloaded_at
-		FROM attachments WHERE message_id = ? ORDER BY id`, msgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []AttachmentRow
-	for rows.Next() {
-		var a AttachmentRow
-		if err := rows.Scan(&a.ID, &a.MessageID, &a.PartID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.SHA256, &a.LocalPath, &a.DownloadedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
 
 type PendingAttachment struct {
 	AttachmentID int64
@@ -114,8 +96,40 @@ func (s *Store) GetAttachmentLocalPath(ctx context.Context, id int64) (string, b
 	return *lp, true, nil
 }
 
-// ListAttachmentsByMessages is the batch counterpart to ListAttachmentsByMessage.
-// Real implementation lands in Task 2 of the split-connections plan.
+// ListAttachmentsByMessages returns a map of message ID → attachments for all
+// given message IDs in a single query. Message IDs with no attachments are
+// absent from the result map. Empty/nil input returns an empty map immediately.
 func (s *Store) ListAttachmentsByMessages(ctx context.Context, msgIDs []int64) (map[int64][]AttachmentRow, error) {
-	panic("ListAttachmentsByMessages: implementation pending — see plan Task 2")
+	if len(msgIDs) == 0 {
+		return map[int64][]AttachmentRow{}, nil
+	}
+	// Build placeholder list "?,?,?" — len(msgIDs) is bounded by the size of
+	// a message thread (small, no need for batching).
+	q := `SELECT id, message_id, part_id, filename, content_type, size_bytes, sha256, local_path, downloaded_at
+	      FROM attachments WHERE message_id IN (`
+	args := make([]any, len(msgIDs))
+	for i, id := range msgIDs {
+		if i > 0 {
+			q += ","
+		}
+		q += "?"
+		args[i] = id
+	}
+	q += `) ORDER BY message_id, id`
+
+	rows, err := s.readDB.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64][]AttachmentRow)
+	for rows.Next() {
+		var a AttachmentRow
+		if err := rows.Scan(&a.ID, &a.MessageID, &a.PartID, &a.Filename,
+			&a.ContentType, &a.SizeBytes, &a.SHA256, &a.LocalPath, &a.DownloadedAt); err != nil {
+			return nil, err
+		}
+		out[a.MessageID] = append(out[a.MessageID], a)
+	}
+	return out, rows.Err()
 }
