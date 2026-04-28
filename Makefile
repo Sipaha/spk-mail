@@ -1,4 +1,4 @@
-.PHONY: build build-fast build-desktop test test-go test-front test-e2e lint fmt tidy clean run run-browser
+.PHONY: build build-fast build-desktop release test test-go test-front test-e2e lint fmt tidy clean run run-browser
 
 BIN_DIR := build/bin
 BIN     := $(BIN_DIR)/spk-mail
@@ -24,6 +24,22 @@ build-desktop: build-frontend
 	mkdir -p $(BIN_DIR)
 	rm -rf cmd/spk-mail/dist && cp -r frontend/dist cmd/spk-mail/dist
 	CGO_ENABLED=1 go build -tags "wails desktop_only" -trimpath -ldflags="-w -s" -o $(BIN_DIR)/spk-mail-desktop ./cmd/spk-mail
+	rm -rf cmd/spk-mail/dist
+	mkdir -p cmd/spk-mail/dist
+	touch cmd/spk-mail/dist/.gitkeep
+
+# release builds the desktop binary with the `production` tag set.
+# Effects vs build-desktop:
+#   * DevTools off (see internal/desktop/devtools_prod.go)
+#   * pkg/application/application_debug.go is excluded, dropping the
+#     go-git + go-billy + xanzy/ssh-agent + ProtonMail/go-crypto +
+#     cloudflare/circl + groupcache transitive chain from the binary
+#     (verify with `go mod why -m github.com/go-git/go-git/v5` after
+#     building — it should report "not needed").
+release: build-frontend
+	mkdir -p $(BIN_DIR)
+	rm -rf cmd/spk-mail/dist && cp -r frontend/dist cmd/spk-mail/dist
+	CGO_ENABLED=1 go build -tags "wails desktop_only production" -trimpath -ldflags="-w -s" -o $(BIN_DIR)/spk-mail-release ./cmd/spk-mail
 	rm -rf cmd/spk-mail/dist
 	mkdir -p cmd/spk-mail/dist
 	touch cmd/spk-mail/dist/.gitkeep

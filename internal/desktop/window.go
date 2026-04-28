@@ -60,11 +60,12 @@ func Run(ctx context.Context, opts Options) error {
 		Height:           800,
 		BackgroundColour: application.NewRGBA(10, 10, 10, 255),
 		URL:              "/",
-		// Pre-release: keep DevTools on so users can inspect IPC traffic.
-		// Wails defaults this to true unless built with `-tags production`,
-		// but we set it explicitly so the intent is obvious. Disable by
-		// adding the production tag in a release build.
-		DevToolsEnabled: true,
+		// Build-tag gated. Dev builds keep DevTools on for IPC/DOM
+		// inspection (see devtools_dev.go); release builds (built with
+		// `-tags production`, e.g. via `make release`) flip this off so
+		// in-memory state — including unwrapped IMAP credentials living
+		// in goroutines — is not inspectable from the embedded webview.
+		DevToolsEnabled: devToolsEnabled,
 	})
 
 	// Hide the window on close instead of quitting. RegisterHook fires before
