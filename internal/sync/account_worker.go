@@ -293,10 +293,16 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			batchEnd = serverUIDNext
 		}
 		msgCh, errCh := c.FetchSinceUIDRange(ctx, cursor, batchEnd, true)
+		// batchAck tracks how many of this batch's messages are still
+		// in-flight in the StoreWriter. We Wait on it before emitting
+		// SyncProgress so the frontend can't see "all synced" before
+		// the matching MessageInserted events have fired.
+		var batchAck stdsync.WaitGroup
 		for msg := range msgCh {
 			if msg.UID > maxUID {
 				maxUID = msg.UID
 			}
+			batchAck.Add(1)
 			if err := w.writer.Submit(ctx, IncomingMessage{
 				AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
 				Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
@@ -306,12 +312,25 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 				// "this is the very first fetch ever for this folder", not
 				// "this fetch is a real-time arrival").
 				IsResync: !notify,
+				Ack:      batchAck.Done,
 			}); err != nil {
+				batchAck.Done() // never enqueued
 				return err
 			}
 		}
 		if err := <-errCh; err != nil {
 			return err
+		}
+		// Wait for the writer to finish persisting every message in this
+		// batch before we tell the UI we're done with it. Plain Wait()
+		// would block on a stuck writer past ctx cancellation, so wrap it
+		// in a goroutine + select.
+		drained := make(chan struct{})
+		go func() { batchAck.Wait(); close(drained) }()
+		select {
+		case <-drained:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 		// Checkpoint after every batch — keeps partial progress if the next
 		// batch dies. UIDValidity is set unconditionally so subsequent runs

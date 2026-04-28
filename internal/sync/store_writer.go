@@ -61,6 +61,9 @@ func (w *StoreWriter) Run(ctx context.Context) {
 }
 
 func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
+	if m.Ack != nil {
+		defer m.Ack()
+	}
 	parsed, err := mimep.Parse(m.Raw)
 	if err != nil {
 		return err
