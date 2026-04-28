@@ -19,17 +19,17 @@ type LogEntry struct {
 }
 
 type RingBuffer struct {
-	mu  sync.Mutex
-	buf []LogEntry
-	cap int
+	mu   sync.Mutex
+	buf  []LogEntry
+	size int
 }
 
-func NewRingBuffer(cap int) *RingBuffer { return &RingBuffer{cap: cap} }
+func NewRingBuffer(size int) *RingBuffer { return &RingBuffer{size: size} }
 
 func (r *RingBuffer) Append(e LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.buf) >= r.cap {
+	if len(r.buf) >= r.size {
 		r.buf = r.buf[1:]
 	}
 	r.buf = append(r.buf, e)

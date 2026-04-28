@@ -1,9 +1,21 @@
+import { useShallow } from 'zustand/shallow'
 import { useStore } from '../store'
 import FolderTree from './FolderTree'
 
 export default function AccountSidebar() {
   const accounts = useStore(s => s.accounts)
-  const filter = useStore(s => s.filter)
+  // Subscribe only to the filter primitives this component actually reads
+  // (the bg-zinc-800 active-state check). useShallow short-circuits on equal
+  // values so a `setFilter` that doesn't change these specific fields no
+  // longer re-renders the whole sidebar.
+  const { accountId, folderId, unreadOnly, hasFlagged } = useStore(
+    useShallow(s => ({
+      accountId: s.filter.accountId,
+      folderId: s.filter.folderId,
+      unreadOnly: s.filter.unreadOnly,
+      hasFlagged: s.filter.hasFlagged,
+    })),
+  )
   const setFilter = useStore(s => s.setFilter)
   const activeProfileId = useStore(s => s.activeProfileId)
   const syncProgress = useStore(s => s.syncProgress)
@@ -20,7 +32,7 @@ export default function AccountSidebar() {
           <div key={a.id}>
             <button
               onClick={() => setFilter({ accountId: a.id, folderId: undefined, unreadOnly: false, hasFlagged: false })}
-              className={`w-full flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800 ${filter.accountId === a.id && filter.folderId === undefined && !filter.unreadOnly && !filter.hasFlagged ? 'bg-zinc-800' : ''}`}>
+              className={`w-full flex items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800 ${accountId === a.id && folderId === undefined && !unreadOnly && !hasFlagged ? 'bg-zinc-800' : ''}`}>
               <span className="size-2.5 rounded-full" style={{ background: a.color }} />
               <span className="truncate">{a.name}</span>
               <span className={`ml-auto text-[10px] ${a.status === 'ok' ? 'text-emerald-400' : a.status === 'connecting' ? 'text-amber-400' : 'text-red-400'}`}>

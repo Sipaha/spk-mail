@@ -40,29 +40,6 @@ func (s *Store) InsertMessage(ctx context.Context, m MessageRow) (int64, error) 
 	return res.LastInsertId()
 }
 
-func (s *Store) ListMessagesByFolder(ctx context.Context, folderID int64, limit, offset int) ([]MessageRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id,account_id,folder_id,uid,message_id,in_reply_to,references_,thread_id,
-			subject,from_addr,to_addrs,cc_addrs,date,flags,has_attachments,size_bytes,body_text,body_html
-		FROM messages WHERE folder_id = ? ORDER BY date DESC LIMIT ? OFFSET ?`, folderID, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []MessageRow
-	for rows.Next() {
-		var m MessageRow
-		var hasAtt int
-		if err := rows.Scan(&m.ID, &m.AccountID, &m.FolderID, &m.UID, &m.MessageID, &m.InReplyTo, &m.References, &m.ThreadID,
-			&m.Subject, &m.FromAddr, &m.ToAddrs, &m.CcAddrs, &m.Date, &m.Flags, &hasAtt, &m.SizeBytes, &m.BodyText, &m.BodyHTML); err != nil {
-			return nil, err
-		}
-		m.HasAttachments = hasAtt != 0
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) GetMessage(ctx context.Context, id int64) (MessageRow, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id,account_id,folder_id,uid,message_id,in_reply_to,references_,thread_id,
@@ -115,33 +92,6 @@ func (s *Store) UpdateBodyHTML(ctx context.Context, id int64, html string) error
 	return err
 }
 
-// UnreadCountsByAccount aggregates per-account unread counts across inbox folders.
-// "Unread" = no \Seen flag in the JSON-encoded flags array; uses json_each so that
-// substrings like 'Seenmaybe' or comments do not falsely count as seen.
-func (s *Store) UnreadCountsByAccount(ctx context.Context) (int64, map[int64]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.account_id, COUNT(*)
-		FROM messages m
-		JOIN folders f ON m.folder_id = f.id
-		WHERE f.role = 'inbox'
-		  AND NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')
-		GROUP BY m.account_id`)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer rows.Close()
-	per := map[int64]int64{}
-	var total int64
-	for rows.Next() {
-		var id, n int64
-		if err := rows.Scan(&id, &n); err != nil {
-			return 0, nil, err
-		}
-		per[id] = n
-		total += n
-	}
-	return total, per, rows.Err()
-}
 
 // FindThreadByMessageIDs returns thread_id for any existing message whose
 // Message-ID matches one of the supplied references. The match is byte-exact;

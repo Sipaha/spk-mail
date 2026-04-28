@@ -49,12 +49,15 @@ func TestAccountWorker_InitialSync(t *testing.T) {
 	_, err = u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
 	require.NoError(t, err)
 
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
 	em := api.NewEmitter()
 	writer := NewStoreWriter(st, em)
-	go writer.Run(context.Background())
+	go writer.Run(runCtx)
 
 	w := NewAccountWorker(accID, st, sec, writer, em)
-	go w.Run(context.Background())
+	go w.Run(runCtx)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

@@ -18,7 +18,11 @@ export default function App() {
     const onHash = () => setRoute(window.location.hash || '#/')
     window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash)
   }, [])
-  useEffect(() => { client.listAccounts().then(setAccounts) }, [setAccounts])
+  useEffect(() => {
+    client.listAccounts()
+      .then(setAccounts)
+      .catch(err => console.warn('listAccounts failed', err))
+  }, [setAccounts])
   useEventStream()
 
   if (route.startsWith('#/settings')) {

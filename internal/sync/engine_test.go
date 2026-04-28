@@ -51,9 +51,12 @@ func TestEngine_TwoAccountsSyncInParallel(t *testing.T) {
 	_ = add("a@x", mock1)
 	_ = add("b@x", mock2)
 
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
 	em := api.NewEmitter()
 	eng := NewEngine(st, sec, em)
-	go eng.Run(context.Background())
+	go eng.Run(runCtx)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

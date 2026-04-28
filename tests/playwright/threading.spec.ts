@@ -5,12 +5,14 @@ test('reply lands in the same thread', async ({ page, request }) => {
   await expect(page.getByText('Test Personal')).toBeVisible({ timeout: 10_000 })
 
   // Inject root + reply (subject normalization buckets them via the SAME normalized subject)
-  await request.post('/api/_test/inject-message', {
+  const r1 = await request.post('/api/_test/inject-message', {
     data: { email: 'alice@example.com', from: 'Bob <b@x>', subject: 'Topic A', body_text: 'first' }
   })
-  await request.post('/api/_test/inject-message', {
+  expect(r1.ok(), `inject root failed: ${r1.status()}`).toBeTruthy()
+  const r2 = await request.post('/api/_test/inject-message', {
     data: { email: 'alice@example.com', from: 'Bob <b@x>', subject: 'Re: Topic A', body_text: 'second' }
   })
+  expect(r2.ok(), `inject reply failed: ${r2.status()}`).toBeTruthy()
 
   // Both subjects normalize to "topic a" so they share a thread; the inbox row shows "topic a" (lowercased — known issue tracked in plan-7 backlog)
   await expect(page.getByText(/topic a/i)).toBeVisible({ timeout: 10_000 })

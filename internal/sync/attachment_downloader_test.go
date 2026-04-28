@@ -65,12 +65,15 @@ func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 	_, err = u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
 	require.NoError(t, err)
 
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
 	em := api.NewEmitter()
 	writer := NewStoreWriter(st, em)
-	go writer.Run(context.Background())
+	go writer.Run(runCtx)
 
 	w := NewAccountWorker(accID, st, sec, writer, em)
-	go w.Run(context.Background())
+	go w.Run(runCtx)
 
 	// Wait for the AccountWorker + StoreWriter to insert the message and its
 	// attachment row.
@@ -153,12 +156,15 @@ func TestAttachmentDownloader_RejectsPathTraversal(t *testing.T) {
 	_, err = u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
 	require.NoError(t, err)
 
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
 	em := api.NewEmitter()
 	writer := NewStoreWriter(st, em)
-	go writer.Run(context.Background())
+	go writer.Run(runCtx)
 
 	w := NewAccountWorker(accID, st, sec, writer, em)
-	go w.Run(context.Background())
+	go w.Run(runCtx)
 
 	deadline := time.Now().Add(5 * time.Second)
 	var attID int64

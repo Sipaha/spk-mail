@@ -41,6 +41,13 @@ export default function ThreadList() {
     // an empty profile" glitch. Clearing first guarantees the only thing the
     // user can see between switch and load is the empty state.
     setThreads([])
+    // Generation guard: rapid filter switches (A → B → C) used to let A's
+    // delayed response settle and overwrite C's already-applied list. The
+    // closure captures `cancelled` and the cleanup flips it before the next
+    // effect run, so only the in-flight request whose cleanup hasn't fired
+    // is allowed to apply its result. Errors are surfaced to the user so a
+    // network failure no longer leaves them on a silently-empty list.
+    let cancelled = false
     client.listThreads({
       account_id: filter.accountId,
       folder_id: filter.folderId,
@@ -48,7 +55,12 @@ export default function ThreadList() {
       has_flagged: filter.hasFlagged,
       profile_id: activeProfileId ?? undefined,
       limit: 200,
-    }).then(setThreads)
+    }).then(rs => {
+      if (!cancelled) setThreads(rs)
+    }).catch(err => {
+      if (!cancelled) console.error('listThreads failed', err)
+    })
+    return () => { cancelled = true }
   }, [filter.accountId, filter.folderId, filter.unreadOnly, filter.hasFlagged, activeProfileId, setThreads])
 
   // Clear pinned snapshot when the filter context changes (user navigated to a
@@ -162,8 +174,12 @@ export default function ThreadList() {
             client.getThread(id).then(msgs => {
               setOpenThread(id, msgs)
               const unread = msgs.filter(m => !m.flags.includes('\\Seen')).map(m => m.id)
-              if (unread.length) client.markRead(unread).then(() => useStore.getState().markThreadRead(id))
-            })
+              if (unread.length) {
+                client.markRead(unread)
+                  .then(() => useStore.getState().markThreadRead(id))
+                  .catch(err => console.warn('markRead failed', err))
+              }
+            }).catch(err => console.warn('getThread failed', err))
           }} />
         </div>
       ))}

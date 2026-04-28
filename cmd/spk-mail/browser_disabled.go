@@ -7,6 +7,6 @@ import (
 	"errors"
 )
 
-func runBrowser(_ context.Context, _ int, _ bool, _ string) error {
+func runBrowser(_ context.Context, _ int, _ bool, _ string, _ bool) error {
 	return errors.New("browser mode disabled in this build (desktop_only)")
 }

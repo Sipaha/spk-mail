@@ -7,13 +7,18 @@ This page is the entry point when you (Claude) are asked to verify, screenshot, 
     make build
     ./build/bin/spk-mail \
         --browser --port=5174 \
-        --imap-mock \
+        --imap-mock --test-api \
         --seed=tests/fixtures/basic.yaml &
     # then drive: http://127.0.0.1:5174
 
 When you're done:
 
     pkill -f 'spk-mail --browser'
+
+> **`--test-api`** mounts the `/api/_test/*` automation routes (seed,
+> inject-message, db-dump, clock, logs). Without it those routes return
+> 404. Never enable `--test-api` in production — the routes expose the raw
+> DB and let any caller forge inbound mail.
 
 ## Available fixtures
 
@@ -24,7 +29,7 @@ When you're done:
 | `tests/fixtures/attachments.yaml` | Message with a PDF attachment — tests download UI |
 | `tests/fixtures/html-tracking.yaml` | HTML email with a remote tracking pixel — tests blocked-image flow |
 
-## Test API endpoints (only present in `--browser` builds)
+## Test API endpoints (only present when started with `--test-api`)
 
 | Endpoint | Body | Purpose |
 |---|---|---|
@@ -34,13 +39,13 @@ When you're done:
 | `GET  /api/_test/db-dump` | — | JSON snapshot of accounts/folders/messages/threads |
 | `GET  /api/_test/logs` | — | Recent slog entries (in-memory ring buffer) |
 
-These routes return 404 if you build with `-tags desktop_only` (the production desktop binary built via `make build-desktop`).
+These routes are only mounted when the binary is started with `--test-api`; they also return 404 in a `-tags desktop_only` build (the production desktop binary built via `make build-desktop`).
 
 ## Recipe — verify the new-message notification flow
 
 ```bash
 # 1. Start the app with mock IMAP and a seeded account
-./build/bin/spk-mail --browser --port=5174 --imap-mock --seed=tests/fixtures/basic.yaml &
+./build/bin/spk-mail --browser --port=5174 --imap-mock --test-api --seed=tests/fixtures/basic.yaml &
 
 # 2. Wait for boot (Playwright will do this automatically via webServer config)
 
@@ -65,7 +70,7 @@ In Playwright MCP form:
 3. `browser_take_screenshot` on each; pass to `toHaveScreenshot()` in tests.
 4. `POST /api/_test/clock { reset: true }` to release the freeze.
 
-The committed Playwright spec `tests/playwright/visual-regression.spec.ts` already does this end-to-end.
+The committed Playwright spec `tests/playwright/01-visual-regression.spec.ts` already does this end-to-end. The `01-` prefix forces it to run first under `workers:1` + `fullyParallel:false`, against a clean DB before other state-mutating specs.
 
 ## Recipe — debug an event-handling bug
 

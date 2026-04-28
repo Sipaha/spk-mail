@@ -32,7 +32,6 @@ type Controller struct {
 
 	once  sync.Once
 	unsub func()
-	stop  chan struct{}
 }
 
 // NewController constructs the tray, registers the menu, subscribes to events
@@ -56,7 +55,6 @@ func NewController(
 		baseIcon:   icon,
 		unreadIcon: unreadIcon,
 		wnd:        wnd,
-		stop:       make(chan struct{}),
 	}
 
 	notifier, err := NewNotifier()
@@ -98,12 +96,13 @@ func NewController(
 }
 
 // Close stops the event subscription. Safe to call multiple times.
+// `consume` exits when the subscription channel closes (driven by `unsub`),
+// so there is no separate stop signal to manage.
 func (c *Controller) Close() {
 	c.once.Do(func() {
 		if c.unsub != nil {
 			c.unsub()
 		}
-		close(c.stop)
 	})
 }
 

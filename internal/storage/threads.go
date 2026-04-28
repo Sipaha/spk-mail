@@ -135,12 +135,6 @@ func (s *Store) ListThreadsRecent(ctx context.Context, limit, offset int) ([]Thr
 	return s.ListThreads(ctx, ThreadFilter{}, limit, offset)
 }
 
-// ListThreadsByProfile is a thin wrapper around ListThreads that filters by
-// profile. Kept for backwards compatibility with existing callers.
-func (s *Store) ListThreadsByProfile(ctx context.Context, profileID *int64, limit, offset int) ([]ThreadRow, error) {
-	return s.ListThreads(ctx, ThreadFilter{ProfileID: profileID}, limit, offset)
-}
-
 // FolderCounts captures total/unread/flagged message counts for a single
 // folder. Returned by MessageCountsByFolder.
 type FolderCounts struct {
@@ -185,21 +179,13 @@ func (s *Store) MessageCountsByFolder(ctx context.Context, accountID int64) (map
 // like '%"\\Seen"%', which depended on JSON's specific escape encoding and
 // silently broke when flags arrived in a different escape form; switching to
 // json_each makes the check stable regardless of JSON formatting.
+//
+// The SQL body lives in the unexported tx.go::updateThreadStats helper so
+// the same query is used whether the caller is autocommit (this method) or
+// inside an InsertParsedMessageBundle transaction; keeping a single source
+// avoids the two going out of sync.
 func (s *Store) UpdateThreadStats(ctx context.Context, threadID int64) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE threads SET
-			last_date = (SELECT COALESCE(MAX(date),0) FROM messages WHERE thread_id = ?),
-			msg_count = (SELECT COUNT(*) FROM messages WHERE thread_id = ?),
-			unread_count = (SELECT COUNT(*) FROM messages m WHERE m.thread_id = ?
-				AND NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Seen')),
-			has_flagged = CASE WHEN EXISTS(
-				SELECT 1 FROM messages m WHERE m.thread_id = ?
-				AND EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\Flagged')
-			) THEN 1 ELSE 0 END,
-			has_attach  = CASE WHEN EXISTS(SELECT 1 FROM messages WHERE thread_id = ? AND has_attachments = 1) THEN 1 ELSE 0 END
-		WHERE id = ?`,
-		threadID, threadID, threadID, threadID, threadID, threadID)
-	return err
+	return updateThreadStats(ctx, s.db, threadID)
 }
 
 // RecomputeAllThreadStats walks every thread row and re-runs UpdateThreadStats.
@@ -233,14 +219,17 @@ func (s *Store) RecomputeAllThreadStats(ctx context.Context) error {
 }
 
 // FindThreadBySubject returns a candidate thread bucket for a message that has
-// no usable References / In-Reply-To headers. It looks for a thread with the
-// same normalized subject whose last_date is within ±windowSeconds of dateUnix.
+// no usable References / In-Reply-To headers. It looks for a thread that owns
+// at least one message in the SAME accountID with the same normalized subject
+// whose last_date is within ±windowSeconds of dateUnix. The account scope
+// prevents two unrelated "Re: Newsletter" messages in different accounts from
+// silently merging into one thread (a cross-account privacy / profile leak).
 // Returns the most recent match (ORDER BY last_date DESC) for determinism.
 //
 //	(0, false, nil) on miss; (id, true, nil) on hit; (0, false, err) on real DB
 //
 // errors so the caller can distinguish "no match" from "DB exploded".
-func (s *Store) FindThreadBySubject(ctx context.Context, subjectNorm string, dateUnix, windowSeconds int64) (int64, bool, error) {
+func (s *Store) FindThreadBySubject(ctx context.Context, accountID int64, subjectNorm string, dateUnix, windowSeconds int64) (int64, bool, error) {
 	if subjectNorm == "" {
 		return 0, false, nil
 	}
@@ -248,10 +237,11 @@ func (s *Store) FindThreadBySubject(ctx context.Context, subjectNorm string, dat
 	to := dateUnix + windowSeconds
 	var id int64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM threads
-		WHERE subject_norm = ? AND last_date BETWEEN ? AND ?
-		ORDER BY last_date DESC LIMIT 1`,
-		subjectNorm, from, to).Scan(&id)
+		SELECT t.id FROM threads t
+		WHERE t.subject_norm = ? AND t.last_date BETWEEN ? AND ?
+		  AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.account_id = ?)
+		ORDER BY t.last_date DESC LIMIT 1`,
+		subjectNorm, from, to, accountID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}

@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // register sqlite driver
 )
 
 //go:embed schema.sql
@@ -27,7 +27,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // single writer per design; readers go through same conn for simplicity in plan 1
+	db.SetMaxOpenConns(1) // single writer per design; readers share the same conn.
 	if err := db.PingContext(ctx); err != nil {
 		return nil, err
 	}

@@ -70,34 +70,6 @@ func (s *Store) ListAccounts(ctx context.Context) ([]AccountRow, error) {
 	return out, rows.Err()
 }
 
-// ListAccountsByProfile returns accounts, optionally filtered by profile.
-// When profileID is nil, returns the same result as ListAccounts (all accounts).
-// When non-nil, restricts to accounts whose profile_id equals *profileID.
-// Ordered by id, matching ListAccounts.
-func (s *Store) ListAccountsByProfile(ctx context.Context, profileID *int64) ([]AccountRow, error) {
-	if profileID == nil {
-		return s.ListAccounts(ctx)
-	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id,name,email,imap_host,imap_port,imap_username,use_tls,color,created_at,profile_id
-		 FROM accounts WHERE profile_id = ? ORDER BY id`, *profileID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []AccountRow
-	for rows.Next() {
-		var a AccountRow
-		var useTLS int
-		if err := rows.Scan(&a.ID, &a.Name, &a.Email, &a.IMAPHost, &a.IMAPPort, &a.IMAPUsername, &useTLS, &a.Color, &a.CreatedAt, &a.ProfileID); err != nil {
-			return nil, err
-		}
-		a.UseTLS = useTLS != 0
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, id)
 	if err != nil {

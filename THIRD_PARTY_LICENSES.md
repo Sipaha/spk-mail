@@ -36,8 +36,8 @@ root.
 
 | Module | License | URL |
 |---|---|---|
-| `github.com/go-git/go-billy/v5` | Apache-2.0 | https://github.com/go-git/go-billy/blob/v5.7.0/LICENSE |
-| `github.com/go-git/go-git/v5` | Apache-2.0 | https://github.com/go-git/go-git/blob/v5.16.4/LICENSE |
+| `github.com/go-git/go-billy/v5` | Apache-2.0 | https://github.com/go-git/go-billy/blob/v5.8.0/LICENSE |
+| `github.com/go-git/go-git/v5` | Apache-2.0 | https://github.com/go-git/go-git/blob/v5.17.1/LICENSE |
 | `github.com/golang/groupcache/lru` | Apache-2.0 | https://github.com/golang/groupcache/blob/2c02b8208cf8/LICENSE |
 | `github.com/pjbgf/sha1cd` | Apache-2.0 | https://github.com/pjbgf/sha1cd/blob/v0.5.0/LICENSE |
 | `github.com/skeema/knownhosts` | Apache-2.0 | https://github.com/skeema/knownhosts/blob/v1.3.2/LICENSE |
@@ -123,7 +123,7 @@ Generated with [`license-checker`](https://www.npmjs.com/package/license-checker
 
 | Package | License | Repository |
 |---|---|---|
-| `@types/react@19.2.14` | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| `@wailsio/runtime@3.0.0-alpha.78` | MIT | https://github.com/wailsapp/wails |
 | `csstype@3.2.3` | MIT | https://github.com/frenic/csstype |
 | `react@19.2.5` | MIT | https://github.com/facebook/react |
 | `react-dom@19.2.5` | MIT | https://github.com/facebook/react |

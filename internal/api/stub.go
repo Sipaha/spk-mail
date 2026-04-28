@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -235,7 +236,7 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 		// Idempotency: skip the DB update + IMAP STORE + SSE event if the
 		// message is already \Seen. Saves a round-trip and avoids spurious
 		// MessageUpdated events on repeated marks.
-		if contains(fl, `\Seen`) {
+		if slices.Contains(fl, `\Seen`) {
 			continue
 		}
 		fl = append(fl, `\Seen`)
@@ -299,17 +300,6 @@ func (s *Stub) Search(ctx context.Context, query string, limit, offset int) ([]S
 		})
 	}
 	return out, nil
-}
-
-func (s *Stub) UnreadCounts(ctx context.Context) (UnreadCountsDTO, error) {
-	total, per, err := s.Store.UnreadCountsByAccount(ctx)
-	if err != nil {
-		return UnreadCountsDTO{}, err
-	}
-	if per == nil {
-		per = map[int64]int64{}
-	}
-	return UnreadCountsDTO{Total: total, PerAccount: per}, nil
 }
 
 // GetAttachmentLocalPath returns the local filesystem path for an attachment
@@ -410,15 +400,6 @@ func strFrom(p *string) string {
 		return ""
 	}
 	return *p
-}
-
-func contains(xs []string, v string) bool {
-	for _, x := range xs {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // collapseWhitespace folds CR/LF and runs of spaces/tabs into single spaces and

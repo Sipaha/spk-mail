@@ -12,14 +12,12 @@ type NotifKind string
 
 const (
 	// NotifExists means the server reported an EXISTS update — typically a
-	// new message has arrived in the selected mailbox.
+	// new message has arrived in the selected mailbox. EXPUNGE / FETCH
+	// updates are observed by the underlying handler but not surfaced here:
+	// the only consumer (account_worker.runIDLE) re-fetches via
+	// FetchSinceUIDRange after EXISTS, which already picks up flag changes
+	// and doesn't need a separate FETCH notification.
 	NotifExists NotifKind = "exists"
-	// NotifExpunge means the server reported an EXPUNGE — a message was
-	// removed from the selected mailbox.
-	NotifExpunge NotifKind = "expunge"
-	// NotifFetch means the server pushed a FETCH update, generally a flag
-	// change on an existing message.
-	NotifFetch NotifKind = "fetch"
 )
 
 // IdleNotification is a single unilateral update delivered to a caller of
@@ -146,11 +144,8 @@ func (c *Client) Idle(ctx context.Context, ch chan<- IdleNotification) func() {
 }
 
 // HasIDLE reports whether the server advertises the IDLE capability.
-//
-// The ctx parameter is accepted for API symmetry with the rest of the
-// package; the underlying capability lookup does not currently use it.
-func (c *Client) HasIDLE(_ context.Context) bool {
-	caps, err := c.Capabilities(context.Background())
+func (c *Client) HasIDLE() bool {
+	caps, err := c.Capabilities()
 	if err != nil {
 		return false
 	}

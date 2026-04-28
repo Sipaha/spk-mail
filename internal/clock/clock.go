@@ -35,8 +35,3 @@ func (c *Clock) Reset() {
 	defer c.mu.Unlock()
 	c.fixed = nil
 }
-
-// Default is a process-wide instance used by simple callers. Production code
-// that wants to be testable should accept a *Clock as a dependency rather than
-// reaching into Default.
-var Default = New()

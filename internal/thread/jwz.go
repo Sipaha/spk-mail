@@ -3,13 +3,16 @@
 package thread
 
 import (
+	"sort"
 	"strings"
 	"unicode"
 )
 
 // CandidateMessageIDs returns the set of message-ids a new message could be
 // "threaded under". This is everything in References plus In-Reply-To,
-// deduplicated and trimmed.
+// deduplicated, trimmed, and sorted for stable ordering across runs (the
+// underlying dedup uses a map, whose iteration order would otherwise leak
+// into downstream queries / logs / tests).
 func CandidateMessageIDs(inReplyTo string, references []string) []string {
 	seen := map[string]struct{}{}
 	add := func(s string) {
@@ -30,6 +33,7 @@ func CandidateMessageIDs(inReplyTo string, references []string) []string {
 	for k := range seen {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }
 

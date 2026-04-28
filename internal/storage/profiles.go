@@ -127,20 +127,3 @@ func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, id)
 	return err
 }
-
-// ReorderProfiles updates sort_order for the given (profileID, sortOrder) pairs
-// in a single transaction. The caller is responsible for passing every profile
-// being reordered; profiles not in the list keep their current sort_order.
-func (s *Store) ReorderProfiles(ctx context.Context, order map[int64]int) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for id, n := range order {
-		if _, err := tx.ExecContext(ctx, `UPDATE profiles SET sort_order = ? WHERE id = ?`, n, id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
