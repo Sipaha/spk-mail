@@ -14,8 +14,12 @@ function parseSender(raw: string): string {
 }
 
 export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: number) => void }) {
-  const isUnread = t.unread_count > 0
   const isOpen = useStore(s => s.openThreadId === t.id)
+  // The currently-open thread is rendered as read (no blue dot, no bold)
+  // even if the pinned snapshot still has unread_count > 0. Pinning keeps the
+  // row in the list while the user is reading it; muting the unread cue is
+  // the standard visual feedback that "yes, you've opened this".
+  const isUnread = !isOpen && t.unread_count > 0
   const sender = parseSender(t.last_from) || '(unknown)'
 
   return (
