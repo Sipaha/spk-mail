@@ -82,11 +82,6 @@ type AttachmentDTO struct {
 	Downloaded  bool   `json:"downloaded"`
 }
 
-type UnreadCountsDTO struct {
-	Total      int64           `json:"total"`
-	PerAccount map[int64]int64 `json:"per_account"`
-}
-
 type FolderDTO struct {
 	ID           int64  `json:"id"`
 	AccountID    int64  `json:"account_id"`

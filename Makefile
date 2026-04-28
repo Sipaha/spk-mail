@@ -1,4 +1,4 @@
-.PHONY: build build-fast build-desktop test test-go test-front lint fmt tidy clean run run-browser
+.PHONY: build build-fast build-desktop test test-go test-front test-e2e lint fmt tidy clean run run-browser
 
 BIN_DIR := build/bin
 BIN     := $(BIN_DIR)/spk-mail
@@ -28,13 +28,16 @@ build-desktop: build-frontend
 	mkdir -p cmd/spk-mail/dist
 	touch cmd/spk-mail/dist/.gitkeep
 
-test: test-go test-front
+test: test-go test-front test-e2e
 
 test-go:
 	go test -race -timeout 120s ./...
 
 test-front:
 	cd frontend && npm test --silent || true
+
+test-e2e: build
+	cd tests/playwright && npm install --silent && npx playwright install --with-deps chromium && npx playwright test
 
 lint:
 	golangci-lint run

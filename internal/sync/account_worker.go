@@ -48,11 +48,6 @@ func NewAccountWorker(id int64, s *storage.Store, sec *secrets.Store, w *StoreWr
 
 // SubmitFlagOp queues a flag operation for async UID STORE. It is non-blocking:
 // if the queue is full (cap 64) the op is dropped with a warning.
-//
-// TODO(plan-7): the drain loop lives at the bottom of runOnce and is not entered
-// when runOnce errors before reaching it; under sustained sync errors flagOps
-// can fill faster than they drain. Move the drain loop into its own goroutine
-// scoped to AccountWorker.Run so it survives runOnce restarts.
 func (w *AccountWorker) SubmitFlagOp(op FlagOp) {
 	select {
 	case w.flagOps <- op:
@@ -68,29 +63,29 @@ func (w *AccountWorker) SubmitFlagOp(op FlagOp) {
 
 // Run is the worker main loop. It blocks until ctx is cancelled. Errors during
 // connect/sync trigger a coarse 5s backoff before retrying.
+// Run drives one runOnce iteration and returns on error so that the engine's
+// supervise loop can apply its tiered exponential backoff (1s → 2s → 5s →
+// 15s → 60s → 300s, see engine.go). If we kept retrying internally with a
+// fixed 5-second sleep, the supervisor's tier table would be dead code and
+// a permanent network outage would produce a tight 5s reconnect loop.
 func (w *AccountWorker) Run(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if err := w.runOnce(ctx); err != nil {
-			slog.Warn("account worker error", "account_id", w.accountID, "err", err)
-			w.em.Emit(api.Event{Type: "AccountStatus", Payload: map[string]any{
-				"account_id": w.accountID, "state": "error", "detail": err.Error(),
-			}})
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(backoff(err)):
-			}
-		}
+	if err := w.runOnce(ctx); err != nil {
+		slog.Warn("account worker error", "account_id", w.accountID, "err", err)
+		w.em.Emit(api.Event{Type: "AccountStatus", Payload: map[string]any{
+			"account_id": w.accountID, "state": "error", "detail": err.Error(),
+		}})
 	}
 }
 
 func (w *AccountWorker) runOnce(ctx context.Context) error {
-	acc, err := w.store.GetAccount(ctx, w.accountID)
+	// runCtx is scoped to a single runOnce iteration. IDLE/poll goroutines
+	// derive from it so a backoff-and-retry path tears them down before the
+	// next iteration starts; without this, every error cycle would leak
+	// O(folders) goroutines and IMAP connections.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	acc, err := w.store.GetAccount(runCtx, w.accountID)
 	if err != nil {
 		return err
 	}
@@ -103,7 +98,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		"account_id": acc.ID, "state": "connecting",
 	}})
 
-	c, err := imap.Dial(ctx, imap.DialOpts{
+	c, err := imap.Dial(runCtx, imap.DialOpts{
 		Host: acc.IMAPHost, Port: acc.IMAPPort,
 		Username: acc.IMAPUsername, Password: string(pw), UseTLS: acc.UseTLS,
 	})
@@ -116,17 +111,23 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		"account_id": acc.ID, "state": "ok",
 	}})
 
-	folders, err := c.ListFolders(ctx)
+	folders, err := c.ListFolders(runCtx)
 	if err != nil {
 		return err
 	}
+	type syncedFolder struct {
+		ID   int64
+		Name string
+		Role string
+	}
+	synced := make([]syncedFolder, 0, len(folders))
 	for _, f := range folders {
 		role := f.Role
 		var rolePtr *string
 		if role != "" {
 			rolePtr = &role
 		}
-		fid, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+		fid, err := w.store.UpsertFolder(runCtx, storage.FolderRow{
 			AccountID: acc.ID, Name: f.Name, Delimiter: f.Delimiter,
 			Role: rolePtr, UIDValidity: 0, UIDNext: 0,
 		})
@@ -137,45 +138,83 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		// started the app; flooding them with N notifications for N unread
 		// messages from before this session is noise. Real-time arrivals
 		// (runIDLE post-EXISTS) re-call syncFolder with notify=true.
-		if err := w.syncFolder(ctx, c, fid, f.Name, f.Role, false); err != nil {
+		if err := w.syncFolder(runCtx, c, fid, f.Name, f.Role, false); err != nil {
 			return err
 		}
+		synced = append(synced, syncedFolder{ID: fid, Name: f.Name, Role: f.Role})
 	}
 
 	// IDLE on inbox-role folders for push notifications; periodic poll for
 	// other folders so Sent/Drafts/Archive/custom catch new messages without
 	// a process restart. Trash and Spam are skipped — their content is
 	// rarely interesting in real time and polling them costs IMAP traffic.
-	//
-	// TODO(plan-7): IDLE/poll goroutines outlive runOnce restarts. On any error
-	// path that re-enters runOnce, fresh IDLE/poll goroutines spawn while the
-	// previous ones are still alive (only ctx.Done unblocks them). Move
-	// spawning under a supervisor scope tied to runOnce iterations so they're
-	// torn down on restart.
 	for _, f := range folders {
 		switch f.Role {
 		case "inbox":
-			if c.HasIDLE(ctx) {
-				go w.runIDLE(ctx, acc, f.Name, f.Role)
+			if c.HasIDLE() {
+				go w.runIDLE(runCtx, acc, f.Name, f.Role)
 			} else {
-				go w.runPoll(ctx, acc, f.Name, f.Role)
+				go w.runPoll(runCtx, acc, f.Name, f.Role)
 			}
 		case "trash", "spam":
 			// skip — high-volume, low-signal
 		default:
 			// sent / drafts / archive / "" (custom) — periodic poll
-			go w.runPoll(ctx, acc, f.Name, f.Role)
+			go w.runPoll(runCtx, acc, f.Name, f.Role)
 		}
 	}
 
 	// Drain flag ops on the primary session until ctx cancels.
+	//
+	// Before each STORE we re-Select the folder that owns the UID. Without
+	// this, STORE fires against whatever mailbox happened to be selected
+	// last (the final folder synced above), which silently mutates flags on
+	// the wrong message in multi-folder accounts.
+	folderName := func(id int64) string {
+		for _, f := range synced {
+			if f.ID == id {
+				return f.Name
+			}
+		}
+		return ""
+	}
+	currentSel := ""
 	for {
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			return nil
 		case op := <-w.flagOps:
-			if err := c.StoreFlags(ctx, op.FolderUID.UID, op.Flags, op.Add); err != nil {
-				slog.Warn("store flag failed", "err", err)
+			name := folderName(op.FolderUID.FolderID)
+			if name == "" {
+				// Folder wasn't in the startup snapshot (e.g. server-side
+				// folder discovered after runOnce began). Refresh from the
+				// store and look it up directly — without this, flag ops
+				// against the new folder would be dropped until the worker
+				// next restarts.
+				if folders, err := w.store.ListFolders(runCtx, w.accountID); err == nil {
+					for _, f := range folders {
+						if f.ID == op.FolderUID.FolderID {
+							name = f.Name
+							synced = append(synced, syncedFolder{ID: f.ID, Name: f.Name, Role: roleStr(f.Role)})
+							break
+						}
+					}
+				}
+			}
+			if name == "" {
+				slog.Warn("store flag dropped: unknown folder",
+					"account_id", w.accountID, "folder_id", op.FolderUID.FolderID, "uid", op.FolderUID.UID)
+				continue
+			}
+			if name != currentSel {
+				if _, err := c.Select(runCtx, name); err != nil {
+					slog.Warn("store flag select failed", "folder", name, "err", err)
+					continue
+				}
+				currentSel = name
+			}
+			if err := c.StoreFlags(runCtx, op.FolderUID.UID, op.Flags, op.Add); err != nil {
+				slog.Warn("store flag failed", "folder", name, "uid", op.FolderUID.UID, "err", err)
 			}
 		}
 	}
@@ -207,7 +246,7 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 
 	if prev.UIDValidity != 0 && prev.UIDValidity != state.UIDValidity {
 		// UIDVALIDITY changed: nuke the folder's messages and resync.
-		if _, err := w.store.DB().ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID); err != nil {
+		if err := w.store.DeleteMessagesByFolder(ctx, folderID); err != nil {
 			return err
 		}
 		prev.UIDNext = 0
@@ -220,9 +259,8 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 	// uid_next=0 even though messages 1..N are already stored. Without this
 	// check, every restart would re-fetch those N messages from the server
 	// and hit UNIQUE(account_id, folder_id, uid) violations on insert.
-	var dbMaxUID int64
-	if err := w.store.DB().QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(uid), 0) FROM messages WHERE folder_id = ?`, folderID).Scan(&dbMaxUID); err != nil {
+	dbMaxUID, err := w.store.MaxUIDByFolder(ctx, folderID)
+	if err != nil {
 		return err
 	}
 	if dbMaxUID > prev.UIDNext {
@@ -233,24 +271,32 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 	// "UID FETCH N:*" works for small mailboxes but breaks on huge ones
 	// (>~3000 messages we observed Yandex closing the connection mid-stream).
 	// Persisting maxUID after each batch makes partial sync survive crashes.
+	//
+	// Termination is driven by the server's UIDNEXT (the next UID the server
+	// will assign), not by per-batch emptiness: a sparse mailbox where UIDs
+	// 51..399 were expunged but UID 400 is live would otherwise return an
+	// empty batch [51,250] and the loop would exit without ever fetching
+	// the live UIDs at 400+. We keep stepping until cursor reaches UIDNext.
+	serverUIDNext := int64(state.UIDNext)
 	rolePtr := prev.Role
 	cursor := prev.UIDNext
 	maxUID := cursor
-	for {
+	for cursor < serverUIDNext {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 		batchEnd := cursor + fetchBatchSize
+		if batchEnd > serverUIDNext {
+			batchEnd = serverUIDNext
+		}
 		msgCh, errCh := c.FetchSinceUIDRange(ctx, cursor, batchEnd, true)
-		anySeen := false
 		for msg := range msgCh {
-			anySeen = true
 			if msg.UID > maxUID {
 				maxUID = msg.UID
 			}
-			w.writer.Submit(IncomingMessage{
+			if err := w.writer.Submit(ctx, IncomingMessage{
 				AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
 				Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
 				// IsResync gates the MessageArrived event in StoreWriter: true
@@ -259,7 +305,9 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 				// "this is the very first fetch ever for this folder", not
 				// "this fetch is a real-time arrival").
 				IsResync: !notify,
-			})
+			}); err != nil {
+				return err
+			}
 		}
 		if err := <-errCh; err != nil {
 			return err
@@ -287,10 +335,6 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 				"done":       maxUID,
 				"total":      int64(state.UIDNext),
 			}})
-		}
-		if !anySeen {
-			// No more messages above batchEnd — we're caught up.
-			break
 		}
 		cursor = batchEnd
 	}
@@ -384,13 +428,13 @@ func (w *AccountWorker) runPoll(ctx context.Context, acc storage.AccountRow, fol
 	}
 }
 
-// backoff returns a coarse retry delay. The engine supervisor handles
-// longer-term restart strategy.
-func backoff(err error) time.Duration {
-	_ = err
-	return 5 * time.Second
+// roleStr safely dereferences a *string role on a FolderRow, returning
+// "" when nil. Used by the flag-ops drain loop when refreshing folder
+// metadata mid-run.
+func roleStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
-// splitHostPortAddr is a thin re-export so test code can pass mock.Addr()
-// through the imap helper without importing imap directly.
-func splitHostPortAddr(addr string) (string, int) { return imap.SplitHostPort(addr) }

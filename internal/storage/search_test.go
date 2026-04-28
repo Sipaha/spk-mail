@@ -74,3 +74,25 @@ func TestSearch_FreeTextPlusOperator(t *testing.T) {
 	hits, _ := s.Search(context.Background(), "from:alice update", 50, 0)
 	require.Len(t, hits, 1)
 }
+
+// TestSearch_HostileInput pins behaviour for queries that contain raw FTS5
+// metacharacters: ParseSearchQuery should quote tokens so a malformed input
+// surfaces as zero results, not as an FTS5 syntax error bubbling up to the
+// API caller.
+func TestSearch_HostileInput(t *testing.T) {
+	s, _ := seedSearchData(t)
+	cases := []string{
+		`"`,
+		`'`,
+		`(((`,
+		`*`,
+		`update OR (drop table x)`,
+		`---`,
+	}
+	for _, q := range cases {
+		t.Run(q, func(t *testing.T) {
+			_, err := s.Search(context.Background(), q, 50, 0)
+			require.NoError(t, err, "hostile FTS5 input must not surface as a query error")
+		})
+	}
+}

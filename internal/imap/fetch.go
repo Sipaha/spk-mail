@@ -256,7 +256,15 @@ func parsePartPath(s string) []int {
 }
 
 // StoreFlags issues UID STORE +FLAGS / -FLAGS for one UID.
+//
+// The underlying go-imap Store call is synchronous and does not honour ctx
+// mid-flight, so we only short-circuit on cancellation before issuing the
+// command — enough to skip a STORE when the worker shutdown signal already
+// fired but the drain loop hasn't observed it.
 func (c *Client) StoreFlags(ctx context.Context, uid int64, flags []string, add bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	op := imap.StoreFlagsAdd
 	if !add {
 		op = imap.StoreFlagsDel

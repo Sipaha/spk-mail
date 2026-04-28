@@ -1,13 +1,17 @@
 import { test, expect } from '@playwright/test'
 
 test('blocked remote image becomes visible after unblock', async ({ page, request }) => {
-  // Add a fixture with a remote image at runtime
-  await request.post('/api/_test/seed', {
-    data: { accounts: [{ name: 'Mkt', email: 'mkt@example.com', color: '#f59e0b', use_mock: true,
+  // Add a fixture with a remote image at runtime. Use a per-test unique
+  // email so reuseExistingServer (local) doesn't accumulate "Mkt" duplicates
+  // across runs and trip a UNIQUE-constraint failure on the second run.
+  const uniqueEmail = `mkt-${Date.now()}@example.com`
+  const r = await request.post('/api/_test/seed', {
+    data: { accounts: [{ name: 'Mkt', email: uniqueEmail, color: '#f59e0b', use_mock: true,
       folders: [{ name: 'INBOX', messages: [{ from: 'n@example.com', subject: 'Offer',
         date: '2026-04-27T09:00:00Z',
         body_html: '<p>Hello</p><img src="https://tracker.example.com/p.png" width="1" height="1">' }] }] }] }
   })
+  expect(r.ok(), `seed failed: ${r.status()}`).toBeTruthy()
   await page.goto('/')
   await expect(page.getByText(/Offer/i)).toBeVisible({ timeout: 15_000 })
   await page.getByText(/Offer/i).click()

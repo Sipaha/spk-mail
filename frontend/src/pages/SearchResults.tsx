@@ -7,13 +7,25 @@ import Snippet from '../components/Snippet'
 
 export default function SearchResults({ query }: { query: string }) {
   const [hits, setHits] = useState<SearchHitDTO[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const setOpenThread = useStore(s => s.setOpenThread)
 
   useEffect(() => {
+    setError(null)
     if (!query.trim()) { setHits([]); return }
-    client.search(query, 100, 0).then(setHits)
+    let cancelled = false
+    setHits(null)
+    client.search(query, 100, 0)
+      .then(rs => { if (!cancelled) setHits(rs) })
+      .catch(err => {
+        if (cancelled) return
+        setHits([])
+        setError(err instanceof Error ? err.message : String(err))
+      })
+    return () => { cancelled = true }
   }, [query])
 
+  if (error) return <div className="p-6 text-sm text-rose-400">Search failed: {error}</div>
   if (hits === null) return <div className="p-6 text-sm text-zinc-500">Searching…</div>
   if (hits.length === 0) return <div className="p-6 text-sm text-zinc-500">No results for "{query}".</div>
 
@@ -28,6 +40,9 @@ export default function SearchResults({ query }: { query: string }) {
           onClick={async () => {
             if (h.thread_id) {
               const msgs = await client.getThread(h.thread_id)
+              // setOpenThread BEFORE navigating: hashchange fires after the
+              // synchronous render that picks up the new thread, so the user
+              // never sees a one-frame "Select a thread." placeholder.
               setOpenThread(h.thread_id, msgs)
               window.location.hash = '#/'
             }

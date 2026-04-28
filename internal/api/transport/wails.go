@@ -18,12 +18,11 @@ import (
 // methodName as the FQN — see pkg/application/bindings.go in Wails v3.) The
 // frontend mirrors that FQN in client.ts via Call.ByName.
 type API struct {
-	a  api.API
-	em *api.Emitter
+	a api.API
 }
 
 // NewAPI returns a Wails-bindable wrapper around the provided api.API.
-func NewAPI(a api.API, em *api.Emitter) *API { return &API{a: a, em: em} }
+func NewAPI(a api.API) *API { return &API{a: a} }
 
 func (w *API) ListAccounts() ([]api.AccountDTO, error) {
 	return w.a.ListAccounts(context.Background())
@@ -48,12 +47,6 @@ func (w *API) AllowRemoteForMessage(id int64) (string, error) {
 func (w *API) Search(q string, limit, offset int) ([]api.SearchHitDTO, error) {
 	return w.a.Search(context.Background(), q, limit, offset)
 }
-func (w *API) UnreadCounts() (api.UnreadCountsDTO, error) {
-	return w.a.UnreadCounts(context.Background())
-}
-func (w *API) GetAttachmentLocalPath(id int64) (string, error) {
-	return w.a.GetAttachmentLocalPath(context.Background(), id)
-}
 func (w *API) OpenAttachment(id int64) error {
 	return w.a.OpenAttachment(context.Background(), id)
 }
@@ -72,6 +65,3 @@ func (w *API) DeleteProfile(id int64) error { return w.a.DeleteProfile(context.B
 func (w *API) SetProfileMuted(id int64, muted bool) error {
 	return w.a.SetProfileMuted(context.Background(), id, muted)
 }
-
-// Events returns the api.Emitter for the desktop runner to bridge to Wails event bus.
-func (w *API) Events() *api.Emitter { return w.em }

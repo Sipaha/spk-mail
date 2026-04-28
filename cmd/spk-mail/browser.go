@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/spk/spk-mail/internal/api"
@@ -22,7 +24,7 @@ import (
 	"github.com/spk/spk-mail/internal/testapi"
 )
 
-func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) error {
+func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, testAPI bool) error {
 	paths, err := config.Paths()
 	if err != nil {
 		return err
@@ -71,8 +73,22 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 	}
 
 	testClock := clock.New()
-	mount := &testapi.Mount{API: stub, Store: st, Mock: mock, Logs: logBuf, Clock: testClock}
-	mount.Register(mux)
+	// `/api/_test/*` automation routes (db-dump, inject-message, clock
+	// override, log buffer) are NEVER mounted by default — they expose the
+	// raw DB and let the caller forge inbound mail. They mount only when
+	// the explicit --test-api flag is set, which is intended for Playwright
+	// runs and ad-hoc development; never enable in production deployments.
+	//
+	// We wrap the testapi handlers with the same OriginGuard the API mux
+	// uses, so a malicious page in the user's browser can't POST to
+	// /api/_test/seed or inject-message cross-origin while --test-api is on.
+	if testAPI {
+		testMux := http.NewServeMux()
+		mount := &testapi.Mount{API: stub, Store: st, Mock: mock, Logs: logBuf, Clock: testClock}
+		mount.Register(testMux)
+		mux.Handle("/api/_test/", transport.OriginGuard(testMux))
+		slog.Warn("test-api routes enabled at /api/_test/* — do not expose this server publicly")
+	}
 
 	// Serve embedded frontend at /
 	mux.Handle("/", http.FileServerFS(frontendFS()))
@@ -134,20 +150,13 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string) e
 	return nil
 }
 
-// splitHostPort splits "host:port" into host string and port int.
+// splitHostPort splits "host:port" into host string and port int. Supports
+// IPv6 literals via standard library bracket parsing, e.g. "[::1]:5432".
 func splitHostPort(addr string) (string, int) {
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			host := addr[:i]
-			portStr := addr[i+1:]
-			p := 0
-			for _, c := range portStr {
-				if c >= '0' && c <= '9' {
-					p = p*10 + int(c-'0')
-				}
-			}
-			return host, p
-		}
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, 0
 	}
-	return addr, 0
+	p, _ := strconv.Atoi(portStr)
+	return host, p
 }

@@ -34,7 +34,7 @@ That's it. There is no other network activity. No data is collected, transmitted
     make build           # frontend + Go binary at build/bin/spk-mail
     make build-desktop   # native Wails desktop binary (build/bin/spk-mail-desktop)
 
-Requirements: Go 1.26, Node 20+, a C toolchain (CGO is enabled for SQLite).
+Requirements: Go 1.26.2, Node 20+, a C toolchain (CGO is enabled for SQLite).
 
 ## Run
 
@@ -42,10 +42,12 @@ Desktop:
 
     make run
 
-Browser dev mode (UI as a localhost web app, useful for development and Playwright):
+Browser dev mode (UI as a localhost web app, useful for development against a real account):
 
     make run-browser
     # then open http://localhost:5174
+
+The Playwright suite at `tests/playwright/` launches its own copy of the binary with `--imap-mock --seed=...` flags; it does not consume `make run-browser`.
 
 ## Linux desktop integration
 
@@ -65,7 +67,6 @@ Notifications use `org.freedesktop.Notifications` (D-Bus) and work on all major 
 | `~/.local/share/spk-mail/db.sqlite` | Messages, threads, attachments metadata, FTS5 index |
 | `~/.local/share/spk-mail/attachments/...` | Downloaded attachment files |
 | `~/.local/share/spk-mail/secrets.bin` | AES-256-GCM blob of per-account IMAP passwords |
-| `~/.local/share/spk-mail/logs/spk-mail.log` | Rotating slog output |
 
 ## License
 

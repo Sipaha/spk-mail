@@ -19,28 +19,35 @@ type Engine struct {
 	secrets *secrets.Store
 	em      *api.Emitter
 
-	mu          sync.Mutex
-	workers     map[int64]*AccountWorker
-	cancels     map[int64]context.CancelFunc
-	writer      *StoreWriter
-	downloaders map[int64]*AttachmentDownloader
-	attachDir   string
+	mu              sync.Mutex
+	workers         map[int64]*AccountWorker
+	cancels         map[int64]context.CancelFunc
+	writer          *StoreWriter
+	downloaders     map[int64]*AttachmentDownloader
+	downloaderStops map[int64]context.CancelFunc
+	attachDir       string
 
 	// rootCtx is the engine's process-wide context, captured by Run. Workers
 	// derive from it so they outlive the per-request HTTP ctx that called
 	// StartAccount via AddAccount.
 	rootCtx context.Context
+
+	// wg covers every goroutine the engine spawned (writer, supervisors,
+	// downloaders). Run blocks on wg.Wait before returning so callers know
+	// the engine has fully drained before, e.g., closing the SQLite handle.
+	wg sync.WaitGroup
 }
 
 // NewEngine constructs an Engine. It performs no I/O.
 func NewEngine(s *storage.Store, sec *secrets.Store, em *api.Emitter) *Engine {
 	return &Engine{
-		store:       s,
-		secrets:     sec,
-		em:          em,
-		workers:     map[int64]*AccountWorker{},
-		cancels:     map[int64]context.CancelFunc{},
-		downloaders: map[int64]*AttachmentDownloader{},
+		store:           s,
+		secrets:         sec,
+		em:              em,
+		workers:         map[int64]*AccountWorker{},
+		cancels:         map[int64]context.CancelFunc{},
+		downloaders:     map[int64]*AttachmentDownloader{},
+		downloaderStops: map[int64]context.CancelFunc{},
 	}
 }
 
@@ -54,14 +61,22 @@ func NewEngineWithDir(s *storage.Store, sec *secrets.Store, em *api.Emitter, att
 }
 
 // Run starts the StoreWriter and a worker per account currently in the DB.
-// It blocks until ctx is cancelled, then signals all workers to stop.
+// It blocks until ctx is cancelled, then signals all workers to stop and
+// waits for them (and the writer / downloaders) to exit before returning.
 func (e *Engine) Run(ctx context.Context) {
+	// Initialise rootCtx and writer in a single locked critical section so a
+	// concurrent StartAccount call (e.g. user-driven AddAccount racing engine
+	// startup) can never observe e.writer == nil under the same lock.
 	e.mu.Lock()
 	e.rootCtx = ctx
+	e.writer = NewStoreWriter(e.store, e.em)
 	e.mu.Unlock()
 
-	e.writer = NewStoreWriter(e.store, e.em)
-	go e.writer.Run(ctx)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.writer.Run(ctx)
+	}()
 
 	// Start workers for every account currently in DB.
 	accs, _ := e.store.ListAccounts(ctx)
@@ -71,10 +86,14 @@ func (e *Engine) Run(ctx context.Context) {
 
 	<-ctx.Done()
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	for _, c := range e.cancels {
 		c()
 	}
+	for _, c := range e.downloaderStops {
+		c()
+	}
+	e.mu.Unlock()
+	e.wg.Wait()
 }
 
 // StartAccount spins up a worker for the given account ID if one isn't already
@@ -97,35 +116,47 @@ func (e *Engine) StartAccount(parent context.Context, id int64) {
 	w := NewAccountWorker(id, e.store, e.secrets, e.writer, e.em)
 	e.workers[id] = w
 	e.cancels[id] = cancel
-	go e.supervise(ctx, id, w)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.supervise(ctx, id, w)
+	}()
 
-	// Spawn an AttachmentDownloader tied to the engine's parent ctx (not the
-	// per-worker ctx) so it survives worker restarts. Guard against
+	// Spawn an AttachmentDownloader on a per-account context derived from
+	// the engine's root ctx so it survives worker restarts but stops on
+	// StopAccount (no goroutine leak after account removal). Guard against
 	// double-spawn when an account is stopped and re-started.
 	if e.attachDir != "" {
 		if _, ok := e.downloaders[id]; !ok {
+			dCtx, dCancel := context.WithCancel(base)
 			d := NewAttachmentDownloader(id, e.store, e.secrets, e.em, e.attachDir)
 			e.downloaders[id] = d
-			go d.Run(base)
+			e.downloaderStops[id] = dCancel
+			e.wg.Add(1)
+			go func() {
+				defer e.wg.Done()
+				d.Run(dCtx)
+			}()
 		}
 	}
 }
 
-// StopAccount cancels the worker for the given account ID and forgets it.
-// The supervise goroutine may still be tearing down for a brief moment after
-// this returns.
+// StopAccount cancels the worker and the AttachmentDownloader for the given
+// account ID and forgets them. The supervise / downloader goroutines may
+// still be tearing down for a brief moment after this returns.
 func (e *Engine) StopAccount(id int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if c, ok := e.cancels[id]; ok {
 		c()
 	}
+	if c, ok := e.downloaderStops[id]; ok {
+		c()
+	}
 	delete(e.workers, id)
 	delete(e.cancels, id)
-	// Drop the downloader entry so a subsequent StartAccount can spawn a fresh
-	// one. The goroutine itself stays alive until the engine's parent ctx is
-	// cancelled (per-account cancel TBD).
 	delete(e.downloaders, id)
+	delete(e.downloaderStops, id)
 }
 
 // WorkerFor returns the live worker for an account, or nil if none exists.
@@ -136,16 +167,22 @@ func (e *Engine) WorkerFor(id int64) *AccountWorker {
 }
 
 // supervise runs an AccountWorker, recovering from panics and restarting it
-// with exponential backoff until ctx is cancelled.
+// with exponential backoff until ctx is cancelled. The attempt counter is
+// reset to 0 once a worker has been healthy for ≥ the longest delay
+// (5 min); a transient daytime outage that bounces the worker 6+ times
+// then heals would otherwise leave the next failure pinned at the 300s tier
+// for the rest of the process lifetime.
 func (e *Engine) supervise(ctx context.Context, id int64, w *AccountWorker) {
 	delays := []time.Duration{
 		1 * time.Second, 2 * time.Second, 5 * time.Second,
 		15 * time.Second, 60 * time.Second, 300 * time.Second,
 	}
+	const healthyThreshold = 5 * time.Minute
 	attempt := 0
 	for {
 		runCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
+		startedAt := time.Now()
 		go func() {
 			defer close(done)
 			defer func() {
@@ -156,6 +193,9 @@ func (e *Engine) supervise(ctx context.Context, id int64, w *AccountWorker) {
 			w.Run(runCtx)
 		}()
 		<-done
+		if time.Since(startedAt) >= healthyThreshold {
+			attempt = 0
+		}
 		cancel()
 		select {
 		case <-ctx.Done():

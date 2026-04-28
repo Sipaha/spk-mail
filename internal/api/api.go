@@ -18,9 +18,6 @@ type API interface {
 	AllowRemoteForMessage(ctx context.Context, id int64) (string, error) // returns updated body_html
 	Search(ctx context.Context, query string, limit, offset int) ([]SearchHitDTO, error)
 
-	UnreadCounts(ctx context.Context) (UnreadCountsDTO, error)
-
-	GetAttachmentLocalPath(ctx context.Context, id int64) (string, error)
 	OpenAttachment(ctx context.Context, id int64) error
 
 	ListProfiles(ctx context.Context) ([]ProfileDTO, error)

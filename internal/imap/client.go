@@ -90,13 +90,14 @@ func Dial(ctx context.Context, opts DialOpts) (*Client, error) {
 				wrap.pushIdleNotif(IdleNotification{Kind: NotifExists})
 			},
 			Expunge: func(_ uint32) {
-				wrap.pushIdleNotif(IdleNotification{Kind: NotifExpunge})
+				// EXPUNGE notifications are not surfaced — see NotifKind
+				// docstring in idle.go.
 			},
 			Fetch: func(msg *imapclient.FetchMessageData) {
-				wrap.pushIdleNotif(IdleNotification{Kind: NotifFetch})
-				// The client read loop will wedge if we don't consume
-				// the message body before returning. Collect drains
-				// every item; we discard the buffer.
+				// FETCH notifications are not surfaced (see idle.go).
+				// We still drain the message body — the client read
+				// loop will wedge if we don't consume FETCH items
+				// before returning.
 				if msg != nil {
 					_, _ = msg.Collect()
 				}
@@ -127,7 +128,7 @@ func (c *Client) Close() error { return c.c.Close() }
 
 // ListFolders returns every mailbox the account exposes, with a normalised
 // role string when one can be inferred from the LIST attributes.
-func (c *Client) ListFolders(ctx context.Context) ([]FolderInfo, error) {
+func (c *Client) ListFolders(_ context.Context) ([]FolderInfo, error) {
 	cmd := c.c.List("", "*", nil)
 	var out []FolderInfo
 	for {
@@ -189,7 +190,7 @@ func SplitHostPort(addr string) (string, int) { return splitHostPort(addr) }
 
 // Capabilities returns the set of advertised CAPABILITY tokens. Used by the
 // engine to decide IDLE vs poll.
-func (c *Client) Capabilities(ctx context.Context) (map[string]bool, error) {
+func (c *Client) Capabilities() (map[string]bool, error) {
 	caps, err := c.c.Capability().Wait()
 	if err != nil {
 		return nil, err

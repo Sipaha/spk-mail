@@ -30,7 +30,7 @@ type Options struct {
 // Run starts the Wails event loop. Closing the window hides it instead of
 // quitting; the user quits via the tray menu (or ctx cancellation).
 func Run(ctx context.Context, opts Options) error {
-	svc := transport.NewAPI(opts.API, opts.Emitter)
+	svc := transport.NewAPI(opts.API)
 
 	app := application.New(application.Options{
 		Name:        "spk-mail",

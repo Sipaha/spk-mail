@@ -2,6 +2,8 @@ package mime
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/mail"
@@ -11,6 +13,11 @@ import (
 	gomsg "github.com/emersion/go-message"
 	gomail "github.com/emersion/go-message/mail"
 )
+
+// ErrMIMEDepthExceeded is returned by Parse when a message's multipart
+// nesting goes past maxMIMEDepth. Tests use errors.Is for a stable
+// contract independent of message wording.
+var ErrMIMEDepthExceeded = errors.New("mime: multipart depth exceeds limit")
 
 type ParsedMessage struct {
 	MessageID   string
@@ -33,6 +40,13 @@ type ParsedAttachment struct {
 	Size        int64
 }
 
+// maxMIMEDepth bounds multipart recursion. A pathological email with many
+// nested multiparts could otherwise overflow the parsing goroutine's stack
+// (and the StoreWriter goroutine that owns it). 64 is comfortably deeper than
+// any sane real-world structure (alternative + related + signed wrapping
+// rarely exceeds depth 5).
+const maxMIMEDepth = 64
+
 func Parse(raw []byte) (*ParsedMessage, error) {
 	r, err := gomsg.Read(bytes.NewReader(raw))
 	if err != nil {
@@ -52,11 +66,16 @@ func Parse(raw []byte) (*ParsedMessage, error) {
 	p.InReplyTo = strings.TrimSpace(hdr.Get("In-Reply-To"))
 	p.References = parseRefs(hdr.Get("References"))
 
-	walk(r, "", p)
+	if err := walk(r, "", p, 0); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 
-func walk(e *gomsg.Entity, partID string, p *ParsedMessage) {
+func walk(e *gomsg.Entity, partID string, p *ParsedMessage, depth int) error {
+	if depth > maxMIMEDepth {
+		return fmt.Errorf("%w (depth=%d)", ErrMIMEDepthExceeded, depth)
+	}
 	mt, params, _ := e.Header.ContentType()
 	disp, _, _ := e.Header.ContentDisposition()
 	if disp == "attachment" || (params["name"] != "" && !strings.HasPrefix(mt, "text/")) {
@@ -71,6 +90,10 @@ func walk(e *gomsg.Entity, partID string, p *ParsedMessage) {
 		// RFC 2047 encoded names ("=?utf-8?B?...?=") happen for non-ASCII
 		// filenames; ParseMediaType doesn't decode them on its own.
 		fname = decodeHeader(fname)
+		// Strip dangerous and bidi-override Unicode at parse time so the DB
+		// stores the safe form. The downloader applies the same filter again
+		// (belt-and-braces in case an old row predates this code).
+		fname = SanitizeFilename(fname)
 		// Fallback: many emails carry an inline image or attachment with no
 		// filename at all (just Content-Type). Synthesize "att-<partID><ext>"
 		// so the downloader has something safe to write — without this the
@@ -79,40 +102,52 @@ func walk(e *gomsg.Entity, partID string, p *ParsedMessage) {
 		if strings.TrimSpace(fname) == "" {
 			fname = SynthFilename(partID, mt)
 		}
-		buf, _ := io.ReadAll(e.Body)
+		buf, err := io.ReadAll(e.Body)
+		if err != nil {
+			return fmt.Errorf("mime: read attachment body: %w", err)
+		}
 		p.Attachments = append(p.Attachments, ParsedAttachment{
 			PartID: partID, Filename: fname, ContentType: mt, Size: int64(len(buf)),
 		})
-		return
+		return nil
 	}
 	if mr := e.MultipartReader(); mr != nil {
 		i := 1
 		for {
 			sub, err := mr.NextPart()
 			if err != nil {
-				return
+				return nil
 			}
 			subID := partID
 			if subID != "" {
 				subID += "."
 			}
 			subID += itoa(i)
-			walk(sub, subID, p)
+			if err := walk(sub, subID, p, depth+1); err != nil {
+				return err
+			}
 			i++
 		}
 	}
 	switch {
 	case strings.HasPrefix(mt, "text/plain"):
-		buf, _ := io.ReadAll(e.Body)
+		buf, err := io.ReadAll(e.Body)
+		if err != nil {
+			return fmt.Errorf("mime: read text/plain body: %w", err)
+		}
 		if p.BodyText == "" {
 			p.BodyText = string(buf)
 		}
 	case strings.HasPrefix(mt, "text/html"):
-		buf, _ := io.ReadAll(e.Body)
+		buf, err := io.ReadAll(e.Body)
+		if err != nil {
+			return fmt.Errorf("mime: read text/html body: %w", err)
+		}
 		if p.BodyHTML == "" {
 			p.BodyHTML = string(buf)
 		}
 	}
+	return nil
 }
 
 // wordDecoder decodes RFC 2047 encoded-words (=?charset?B?…?= / =?charset?Q?…?=)
@@ -180,6 +215,56 @@ func parseRefs(v string) []string {
 		}
 	}
 	return out
+}
+
+// SanitizeFilename strips dangerous and visually deceptive characters from
+// an attacker-controlled filename. Removes:
+//
+//   - Unicode bidirectional override / embedding marks (U+202A..U+202E,
+//     U+2066..U+2069) — these can disguise a `.exe` as `.pdf` in any file
+//     manager that doesn't render bidi defensively, opening a click-to-run
+//     vector through xdg-open.
+//   - C0/C1 control characters and DEL.
+//   - Directory separators (/ and \) and Unicode lookalikes (fraction
+//     slash U+2044, fullwidth solidus U+FF0F).
+//   - Leading dots (so an attachment cannot create a hidden dotfile and the
+//     downloader can't be tricked into writing `.bashrc`).
+//
+// Returns "" if the input collapses to empty after stripping; the caller
+// should fall back to SynthFilename in that case.
+func SanitizeFilename(name string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F {
+			return -1
+		}
+		if isDangerousFilenameRune(r) {
+			return -1
+		}
+		return r
+	}, name)
+	cleaned = strings.TrimLeft(cleaned, ".")
+	cleaned = strings.TrimSpace(cleaned)
+	return cleaned
+}
+
+// isDangerousFilenameRune reports whether r is a bidi/embedding control,
+// directory separator, or Unicode separator-lookalike. Listed by codepoint
+// rather than as a literal string so the source file stays free of
+// invisible-format characters (which staticcheck ST1018 rejects).
+func isDangerousFilenameRune(r rune) bool {
+	switch r {
+	case '/', '\\':
+		return true
+	case 0x2044: // ⁄ FRACTION SLASH
+		return true
+	case 0xFF0F: // / FULLWIDTH SOLIDUS
+		return true
+	case 0x202A, 0x202B, 0x202C, 0x202D, 0x202E: // LRE/RLE/PDF/LRO/RLO
+		return true
+	case 0x2066, 0x2067, 0x2068, 0x2069: // LRI/RLI/FSI/PDI
+		return true
+	}
+	return false
 }
 
 // SynthFilename builds a plausible filename for parts that arrive without

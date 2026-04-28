@@ -79,9 +79,19 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
   // On every iframe (re)load: resize to content height AND wire up a click
   // interceptor so <a> taps open in the system browser instead of trying to
   // navigate inside the sandboxed iframe (which silently does nothing).
+  // We track the document and the click handler in a ref-like pair so the
+  // cleanup can remove the listener — without that, srcDoc reloads (toggling
+  // adapted/original, marking remote-content allowed) would accumulate
+  // listeners on the same document object.
   useEffect(() => {
     const f = ref.current; if (!f) return
+    let activeDoc: Document | null = null
+    let activeClick: ((e: Event) => void) | null = null
     const onLoad = () => {
+      // Strip any handler from a previous load before installing a new one.
+      if (activeDoc && activeClick) {
+        activeDoc.removeEventListener('click', activeClick)
+      }
       const doc = f.contentDocument
       if (!doc) return
       try {
@@ -96,9 +106,16 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
         openExternal(href)
       }
       doc.addEventListener('click', onClick)
+      activeDoc = doc
+      activeClick = onClick
     }
     f.addEventListener('load', onLoad)
-    return () => f.removeEventListener('load', onLoad)
+    return () => {
+      f.removeEventListener('load', onLoad)
+      if (activeDoc && activeClick) {
+        activeDoc.removeEventListener('click', activeClick)
+      }
+    }
   }, [html, adapted])
 
   if (!html) {

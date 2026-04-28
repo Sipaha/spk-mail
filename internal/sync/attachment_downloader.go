@@ -107,14 +107,20 @@ func (d *AttachmentDownloader) runOnce(ctx context.Context) {
 			continue
 		}
 		// p.Filename is attacker-controlled (Content-Disposition filename
-		// from the email). filepath.Base strips any directory component so
-		// "../../escape.bin" becomes "escape.bin" — preventing the join
-		// below from escaping rootDir. For empty / dotted names (inline
-		// images without filename, malformed Content-Disposition, or rows
-		// inserted by older parser versions), synthesize a stable name from
-		// the attachment id + MIME type rather than skipping — otherwise
-		// the row stays pending forever and re-warns every poll cycle.
-		safeName := filepath.Base(p.Filename)
+		// from the email). Layer two passes:
+		//   1. mimeutil.SanitizeFilename strips Unicode bidi-override
+		//      characters, C0/C1 controls, fraction-slash / fullwidth-solidus
+		//      lookalikes, and leading dots — defending against disguised
+		//      executables and hidden-dotfile writes that would survive a
+		//      naive filepath.Base.
+		//   2. filepath.Base strips any directory component so
+		//      "../../escape.bin" becomes "escape.bin" — preventing the join
+		//      below from escaping rootDir.
+		// For empty / dotted names (inline images without filename, malformed
+		// Content-Disposition, or rows inserted by older parser versions),
+		// synthesize a stable name from the attachment id + MIME type rather
+		// than skipping — otherwise the row stays pending forever.
+		safeName := filepath.Base(mimeutil.SanitizeFilename(p.Filename))
 		if safeName == "" || safeName == "." || safeName == "/" || safeName == ".." {
 			safeName = mimeutil.SynthFilename(strconv.FormatInt(p.AttachmentID, 10), p.ContentType)
 		}

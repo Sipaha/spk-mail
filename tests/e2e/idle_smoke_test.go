@@ -1,12 +1,12 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -22,8 +22,9 @@ func TestSmoke_InjectTriggersThread(t *testing.T) {
 		t.Skipf("binary missing (%v); run `make build` first", err)
 	}
 
+	port, _ := freePort(t)
 	dir := t.TempDir()
-	cmd := exec.Command(bin, "--browser", "--port=5189", "--imap-mock", "--seed=../fixtures/basic.yaml")
+	cmd := exec.Command(bin, "--browser", "--port="+strconv.Itoa(port), "--imap-mock", "--test-api", "--seed=../fixtures/basic.yaml")
 	cmd.Env = append(os.Environ(),
 		"XDG_CONFIG_HOME="+filepath.Join(dir, "cfg"),
 		"XDG_DATA_HOME="+filepath.Join(dir, "data"),
@@ -33,22 +34,19 @@ func TestSmoke_InjectTriggersThread(t *testing.T) {
 	require.NoError(t, cmd.Start())
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	waitURL(t, "http://127.0.0.1:5189/")
+	base := "http://127.0.0.1:" + strconv.Itoa(port)
+	waitURL(t, base+"/")
 
 	body, _ := json.Marshal(map[string]any{
 		"email": "alice@example.com", "from": "Bob <b@x>", "subject": "injected", "body_text": "hello",
 	})
-	resp, err := http.Post("http://127.0.0.1:5189/api/_test/inject-message", "application/json", bytes.NewReader(body))
-	require.NoError(t, err)
+	resp := postJSON(t, base, "/api/_test/inject-message", body)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	readBody(resp)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		r, err := http.Post("http://127.0.0.1:5189/api/ListThreads", "application/json", bytes.NewReader([]byte("{}")))
-		if err != nil {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
+		r := postJSON(t, base, "/api/ListThreads", []byte("{}"))
 		var threads []map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&threads); err == nil {
 			for _, th := range threads {

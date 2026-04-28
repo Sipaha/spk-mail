@@ -6,7 +6,7 @@ The end-to-end manual verification rule from the global CLAUDE.md applies here. 
 
 ## Architecture in one paragraph
 
-Single Wails v3 process. `internal/sync` runs one `AccountWorker` goroutine per IMAP account; each worker uses IDLE on INBOX and periodic poll on other folders, and serializes its `syncFolder` calls through a per-account mutex (one folder fetched at a time per account). Parsed messages flow through a single `StoreWriter` into SQLite (`internal/storage`); the API layer (`internal/api` + `internal/api/transport`) reads from SQLite directly. Frontend is React 19 + Zustand + Tailwind, embedded in the binary via `cmd/spk-mail/dist`.
+Single Wails v3 process. `internal/sync` runs one `AccountWorker` goroutine per IMAP account; each worker uses IDLE on INBOX and periodic poll on other folders, and serializes its `syncFolder` calls through a per-account mutex (one folder fetched at a time per account). Parsed messages flow through a single `StoreWriter`, which delegates the thread+message+attachments+stats write to `storage.InsertParsedMessageBundle` (a single SQLite tx via `storage.WithTx`) so a mid-flight failure rolls back atomically — there are no orphan thread or message rows on retry. The store opens SQLite with `MaxOpenConns=1`; mixing `*sql.DB` and `*sql.Tx` writes inside one logical operation will deadlock, so always go through `WithTx`. The API layer (`internal/api` + `internal/api/transport`) reads from SQLite directly. The browser-mode HTTP server applies an Origin/Host CSRF guard via `transport.OriginGuard`; `_test` automation routes are gated behind `--test-api`. Frontend is React 19 + Zustand + Tailwind, embedded in the binary via `cmd/spk-mail/dist`.
 
 ## Things that bite
 
