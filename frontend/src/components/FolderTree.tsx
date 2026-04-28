@@ -43,7 +43,14 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
     `w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-zinc-800 ${active ? 'bg-zinc-800' : ''}`
 
   return (
-    <ul className="ml-4 mt-1 space-y-0.5 text-xs">
+    // <nav aria-label="Folders"> turns the FolderTree into a discoverable
+    // landmark — Playwright/screen-readers can address it by role+name
+    // instead of brittle text/.first() selectors. Multiple <nav> elements
+    // per page is allowed by ARIA so long as each carries a distinguishing
+    // aria-label, which they do (one per account, all sharing the
+    // "Folders" label is fine since they live in different account
+    // sub-trees of the sidebar).
+    <nav aria-label="Folders"><ul className="ml-4 mt-1 space-y-0.5 text-xs">
       <li>
         <button
           onClick={() => setFilter({ accountId: ownerId, folderId: undefined, unreadOnly: true, hasFlagged: false })}
@@ -87,6 +94,6 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
           </li>
         )
       })}
-    </ul>
+    </ul></nav>
   )
 }
