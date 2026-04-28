@@ -6,7 +6,6 @@ import Layout from './components/Layout'
 import AccountSidebar from './components/AccountSidebar'
 import ProfileSwitcher from './components/ProfileSwitcher'
 import SearchBar from './components/SearchBar'
-import ViewSwitcher from './components/ViewSwitcher'
 import ThreadList from './components/ThreadList'
 import ThreadView from './components/ThreadView'
 import Settings from './pages/Settings'
@@ -26,7 +25,7 @@ export default function App() {
     return <div className="bg-zinc-950 text-zinc-100 min-h-screen"><a href="#/" className="absolute top-3 left-3 text-xs text-zinc-500">← back</a><Settings /></div>
   }
 
-  const sidebar = <><ProfileSwitcher /><SearchBar /><ViewSwitcher /><AccountSidebar /></>
+  const sidebar = <><ProfileSwitcher /><SearchBar /><AccountSidebar /></>
 
   const m = route.match(/^#\/search\?q=(.*)$/)
   if (m) {

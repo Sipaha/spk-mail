@@ -26,9 +26,17 @@ export function useEventStream() {
           s.setAccounts(list.map(a => a.id === id ? { ...a, status: state } : a))
           break
         }
-        case 'SyncProgress':
-          s.setSyncProgress(Number(ev.payload.account_id), String(ev.payload.folder ?? ''), Number(ev.payload.done ?? 0), Number(ev.payload.total ?? 0))
+        case 'SyncProgress': {
+          const folderId = ev.payload.folder_id != null ? Number(ev.payload.folder_id) : undefined
+          s.setSyncProgress(
+            Number(ev.payload.account_id),
+            String(ev.payload.folder ?? ''),
+            Number(ev.payload.done ?? 0),
+            Number(ev.payload.total ?? 0),
+            folderId,
+          )
           break
+        }
         case 'WriteError':
           // surface in console for now; toast UI is plan 7
           console.error('write error', ev.payload); break

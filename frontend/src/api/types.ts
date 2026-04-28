@@ -27,6 +27,8 @@ export interface FolderDTO {
   name: string
   role: string  // 'inbox' | 'sent' | 'drafts' | 'archive' | 'spam' | 'trash' | ''
   unread_count: number
+  total_count: number
+  flagged_count: number
 }
 export type EventType = 'MessageInserted'|'MessageArrived'|'MessageUpdated'|'SyncProgress'|'AccountStatus'|'WriteError'|'AttachmentReady'
 export interface ApiEvent { type: EventType; payload: Record<string, unknown> }

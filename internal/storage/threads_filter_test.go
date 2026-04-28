@@ -98,14 +98,34 @@ func TestListThreads_AND_ProfileAndFolder(t *testing.T) {
 	require.Len(t, rows, 1) // TUnread
 }
 
-func TestUnreadCountsByFolder(t *testing.T) {
+func TestMessageCountsByFolder(t *testing.T) {
 	s, ids := setupTwoProfilesTwoAccounts(t)
-	counts, err := s.UnreadCountsByFolder(context.Background(), ids.AccW)
+	counts, err := s.MessageCountsByFolder(context.Background(), ids.AccW)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), counts[ids.INBOX_W])
-	require.Equal(t, int64(1), counts[ids.Sent_W])
+	// Work/INBOX has 1 flagged unread message.
+	require.Equal(t, FolderCounts{Total: 1, Unread: 1, Flagged: 1}, counts[ids.INBOX_W])
+	// Work/Sent has 1 plain unread message.
+	require.Equal(t, FolderCounts{Total: 1, Unread: 1, Flagged: 0}, counts[ids.Sent_W])
 
-	countsP, err := s.UnreadCountsByFolder(context.Background(), ids.AccP)
+	countsP, err := s.MessageCountsByFolder(context.Background(), ids.AccP)
 	require.NoError(t, err)
-	require.Empty(t, countsP) // Read-only thread; no unread
+	// Personal/INBOX has 1 read-only message.
+	require.Equal(t, FolderCounts{Total: 1, Unread: 0, Flagged: 0}, countsP[ids.INBOX_P])
+}
+
+func TestMessageCountsByFolder_FullMatrix(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	accID, _ := s.InsertAccount(ctx, AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
+	role := "inbox"
+	fid, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
+
+	_, _ = s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fid, UID: 1, Date: 1, Flags: `[]`})                            // unread, not flagged
+	_, _ = s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fid, UID: 2, Date: 2, Flags: `["\\Seen"]`})                    // read,   not flagged
+	_, _ = s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fid, UID: 3, Date: 3, Flags: `["\\Flagged"]`})                 // unread, flagged
+	_, _ = s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fid, UID: 4, Date: 4, Flags: `["\\Seen","\\Flagged"]`})        // read,   flagged
+
+	counts, err := s.MessageCountsByFolder(ctx, accID)
+	require.NoError(t, err)
+	require.Equal(t, FolderCounts{Total: 4, Unread: 2, Flagged: 2}, counts[fid])
 }

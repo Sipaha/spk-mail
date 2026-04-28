@@ -88,11 +88,13 @@ type UnreadCountsDTO struct {
 }
 
 type FolderDTO struct {
-	ID          int64  `json:"id"`
-	AccountID   int64  `json:"account_id"`
-	Name        string `json:"name"`
-	Role        string `json:"role"`
-	UnreadCount int64  `json:"unread_count"`
+	ID           int64  `json:"id"`
+	AccountID    int64  `json:"account_id"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
+	UnreadCount  int64  `json:"unread_count"`
+	TotalCount   int64  `json:"total_count"`
+	FlaggedCount int64  `json:"flagged_count"`
 }
 
 type AddAccountRequest struct {

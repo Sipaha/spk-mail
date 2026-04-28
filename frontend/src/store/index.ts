@@ -11,7 +11,7 @@ interface State {
   filter: { accountId?: number; folderId?: number; unreadOnly: boolean; hasFlagged: boolean }
   openThreadId?: number
   openThread?: MessageDTO[]
-  syncProgress: Record<number, { folder: string; done: number; total: number }>
+  syncProgress: Record<number, { folder: string; folderId?: number; done: number; total: number }>
 
   setAccounts: (a: AccountDTO[]) => void
   upsertAccount: (a: AccountDTO) => void
@@ -23,7 +23,7 @@ interface State {
   markThreadRead: (id: number) => void
   setOpenThread: (id: number | undefined, msgs?: MessageDTO[]) => void
   setFilter: (f: Partial<State['filter']>) => void
-  setSyncProgress: (accId: number, folder: string, done: number, total: number) => void
+  setSyncProgress: (accId: number, folder: string, done: number, total: number, folderId?: number) => void
 }
 
 export const useStore = create<State>()(
@@ -53,7 +53,7 @@ export const useStore = create<State>()(
       markThreadRead: (id) => set((s) => ({ threads: s.threads.map(t => t.id === id ? { ...t, unread_count: 0 } : t) })),
       setOpenThread: (id, msgs) => set({ openThreadId: id, openThread: msgs }),
       setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
-      setSyncProgress: (accId, folder, done, total) => set((s) => ({ syncProgress: { ...s.syncProgress, [accId]: { folder, done, total } } })),
+      setSyncProgress: (accId, folder, done, total, folderId) => set((s) => ({ syncProgress: { ...s.syncProgress, [accId]: { folder, folderId, done, total } } })),
     }),
     {
       name: 'spk-mail.activeProfile',
