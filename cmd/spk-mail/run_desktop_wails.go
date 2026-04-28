@@ -47,10 +47,12 @@ func runDesktop(ctx context.Context) error {
 	stub := api.NewStub(st, sec, em, engineAdapter{eng: eng})
 
 	icon, _ := appfiles.FS.ReadFile("icons/spk-mail.png")
+	unreadIcon, _ := appfiles.FS.ReadFile("icons/spk-mail-unread.png")
 	return desktop.Run(ctx, desktop.Options{
-		FrontendFS: frontendFS(),
-		API:        stub,
-		Emitter:    em,
-		IconPNG:    icon,
+		FrontendFS:    frontendFS(),
+		API:           stub,
+		Emitter:       em,
+		IconPNG:       icon,
+		UnreadIconPNG: unreadIcon,
 	})
 }
