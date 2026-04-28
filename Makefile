@@ -1,4 +1,4 @@
-.PHONY: build build-fast build-desktop test test-go test-front lint fmt tidy clean run-browser
+.PHONY: build build-fast build-desktop test test-go test-front lint fmt tidy clean run run-browser
 
 BIN_DIR := build/bin
 BIN     := $(BIN_DIR)/spk-mail
@@ -48,6 +48,9 @@ tidy:
 
 clean:
 	rm -rf build frontend/dist coverage.html
+
+run: build-desktop
+	$(BIN_DIR)/spk-mail-desktop
 
 run-browser: build
 	$(BIN) --browser --port=5174
