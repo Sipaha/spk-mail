@@ -142,3 +142,60 @@ func TestSanitizeFilename(t *testing.T) {
 		})
 	}
 }
+
+// TestParse_LegacyCharsetBody pins down koi8-r / windows-1251 body decoding
+// via the go-message/charset hook installed in parser.go. Without that hook
+// these parts came through as parse failures (logged "unknown charset") and
+// the body silently dropped from the inserted row. Russian-language archives
+// regularly have Subject and body in these charsets — common enough that the
+// regression was visible in spk-mail's own log buffer.
+func TestParse_LegacyCharsetBody(t *testing.T) {
+	cases := []struct {
+		name    string
+		charset string
+		body    []byte
+		expect  string
+	}{
+		{
+			name:    "koi8-r",
+			charset: "koi8-r",
+			body:    []byte{0xF0, 0xD2, 0xC9, 0xD7, 0xC5, 0xD4}, // "Привет"
+			expect:  "Привет",
+		},
+		{
+			name:    "windows-1251",
+			charset: "windows-1251",
+			body:    []byte{0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2}, // "Привет"
+			expect:  "Привет",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(strings.Join([]string{
+				"From: B <b@x>", "Subject: x", "Date: Mon, 27 Apr 2026 10:30:00 +0000",
+				"MIME-Version: 1.0",
+				"Content-Type: text/plain; charset=" + tc.charset,
+				"", "",
+			}, "\r\n"))
+			raw = append(raw, tc.body...)
+			p, err := Parse(raw)
+			require.NoError(t, err)
+			require.Equal(t, tc.expect, strings.TrimSpace(p.BodyText))
+		})
+	}
+}
+
+// TestParse_LegacyCharsetEncodedWordSubject pins =?windows-1251?B?…?= subject
+// decoding so a regression in WordDecoder.CharsetReader wiring would fail this
+// test instead of silently leaving the encoded form in the thread row.
+func TestParse_LegacyCharsetEncodedWordSubject(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: B <b@x>",
+		"Subject: =?windows-1251?B?z/Do4uXy?=",
+		"Date: Mon, 27 Apr 2026 10:30:00 +0000",
+		"Content-Type: text/plain", "", "x",
+	}, "\r\n")
+	p, err := Parse([]byte(raw))
+	require.NoError(t, err)
+	require.Equal(t, "Привет", p.Subject)
+}
