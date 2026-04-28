@@ -26,7 +26,7 @@ func TestListAttachmentsByMessages_Batch(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// Two accounts → two folders → three messages, attachments scattered:
+	// One account → one folder → three messages, attachments scattered:
 	//   m1 → 2 attachments
 	//   m2 → 0 attachments (must be absent from result map)
 	//   m3 → 1 attachment
