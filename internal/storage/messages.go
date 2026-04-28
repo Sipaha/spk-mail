@@ -95,7 +95,6 @@ func (s *Store) UpdateBodyHTML(ctx context.Context, id int64, html string) error
 	return err
 }
 
-
 // FindThreadByMessageIDs returns thread_id for any existing message whose
 // Message-ID matches one of the supplied references. The match is byte-exact;
 // RFC 5322 Message-IDs are case-sensitive in the local-part. Used at insert
