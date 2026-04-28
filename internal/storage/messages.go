@@ -179,7 +179,10 @@ func (s *Store) MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutc
 				continue
 			}
 			fl = append(fl, `\Seen`)
-			b, _ := json.Marshal(fl)
+			b, err := json.Marshal(fl)
+			if err != nil {
+				return fmt.Errorf("MarkMessagesRead: marshal flags for id %d: %w", c.id, err)
+			}
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
 				return err
@@ -203,6 +206,9 @@ func (s *Store) MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutc
 		return nil
 	})
 	if err != nil {
+		// Discard out: it was mutated inside the tx closure but the tx rolled
+		// back, so any Changed/ChangedThreadIDs entries point at writes that
+		// never landed.
 		return MarkReadOutcome{}, err
 	}
 	return out, nil
