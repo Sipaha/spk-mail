@@ -140,7 +140,17 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, t
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// IdleTimeout caps the keep-alive window between requests so a misbehaving
+	// client that opened a connection but never closed it cannot pin a server
+	// goroutine forever. 120s is well above any normal browser keep-alive
+	// (Chrome reuses for ~5s, Firefox for ~115s) so it doesn't churn live
+	// connections. The /api/events SSE handler has its own per-write deadline
+	// (sseWriteTimeout) and ignores IdleTimeout because it streams continuously.
+	srv := &http.Server{
+		Addr: addr, Handler: mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	slog.Info("spk-mail browser mode listening", "url", "http://"+addr, "data", filepath.Dir(paths.DBFile))
 
 	go func() { <-ctx.Done(); _ = srv.Shutdown(context.Background()) }()

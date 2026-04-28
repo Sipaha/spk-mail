@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/spk/spk-mail/internal/api"
 )
@@ -219,6 +220,21 @@ func httpHandle[Req any](fn func(context.Context, *Req) (any, error)) http.Handl
 	}
 }
 
+// ssePingInterval bounds how long the connection can stay idle before we
+// poke it with a comment frame. 25s is the conventional default — short
+// enough to detect a silently-dead TCP socket inside a minute, long enough
+// not to wake mobile radios needlessly. EventSource clients ignore lines
+// that begin with ":" (SSE comment frames) per the WHATWG spec, so the
+// keepalive is invisible at the application layer.
+const ssePingInterval = 25 * time.Second
+
+// sseWriteTimeout caps each individual write so a half-broken peer (e.g.
+// firewall ate the FIN, OS kernel hasn't decided the socket is dead yet)
+// can't pin the goroutine + the 64-cap subscriber channel forever. On
+// timeout the write returns an error and we exit the loop cleanly,
+// freeing the subscription via the deferred unsub.
+const sseWriteTimeout = 10 * time.Second
+
 func (h *HTTP) sse(w http.ResponseWriter, r *http.Request) {
 	if h.events == nil {
 		http.Error(w, "events disabled", http.StatusNotImplemented)
@@ -234,8 +250,14 @@ func (h *HTTP) sse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
 
+	rc := http.NewResponseController(w)
+
 	ch, unsub := h.events.Subscribe()
 	defer unsub()
+
+	ping := time.NewTicker(ssePingInterval)
+	defer ping.Stop()
+
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -243,7 +265,18 @@ func (h *HTTP) sse(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			data, _ := json.Marshal(ev)
-			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
+			_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-ping.C:
+			// SSE comment frame — invisible to the application but forces a
+			// real TCP write, which surfaces a dead peer as a Write error.
+			_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
