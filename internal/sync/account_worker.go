@@ -240,11 +240,11 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 	return nil
 }
 
-// fetchBatchSize bounds each UID FETCH range. 500 keeps a single FETCH well
-// under the typical IMAP server's per-command timeout / response budget while
-// still being efficient enough that a 100k-message mailbox finishes in ~200
-// round-trips.
-const fetchBatchSize int64 = 500
+// fetchBatchSize bounds each UID FETCH range. 200 is a conservative balance:
+// small enough that a single FETCH stays under server-side per-command
+// timeouts even when the batch lands on messages with multi-MB attachments,
+// large enough that a 100k-message mailbox completes in ~500 round-trips.
+const fetchBatchSize int64 = 200
 
 func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, folder, role string) {
 	pw, _ := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
