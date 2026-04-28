@@ -314,10 +314,12 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		}
 		// Checkpoint after every batch — keeps partial progress if the next
 		// batch dies. UIDValidity is set unconditionally so subsequent runs
-		// don't treat the folder as fresh.
+		// don't treat the folder as fresh. last_synced_at gives the UI a
+		// "last synced N seconds ago" handle for per-folder status.
+		now := time.Now().Unix()
 		if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
 			AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-			UIDValidity: state.UIDValidity, UIDNext: maxUID,
+			UIDValidity: state.UIDValidity, UIDNext: maxUID, LastSyncedAt: &now,
 		}); err != nil {
 			return err
 		}
@@ -348,6 +350,12 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 const fetchBatchSize int64 = 200
 
 func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, folder, role string) {
+	// Cache the password once at goroutine start. The previous code re-fetched
+	// from the secrets store on every EXISTS notification, which is wasted
+	// keyring traffic for an account whose password hasn't rotated. If a
+	// rotation does happen, supervise will bounce the worker (next IMAP auth
+	// fails → connection error → Run returns → restart picks up the fresh
+	// secret), so caching here doesn't pin a stale credential indefinitely.
 	pw, _ := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
 	c, err := imap.Dial(ctx, imap.DialOpts{
 		Host: acc.IMAPHost, Port: acc.IMAPPort,
@@ -375,7 +383,6 @@ func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, fol
 				folders, _ := w.store.ListFolders(ctx, acc.ID)
 				for _, f := range folders {
 					if strings.EqualFold(f.Name, folder) {
-						pw, _ := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
 						syncC, err := imap.Dial(ctx, imap.DialOpts{
 							Host: acc.IMAPHost, Port: acc.IMAPPort,
 							Username: acc.IMAPUsername, Password: string(pw),
