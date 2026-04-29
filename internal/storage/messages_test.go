@@ -380,6 +380,166 @@ func TestMarkFolderMessagesRead_ScanErrorRollback(t *testing.T) {
 		"good row must remain unread — tx rolled back after bad row failed mid-loop")
 }
 
+func TestToggleThreadFlagged_AddOnLatest(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, err := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+	threadID, err := s.InsertThread(ctx, ThreadRow{SubjectNorm: "t", LastDate: 300})
+	require.NoError(t, err)
+	tid := threadID
+
+	mkMsg := func(uid int64, date int64) int64 {
+		id, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: date,
+			ThreadID: &tid, Flags: `[]`,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	m1 := mkMsg(1, 100)
+	m2 := mkMsg(2, 200)
+	m3 := mkMsg(3, 300) // most recent
+
+	out, err := s.ToggleThreadFlagged(ctx, threadID)
+	require.NoError(t, err)
+	require.Equal(t, "added", out.Action)
+	require.Len(t, out.Changed, 1)
+	require.Equal(t, m3, out.Changed[0].MessageID)
+	require.Equal(t, accID, out.Changed[0].AccountID)
+	require.Equal(t, folderID, out.Changed[0].FolderID)
+	require.Equal(t, int64(3), out.Changed[0].UID)
+
+	row3, _ := s.GetMessage(ctx, m3)
+	require.Contains(t, row3.Flags, `\Flagged`)
+	row1, _ := s.GetMessage(ctx, m1)
+	require.Equal(t, `[]`, row1.Flags)
+	row2, _ := s.GetMessage(ctx, m2)
+	require.Equal(t, `[]`, row2.Flags)
+}
+
+func TestToggleThreadFlagged_RemoveAll(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	threadID, _ := s.InsertThread(ctx, ThreadRow{SubjectNorm: "t", LastDate: 300})
+	tid := threadID
+
+	mkMsg := func(uid int64, date int64, flags string) int64 {
+		id, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: date,
+			ThreadID: &tid, Flags: flags,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	m1 := mkMsg(1, 100, `["\\Flagged"]`)
+	m2 := mkMsg(2, 200, `["\\Seen"]`)
+	m3 := mkMsg(3, 300, `["\\Seen","\\Flagged"]`)
+
+	out, err := s.ToggleThreadFlagged(ctx, threadID)
+	require.NoError(t, err)
+	require.Equal(t, "removed", out.Action)
+	require.Len(t, out.Changed, 2)
+	gotIDs := []int64{out.Changed[0].MessageID, out.Changed[1].MessageID}
+	require.ElementsMatch(t, []int64{m1, m3}, gotIDs)
+
+	row1, _ := s.GetMessage(ctx, m1)
+	require.NotContains(t, row1.Flags, `\Flagged`)
+	row2, _ := s.GetMessage(ctx, m2)
+	require.Equal(t, `["\\Seen"]`, row2.Flags)
+	row3, _ := s.GetMessage(ctx, m3)
+	require.NotContains(t, row3.Flags, `\Flagged`)
+	require.Contains(t, row3.Flags, `\Seen`)
+}
+
+func TestToggleThreadFlagged_EmptyThread(t *testing.T) {
+	s := openTestStore(t)
+	out, err := s.ToggleThreadFlagged(context.Background(), 999999)
+	require.NoError(t, err)
+	require.Equal(t, "noop", out.Action)
+	require.Empty(t, out.Changed)
+}
+
+func TestToggleThreadFlagged_PreservesOtherFlags(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	threadID, _ := s.InsertThread(ctx, ThreadRow{SubjectNorm: "t", LastDate: 100})
+	tid := threadID
+
+	id, err := s.InsertMessage(ctx, MessageRow{
+		AccountID: accID, FolderID: folderID, UID: 1, Date: 100,
+		ThreadID: &tid, Flags: `["\\Flagged","\\Seen","\\Answered"]`,
+	})
+	require.NoError(t, err)
+
+	out, err := s.ToggleThreadFlagged(ctx, threadID)
+	require.NoError(t, err)
+	require.Equal(t, "removed", out.Action)
+	require.Len(t, out.Changed, 1)
+
+	row, _ := s.GetMessage(ctx, id)
+	require.Equal(t, `["\\Seen","\\Answered"]`, row.Flags)
+}
+
+func TestToggleThreadFlagged_HasFlaggedRefresh(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	threadID, _ := s.InsertThread(ctx, ThreadRow{SubjectNorm: "t", LastDate: 100})
+	tid := threadID
+
+	_, err := s.InsertMessage(ctx, MessageRow{
+		AccountID: accID, FolderID: folderID, UID: 1, Date: 100,
+		ThreadID: &tid, Flags: `[]`,
+	})
+	require.NoError(t, err)
+
+	threads0, _ := s.ListThreads(ctx, ThreadFilter{AccountID: &accID}, 10, 0)
+	require.Len(t, threads0, 1)
+	require.False(t, threads0[0].HasFlagged)
+
+	_, err = s.ToggleThreadFlagged(ctx, threadID)
+	require.NoError(t, err)
+	threads1, _ := s.ListThreads(ctx, ThreadFilter{AccountID: &accID}, 10, 0)
+	require.True(t, threads1[0].HasFlagged)
+
+	_, err = s.ToggleThreadFlagged(ctx, threadID)
+	require.NoError(t, err)
+	threads2, _ := s.ListThreads(ctx, ThreadFilter{AccountID: &accID}, 10, 0)
+	require.False(t, threads2[0].HasFlagged)
+}
+
 // TestMarkMessagesRead_NilThreadID covers a message with thread_id IS NULL
 // (e.g. mid-flight during sync, before threading runs). The flag flip must
 // still happen and the change must appear in out.Changed with ThreadID=nil,

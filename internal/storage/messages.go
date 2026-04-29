@@ -250,6 +250,105 @@ func (s *Store) MarkFolderMessagesRead(ctx context.Context, folderID int64) (Mar
 	return out, nil
 }
 
+// ToggleThreadFlagged toggles the IMAP \Flagged flag on a thread.
+//   - If ANY message in the thread has \Flagged, remove it from every
+//     message that does (Action="removed"). The "unstar" path.
+//   - If no message has \Flagged, add it to the most-recent message
+//     (Action="added"). The "star" path — Gmail/Outlook convention:
+//     star-the-thread = star the latest reply, not the whole thread.
+//   - If the thread has no messages, returns Action="noop" with an empty
+//     Changed slice and no DB writes.
+//
+// Single writer tx. threads.has_flagged is refreshed via updateThreadStats
+// before commit so the next ListThreads call reflects the new state.
+func (s *Store) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagToggleOutcome, error) {
+	var out FlagToggleOutcome
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		cands, err := scanSeenCandidates(ctx, tx, `
+			SELECT id, account_id, folder_id, uid, thread_id, flags
+			FROM messages
+			WHERE thread_id = ?
+			ORDER BY date DESC
+		`, threadID)
+		if err != nil {
+			return err
+		}
+		if len(cands) == 0 {
+			out.Action = "noop"
+			return nil
+		}
+
+		// Pre-pass: does ANY message currently carry \Flagged?
+		anyFlagged := false
+		for _, c := range cands {
+			var fl []string
+			if err := json.Unmarshal([]byte(c.flags), &fl); err != nil {
+				return fmt.Errorf("ToggleThreadFlagged: bad flags JSON for id %d: %w", c.id, err)
+			}
+			if slices.Contains(fl, `\Flagged`) {
+				anyFlagged = true
+				break
+			}
+		}
+
+		if anyFlagged {
+			out.Action = "removed"
+			for _, c := range cands {
+				var fl []string
+				if err := json.Unmarshal([]byte(c.flags), &fl); err != nil {
+					return fmt.Errorf("ToggleThreadFlagged: bad flags JSON for id %d: %w", c.id, err)
+				}
+				idx := slices.Index(fl, `\Flagged`)
+				if idx < 0 {
+					continue
+				}
+				fl = slices.Delete(fl, idx, idx+1)
+				b, err := json.Marshal(fl)
+				if err != nil {
+					return fmt.Errorf("ToggleThreadFlagged: marshal flags for id %d: %w", c.id, err)
+				}
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
+					return err
+				}
+				out.Changed = append(out.Changed, FlagChange{
+					MessageID: c.id, AccountID: c.accountID,
+					FolderID:  c.folderID, UID: c.uid,
+				})
+			}
+		} else {
+			out.Action = "added"
+			c := cands[0] // most recent by date DESC
+			var fl []string
+			if err := json.Unmarshal([]byte(c.flags), &fl); err != nil {
+				return fmt.Errorf("ToggleThreadFlagged: bad flags JSON for id %d: %w", c.id, err)
+			}
+			fl = append(fl, `\Flagged`)
+			b, err := json.Marshal(fl)
+			if err != nil {
+				return fmt.Errorf("ToggleThreadFlagged: marshal flags for id %d: %w", c.id, err)
+			}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
+				return err
+			}
+			out.Changed = append(out.Changed, FlagChange{
+				MessageID: c.id, AccountID: c.accountID,
+				FolderID:  c.folderID, UID: c.uid,
+			})
+		}
+
+		return updateThreadStats(ctx, tx, threadID)
+	})
+	if err != nil {
+		// Discard out: it was mutated inside the tx closure but the tx
+		// rolled back, so any Changed entries point at writes that never
+		// landed.
+		return FlagToggleOutcome{}, err
+	}
+	return out, nil
+}
+
 // scanSeenCandidates is the shared post-SELECT scan routine: takes a SQL
 // query and materializes its result set into seenCandidates. The query MUST
 // project columns in this exact order:

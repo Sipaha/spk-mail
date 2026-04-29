@@ -47,6 +47,7 @@ type Writer interface {
 	UpdateBodyHTML(ctx context.Context, id int64, html string) error
 	MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutcome, error)
 	MarkFolderMessagesRead(ctx context.Context, folderID int64) (MarkReadOutcome, error)
+	ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagToggleOutcome, error)
 
 	InsertAttachment(ctx context.Context, a AttachmentRow) (int64, error)
 	UpdateAttachmentDownloaded(ctx context.Context, id int64, localPath, sha256 string, ts int64) error
@@ -100,4 +101,28 @@ type MarkReadChange struct {
 	FolderID  int64
 	UID       int64
 	ThreadID  *int64
+}
+
+// FlagToggleOutcome is the return shape of ToggleThreadFlagged. Mirrors
+// MarkReadOutcome in spirit (per-message metadata for the API layer to
+// fan IMAP STORE ops out as bulk flagop.Op) but adds an Action so the
+// API layer knows whether to emit add or remove on the IMAP side.
+//
+// Action values:
+//   - "added"   — flag was added to the most-recent message in the thread
+//   - "removed" — flag was removed from every message in the thread that
+//                 had it
+//   - "noop"    — thread was empty / unknown id; nothing to do
+type FlagToggleOutcome struct {
+	Action  string
+	Changed []FlagChange
+}
+
+// FlagChange carries the IMAP coordinates the API layer needs to fan an
+// AccountWorker STORE op out without re-reading message rows.
+type FlagChange struct {
+	MessageID int64
+	AccountID int64
+	FolderID  int64
+	UID       int64
 }
