@@ -85,8 +85,20 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
               <span>{ROLE_ICON[f.role] ?? '📁'}</span>
               <span className="truncate">{f.name}</span>
               {(unread > 0 || total > 0) && (
-                <span className="ml-auto text-[10px] shrink-0">
-                  {unread > 0 && <span className="text-blue-400 mr-1">{unread}</span>}
+                <span className="ml-auto text-[10px] shrink-0 flex items-center gap-1.5">
+                  {unread > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        client.markFolderRead(f.id).catch(err => console.warn('markFolderRead failed', err))
+                      }}
+                      title="Mark all as read"
+                      aria-label={`Mark all messages in ${f.name} as read`}
+                      className="size-1.5 rounded-full bg-zinc-500 hover:bg-blue-400 hover:size-2 transition-all"
+                    />
+                  )}
+                  {unread > 0 && <span className="text-blue-400">{unread}</span>}
                   {total > 0 && <span className="text-zinc-500">/ {total}</span>}
                 </span>
               )}

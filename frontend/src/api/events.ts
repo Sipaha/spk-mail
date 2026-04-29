@@ -92,6 +92,42 @@ export function useEventStream() {
           )
           break
         }
+        case 'FolderMarkedRead': {
+          const accId = Number(ev.payload.account_id)
+          if (Number.isFinite(accId) && accId > 0) {
+            client.listFolders(accId)
+              .then(fs => useStore.getState().setFolders(accId, fs))
+              .catch(err => console.warn('listFolders refresh failed', err))
+          }
+          // Mirror the MessageInserted scope-intersect refetch — open thread might
+          // have been in this folder; current thread list scope might intersect.
+          const s = useStore.getState()
+          const reqFilter = s.filter
+          const reqProfileId = s.activeProfileId
+          const reqSig = filterSig(reqFilter, reqProfileId)
+          const result = await client.listThreads({
+            account_id: reqFilter.accountId,
+            folder_id: reqFilter.folderId,
+            unread_only: reqFilter.unreadOnly,
+            has_flagged: reqFilter.hasFlagged,
+            profile_id: reqProfileId ?? undefined,
+            limit: 200,
+          })
+          const now = useStore.getState()
+          if (filterSig(now.filter, now.activeProfileId) === reqSig) {
+            now.setThreads(result)
+          }
+          const after = useStore.getState()
+          if (after.openThreadId !== undefined) {
+            const id = after.openThreadId
+            const msgs = await client.getThread(id)
+            const final = useStore.getState()
+            if (final.openThreadId === id) {
+              final.setOpenThread(id, msgs)
+            }
+          }
+          break
+        }
         case 'WriteError':
           // surface in console for now; toast UI is plan 7
           console.error('write error', ev.payload); break
