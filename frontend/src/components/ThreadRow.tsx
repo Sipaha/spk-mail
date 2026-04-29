@@ -1,6 +1,7 @@
 import { useStore } from '../store'
 import type { ThreadDTO } from '../api/types'
 import { relative } from '../lib/time'
+import { client } from '../api/client'
 
 // parseSender extracts a display name from a raw "Name <addr@example.com>"
 // header value. Falls back to the addr-part, then the whole string.
@@ -25,7 +26,7 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
   return (
     <button
       onClick={() => onOpen(t.id)}
-      className={`w-full text-left px-3 py-2.5 border-b border-zinc-800 hover:bg-zinc-900/60 transition-colors flex gap-3 ${isOpen ? 'bg-zinc-900' : ''}`}>
+      className={`group w-full text-left px-3 py-2.5 border-b border-zinc-800 hover:bg-zinc-900/60 transition-colors flex gap-3 ${isOpen ? 'bg-zinc-900' : ''}`}>
       {/* Unread indicator: blue dot, fills the left margin if unread.
           When read, an invisible same-size span keeps row heights aligned. */}
       <span className="pt-1.5 shrink-0">
@@ -57,7 +58,22 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
           <span className="truncate text-xs text-zinc-500 flex-1">
             {t.snippet || ' '}
           </span>
-          {t.has_flagged && <span className="text-amber-400 text-xs shrink-0" title="Flagged">★</span>}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              client.toggleThreadFlagged(t.id).catch(err => console.warn('toggleThreadFlagged failed', err))
+            }}
+            title={t.has_flagged ? 'Unflag thread' : 'Flag thread'}
+            aria-label={t.has_flagged ? `Unflag thread "${t.subject || '(no subject)'}"` : `Flag thread "${t.subject || '(no subject)'}"`}
+            className={`text-xs shrink-0 transition-colors ${
+              t.has_flagged
+                ? 'text-amber-400 hover:text-amber-300'
+                : 'text-zinc-700 opacity-0 group-hover:opacity-100 hover:text-amber-400'
+            }`}
+          >
+            {t.has_flagged ? '★' : '☆'}
+          </button>
           {t.has_attach  && <span className="text-zinc-500 text-xs shrink-0" title="Attachment">📎</span>}
         </div>
       </div>

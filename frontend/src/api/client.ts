@@ -10,6 +10,7 @@ export interface Client {
   getThread(id: number): Promise<MessageDTO[]>
   markRead(ids: number[]): Promise<void>
   markFolderRead(folderId: number): Promise<number>
+  toggleThreadFlagged(threadId: number): Promise<{ action: string; count: number }>
   allowRemote(id: number): Promise<string>
   search(query: string, limit: number, offset: number): Promise<SearchHitDTO[]>
   openAttachment(id: number): Promise<void>
@@ -40,6 +41,8 @@ const httpClient: Client = {
   getThread:     (id) => post('/api/GetThread', { id }),
   markRead:      (ids) => post('/api/MarkRead', { ids }),
   markFolderRead: (folderId) => post<{count: number}>('/api/MarkFolderRead', { folder_id: folderId }).then(r => r.count),
+  toggleThreadFlagged: (threadId) =>
+    post<{ action: string; count: number }>('/api/ToggleThreadFlagged', { thread_id: threadId }),
   allowRemote:   (id) => post('/api/AllowRemoteForMessage', { id }),
   search:        (query, limit, offset) => post('/api/Search', { query, limit, offset }),
   openAttachment: (id) => post('/api/OpenAttachment', { id }),
@@ -86,6 +89,8 @@ const wailsClient: Client = {
   getThread:     (id) => Call.ByName(m('GetThread'), id) as Promise<MessageDTO[]>,
   markRead:      (ids) => Call.ByName(m('MarkRead'), ids).then(() => undefined),
   markFolderRead: (folderId) => Call.ByName(m('MarkFolderRead'), folderId) as Promise<number>,
+  toggleThreadFlagged: (threadId) =>
+    Call.ByName(m('ToggleThreadFlagged'), threadId) as Promise<{ action: string; count: number }>,
   allowRemote:   (id) => Call.ByName(m('AllowRemoteForMessage'), id) as Promise<string>,
   search:        (q, l, o) => Call.ByName(m('Search'), q, l, o) as Promise<SearchHitDTO[]>,
   openAttachment: (id) => Call.ByName(m('OpenAttachment'), id).then(() => undefined),
