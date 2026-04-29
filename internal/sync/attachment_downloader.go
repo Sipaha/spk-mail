@@ -107,21 +107,15 @@ func (d *AttachmentDownloader) runOnce(ctx context.Context) {
 			continue
 		}
 		// p.Filename is attacker-controlled (Content-Disposition filename
-		// from the email). Layer two passes:
-		//   1. mimeutil.SanitizeFilename strips Unicode bidi-override
-		//      characters, C0/C1 controls, fraction-slash / fullwidth-solidus
-		//      lookalikes, and leading dots — defending against disguised
-		//      executables and hidden-dotfile writes that would survive a
-		//      naive filepath.Base.
-		//   2. filepath.Base strips any directory component so
-		//      "../../escape.bin" becomes "escape.bin" — preventing the join
-		//      below from escaping rootDir.
-		// For empty / dotted names (inline images without filename, malformed
-		// Content-Disposition, or rows inserted by older parser versions),
-		// synthesize a stable name from the attachment id + MIME type rather
-		// than skipping — otherwise the row stays pending forever.
-		safeName := filepath.Base(mimeutil.SanitizeFilename(p.Filename))
-		if safeName == "" || safeName == "." || safeName == "/" || safeName == ".." {
+		// from the email) AND in legacy DB rows it can still carry raw
+		// RFC 2047 encoded-words ("=?windows-1251?B?…?=") that pre-date
+		// the WordDecoder charset wiring (commit 334976a). SafeFilename
+		// runs the full pipeline: decodeHeader + SanitizeFilename +
+		// filepath.Base + 200-byte cap (UTF-8 rune-boundary aware) so the
+		// rename below can't fail with ENAMETOOLONG even on Cyrillic docx
+		// names that decode to ~180 bytes plus suffixes.
+		safeName := mimeutil.SafeFilename(p.Filename)
+		if safeName == "" {
 			safeName = mimeutil.SynthFilename(strconv.FormatInt(p.AttachmentID, 10), p.ContentType)
 		}
 		path := filepath.Join(d.rootDir,
