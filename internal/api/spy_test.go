@@ -14,8 +14,9 @@ import (
 // every other method to the real store unchanged.
 type countingStore struct {
 	storage.Writer
-	listAttsCalls atomic.Int64
-	markReadCalls atomic.Int64
+	listAttsCalls       atomic.Int64
+	markReadCalls       atomic.Int64
+	markFolderReadCalls atomic.Int64
 }
 
 func (c *countingStore) ListAttachmentsByMessages(ctx context.Context, ids []int64) (map[int64][]storage.AttachmentRow, error) {
@@ -26,6 +27,11 @@ func (c *countingStore) ListAttachmentsByMessages(ctx context.Context, ids []int
 func (c *countingStore) MarkMessagesRead(ctx context.Context, ids []int64) (storage.MarkReadOutcome, error) {
 	c.markReadCalls.Add(1)
 	return c.Writer.MarkMessagesRead(ctx, ids)
+}
+
+func (c *countingStore) MarkFolderMessagesRead(ctx context.Context, folderID int64) (storage.MarkReadOutcome, error) {
+	c.markFolderReadCalls.Add(1)
+	return c.Writer.MarkFolderMessagesRead(ctx, folderID)
 }
 
 // spyEngine + spyWorker capture IMAP STORE submissions so MarkRead's

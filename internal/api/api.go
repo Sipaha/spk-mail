@@ -15,6 +15,7 @@ type API interface {
 	GetThread(ctx context.Context, id int64) ([]MessageDTO, error)
 
 	MarkRead(ctx context.Context, messageIDs []int64) error
+	MarkFolderRead(ctx context.Context, folderID int64) (int64, error)
 	AllowRemoteForMessage(ctx context.Context, id int64) (string, error) // returns updated body_html
 	Search(ctx context.Context, query string, limit, offset int) ([]SearchHitDTO, error)
 

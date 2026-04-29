@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+
 // newSpyStub builds a Stub backed by a real on-disk *storage.Store wrapped in
 // a countingStore so the test can assert call shape (one ListAttachmentsByMessages,
 // one MarkMessagesRead) at the storage seam.
@@ -151,5 +152,159 @@ done:
 		require.Equal(t, accID, op.AccountID)
 		require.Equal(t, folderID, op.FolderID)
 		require.Len(t, op.UIDs, 1, "per-message MarkRead must emit one Op per message with a 1-element UIDs slice")
+	}
+}
+
+// TestMarkFolderRead_BatchTx proves Stub.MarkFolderRead delegates to a single
+// MarkFolderMessagesRead storage call, submits one BULK flagop.Op (UIDs slice
+// holding every flipped UID), and emits exactly one FolderMarkedRead SSE event.
+func TestMarkFolderRead_BatchTx(t *testing.T) {
+	stub, cs, raw, eng := newSpyStub(t)
+	ctx := context.Background()
+
+	accID, err := raw.InsertAccount(ctx, storage.AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := raw.UpsertFolder(ctx, storage.FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+	threadID, err := raw.InsertThread(ctx, storage.ThreadRow{SubjectNorm: "t", LastDate: 100})
+	require.NoError(t, err)
+	tid := threadID
+
+	mkMsg := func(uid int64, flags string) int64 {
+		id, err := raw.InsertMessage(ctx, storage.MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: uid,
+			ThreadID: &tid, Flags: flags,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	mkMsg(1, `[]`)
+	mkMsg(2, `[]`)
+	mkMsg(3, `[]`)
+	mkMsg(4, `[]`)
+	mkMsg(5, `[]`)
+	mkMsg(6, `["\\Seen"]`) // already seen
+	mkMsg(7, `["\\Seen"]`) // already seen
+
+	evCh, unsub := stub.Emitter.Subscribe()
+	defer unsub()
+
+	count, err := stub.MarkFolderRead(ctx, folderID)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), count)
+
+	require.Equal(t, int64(1), cs.markFolderReadCalls.Load(),
+		"MarkFolderRead must call storage exactly once")
+
+	require.Len(t, eng.worker.ops, 1, "MarkFolderRead must submit ONE bulk flag op, not N per-message ops")
+	op := eng.worker.ops[0]
+	require.Equal(t, accID, op.AccountID)
+	require.Equal(t, folderID, op.FolderID)
+	require.True(t, op.Add)
+	require.Equal(t, []string{`\Seen`}, op.Flags)
+	require.Len(t, op.UIDs, 5, "bulk Op carries every flipped UID in one slice")
+	require.ElementsMatch(t, []int64{1, 2, 3, 4, 5}, op.UIDs)
+
+	var events []Event
+	for {
+		select {
+		case ev := <-evCh:
+			events = append(events, ev)
+		default:
+			goto done
+		}
+	}
+done:
+	require.Len(t, events, 1, "MarkFolderRead must emit exactly ONE FolderMarkedRead event")
+	require.Equal(t, "FolderMarkedRead", events[0].Type)
+	require.Equal(t, accID, events[0].Payload["account_id"])
+	require.Equal(t, folderID, events[0].Payload["folder_id"])
+	require.Equal(t, int64(5), events[0].Payload["count"])
+}
+
+// TestMarkFolderRead_NothingToFlip — folder with all-seen messages: storage
+// is still consulted (returns empty outcome), but no flag op is submitted
+// and no SSE event fires. Returns 0.
+func TestMarkFolderRead_NothingToFlip(t *testing.T) {
+	stub, cs, raw, eng := newSpyStub(t)
+	ctx := context.Background()
+
+	accID, _ := raw.InsertAccount(ctx, storage.AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := raw.UpsertFolder(ctx, storage.FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	for i := int64(1); i <= 3; i++ {
+		_, err := raw.InsertMessage(ctx, storage.MessageRow{
+			AccountID: accID, FolderID: folderID, UID: i, Date: i, Flags: `["\\Seen"]`,
+		})
+		require.NoError(t, err)
+	}
+
+	evCh, unsub := stub.Emitter.Subscribe()
+	defer unsub()
+
+	count, err := stub.MarkFolderRead(ctx, folderID)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), count)
+	require.Equal(t, int64(1), cs.markFolderReadCalls.Load(),
+		"storage is still consulted (it returns empty outcome)")
+	require.Empty(t, eng.worker.ops, "no flag op when nothing flipped")
+
+	select {
+	case ev := <-evCh:
+		t.Fatalf("no SSE event expected, got %+v", ev)
+	default:
+		// good — no event
+	}
+}
+
+// TestMarkFolderRead_NoEngine — Stub.Engine is nil (unit-test wiring path
+// where sync isn't running). Storage UPDATE still commits, SSE event still
+// fires, no panic on nil engine, no flag op queued.
+func TestMarkFolderRead_NoEngine(t *testing.T) {
+	dir := t.TempDir()
+	s, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	key := make([]byte, 32)
+	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
+	require.NoError(t, err)
+
+	cs := &countingStore{Writer: s}
+	stub := NewStub(cs, sec, NewEmitter(), nil) // nil engine
+
+	ctx := context.Background()
+	accID, _ := s.InsertAccount(ctx, storage.AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := s.UpsertFolder(ctx, storage.FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	_, err = s.InsertMessage(ctx, storage.MessageRow{
+		AccountID: accID, FolderID: folderID, UID: 1, Date: 1, Flags: `[]`,
+	})
+	require.NoError(t, err)
+
+	evCh, unsub := stub.Emitter.Subscribe()
+	defer unsub()
+
+	count, err := stub.MarkFolderRead(ctx, folderID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+
+	select {
+	case ev := <-evCh:
+		require.Equal(t, "FolderMarkedRead", ev.Type)
+	default:
+		t.Fatal("expected one FolderMarkedRead event even with nil engine")
 	}
 }
