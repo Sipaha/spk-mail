@@ -77,9 +77,10 @@ var (
 	_ Writer = (*Store)(nil)
 )
 
-// MarkReadOutcome reports the side-effects of MarkMessagesRead so the API
-// layer can emit MessageUpdated events and submit IMAP STORE flag ops without
-// re-reading the messages.
+// MarkReadOutcome reports the side-effects of the mark-read storage methods
+// (MarkMessagesRead and MarkFolderMessagesRead) so the API layer can emit
+// MessageUpdated / FolderMarkedRead events and submit IMAP STORE flag ops
+// without re-reading the messages.
 type MarkReadOutcome struct {
 	// Changed lists messages that flipped from !\Seen → \Seen. Already-seen
 	// IDs in the input are absent.
