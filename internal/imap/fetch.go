@@ -255,13 +255,18 @@ func parsePartPath(s string) []int {
 	return out
 }
 
-// StoreFlags issues UID STORE +FLAGS / -FLAGS for one UID.
+// StoreFlags issues UID STORE +FLAGS / -FLAGS for one or more UIDs on the
+// currently-selected mailbox. The caller is responsible for SELECTing the
+// right folder before calling. An empty uids slice is a no-op.
 //
 // The underlying go-imap Store call is synchronous and does not honour ctx
 // mid-flight, so we only short-circuit on cancellation before issuing the
 // command — enough to skip a STORE when the worker shutdown signal already
 // fired but the drain loop hasn't observed it.
-func (c *Client) StoreFlags(ctx context.Context, uid int64, flags []string, add bool) error {
+func (c *Client) StoreFlags(ctx context.Context, uids []int64, flags []string, add bool) error {
+	if len(uids) == 0 {
+		return nil
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -273,9 +278,10 @@ func (c *Client) StoreFlags(ctx context.Context, uid int64, flags []string, add 
 	for _, f := range flags {
 		imapFlags = append(imapFlags, imap.Flag(f))
 	}
-	seq := imap.UIDSetNum(imap.UID(uid))
-	// As with Fetch, Store dispatches to UID STORE when given a UIDSet.
-	// Store returns a *FetchCommand whose Close drains the response and
-	// returns the command's terminating error.
+	imapUIDs := make([]imap.UID, len(uids))
+	for i, u := range uids {
+		imapUIDs[i] = imap.UID(u)
+	}
+	seq := imap.UIDSetNum(imapUIDs...)
 	return c.c.Store(seq, &imap.StoreFlags{Op: op, Flags: imapFlags}, nil).Close()
 }
