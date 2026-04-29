@@ -30,7 +30,7 @@ export interface FolderDTO {
   total_count: number
   flagged_count: number
 }
-export type EventType = 'MessageInserted'|'MessageArrived'|'MessageUpdated'|'SyncProgress'|'AccountStatus'|'WriteError'|'AttachmentReady'
+export type EventType = 'MessageInserted'|'MessageArrived'|'MessageUpdated'|'SyncProgress'|'AccountStatus'|'WriteError'|'AttachmentReady'|'FolderMarkedRead'
 export interface ApiEvent { type: EventType; payload: Record<string, unknown> }
 export interface SearchHitDTO {
   message_id: number; thread_id?: number;

@@ -9,6 +9,7 @@ export interface Client {
   listFolders(accountId: number): Promise<FolderDTO[]>
   getThread(id: number): Promise<MessageDTO[]>
   markRead(ids: number[]): Promise<void>
+  markFolderRead(folderId: number): Promise<number>
   allowRemote(id: number): Promise<string>
   search(query: string, limit: number, offset: number): Promise<SearchHitDTO[]>
   openAttachment(id: number): Promise<void>
@@ -38,6 +39,7 @@ const httpClient: Client = {
   listFolders:   (accountId) => post('/api/ListFolders', { account_id: accountId }),
   getThread:     (id) => post('/api/GetThread', { id }),
   markRead:      (ids) => post('/api/MarkRead', { ids }),
+  markFolderRead: (folderId) => post<{count: number}>('/api/MarkFolderRead', { folder_id: folderId }).then(r => r.count),
   allowRemote:   (id) => post('/api/AllowRemoteForMessage', { id }),
   search:        (query, limit, offset) => post('/api/Search', { query, limit, offset }),
   openAttachment: (id) => post('/api/OpenAttachment', { id }),
@@ -55,7 +57,7 @@ const httpClient: Client = {
         console.warn('SSE parse failed', err, ev.data)
       }
     }
-    ;(['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady'] as const).forEach(t => es.addEventListener(t, handler))
+    ;(['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady','FolderMarkedRead'] as const).forEach(t => es.addEventListener(t, handler))
     es.onerror = (err) => {
       console.warn('SSE error', err, 'readyState', es.readyState)
     }
@@ -83,6 +85,7 @@ const wailsClient: Client = {
   listFolders:   (accountId) => Call.ByName(m('ListFolders'), accountId) as Promise<FolderDTO[]>,
   getThread:     (id) => Call.ByName(m('GetThread'), id) as Promise<MessageDTO[]>,
   markRead:      (ids) => Call.ByName(m('MarkRead'), ids).then(() => undefined),
+  markFolderRead: (folderId) => Call.ByName(m('MarkFolderRead'), folderId) as Promise<number>,
   allowRemote:   (id) => Call.ByName(m('AllowRemoteForMessage'), id) as Promise<string>,
   search:        (q, l, o) => Call.ByName(m('Search'), q, l, o) as Promise<SearchHitDTO[]>,
   openAttachment: (id) => Call.ByName(m('OpenAttachment'), id).then(() => undefined),
@@ -92,7 +95,7 @@ const wailsClient: Client = {
   deleteProfile: (id) => Call.ByName(m('DeleteProfile'), id).then(() => undefined),
   setProfileMuted: (id, muted) => Call.ByName(m('SetProfileMuted'), id, muted).then(() => undefined),
   subscribeEvents: (onEvent) => {
-    const types: readonly EventType[] = ['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady'] as const
+    const types: readonly EventType[] = ['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady','FolderMarkedRead'] as const
     const offs = types.map(t => Events.On(t, (ev) => onEvent({
       type: t,
       payload: ((ev?.data as Record<string, unknown> | undefined) ?? {}),
