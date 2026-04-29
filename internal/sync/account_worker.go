@@ -48,15 +48,25 @@ func NewAccountWorker(id int64, s storage.Writer, sec *secrets.Store, w *StoreWr
 }
 
 // SubmitFlagOp queues a flag operation for async UID STORE. It is non-blocking:
-// if the queue is full (cap 64) the op is dropped with a warning.
+// if the queue is full (cap 64) the op is dropped with a warning. An empty
+// UIDs slice is rejected at the boundary — the doc on flagop.Op states it
+// must hold at least one UID, and accepting an empty slice would silently
+// pass through to a no-op StoreFlags + a misleading "uids=[]" warning if
+// the worker logged the dropped path.
 func (w *AccountWorker) SubmitFlagOp(op flagop.Op) {
+	if len(op.UIDs) == 0 {
+		slog.Warn("flag op rejected: empty UIDs",
+			"account_id", w.accountID, "folder_id", op.FolderID,
+			"add", op.Add, "flags", op.Flags)
+		return
+	}
 	select {
 	case w.flagOps <- op:
 	default:
 		slog.Warn("flag op dropped: queue full",
 			"account_id", w.accountID,
 			"folder_id", op.FolderID,
-			"uid_count", len(op.UIDs),
+			"uids", op.UIDs,
 			"add", op.Add,
 			"flags", op.Flags)
 	}
@@ -204,7 +214,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 			}
 			if name == "" {
 				slog.Warn("store flag dropped: unknown folder",
-					"account_id", w.accountID, "folder_id", op.FolderID, "uid_count", len(op.UIDs))
+					"account_id", w.accountID, "folder_id", op.FolderID, "uids", op.UIDs)
 				continue
 			}
 			if name != currentSel {
@@ -215,7 +225,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 				currentSel = name
 			}
 			if err := c.StoreFlags(runCtx, op.UIDs, op.Flags, op.Add); err != nil {
-				slog.Warn("store flag failed", "folder", name, "uid_count", len(op.UIDs), "err", err)
+				slog.Warn("store flag failed", "folder", name, "uids", op.UIDs, "err", err)
 			}
 		}
 	}
