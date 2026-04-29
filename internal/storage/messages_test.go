@@ -575,3 +575,54 @@ func TestMarkMessagesRead_NilThreadID(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, row.Flags, `\Seen`)
 }
+
+// TestToggleThreadFlagged_AtomicityRollback proves the discard-on-error
+// invariant: a mid-tx failure rolls back EVERY flag flip and leaves the
+// outcome empty. Forces failure by poisoning one row's flags JSON so the
+// removed-branch's per-row Unmarshal aborts the loop after a prior row
+// has already been UPDATEd inside the same tx.
+func TestToggleThreadFlagged_AtomicityRollback(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, err := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+	threadID, err := s.InsertThread(ctx, ThreadRow{SubjectNorm: "t", LastDate: 200})
+	require.NoError(t, err)
+	tid := threadID
+
+	mkMsg := func(uid, date int64, flags string) int64 {
+		id, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: date,
+			ThreadID: &tid, Flags: flags,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	good := mkMsg(1, 100, `["\Flagged"]`)
+	bad := mkMsg(2, 200, `["\Flagged"]`)
+	// Poison the bad row's flags column AFTER InsertMessage (which would
+	// have rejected the malformed JSON via the json.Marshal-built input
+	// path). Direct UPDATE bypasses any future validation.
+	_, err = s.DB().ExecContext(ctx, `UPDATE messages SET flags = ? WHERE id = ?`, "not-json", bad)
+	require.NoError(t, err)
+
+	out, err := s.ToggleThreadFlagged(ctx, threadID)
+	require.Error(t, err, "malformed JSON in one row must surface as an error")
+	require.Equal(t, FlagToggleOutcome{}, out, "outcome must be zero on rollback (no Action, no Changed)")
+
+	// The good row's pre-toggle flag must still be present — its UPDATE,
+	// even if it ran inside the rolled-back tx, was discarded on the
+	// rollback. The poison row stays as we set it.
+	rowGood, err := s.GetMessage(ctx, good)
+	require.NoError(t, err)
+	require.Contains(t, rowGood.Flags, `\Flagged`,
+		"good row must retain \\Flagged — the removed-path UPDATE was rolled back")
+}
