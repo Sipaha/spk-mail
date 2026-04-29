@@ -577,10 +577,16 @@ func TestMarkMessagesRead_NilThreadID(t *testing.T) {
 }
 
 // TestToggleThreadFlagged_AtomicityRollback proves the discard-on-error
-// invariant: a mid-tx failure rolls back EVERY flag flip and leaves the
-// outcome empty. Forces failure by poisoning one row's flags JSON so the
-// removed-branch's per-row Unmarshal aborts the loop after a prior row
-// has already been UPDATEd inside the same tx.
+// invariant: any mid-tx failure leaves the outcome empty and rolls back
+// whatever writes had landed. The forcing scenario here is a malformed
+// flags JSON: the implementation's pre-pass (which decides "added" vs
+// "removed") iterates rows in date-DESC order and Unmarshals each one,
+// so the poison row aborts the tx during the pre-pass — before any
+// UPDATE runs. This exercises the scan-error path, which is the most
+// likely real-world fault. The plain UPDATE-then-rollback path is
+// covered for the shared mark-read code at TestMarkMessagesRead_AtomicityRollback,
+// where the IN-clause SELECT materializes both rows before the per-row
+// UPDATE loop runs.
 func TestToggleThreadFlagged_AtomicityRollback(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
