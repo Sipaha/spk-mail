@@ -335,18 +335,19 @@ func TestMarkFolderMessagesRead_FolderScoped(t *testing.T) {
 	}
 }
 
-// TestMarkFolderMessagesRead_AtomicityRollback proves the discard-on-error
-// invariant: when the SELECT itself fails, the returned outcome is empty and
+// TestMarkFolderMessagesRead_ScanErrorRollback proves the discard-on-error
+// invariant when the SELECT itself fails: the returned outcome is empty and
 // the good row remains unread. Forcing scenario: poison one row's flags
 // column with invalid JSON. The folder-scoped SELECT uses
 // `NOT EXISTS json_each(flags) WHERE value='\Seen'` — modernc/sqlite raises
 // "malformed JSON" inside the json_each subquery while iterating, surfacing
 // as rows.Err() in scanSeenCandidates. So no UPDATE ever executes inside
-// the tx — the test exercises "scan error → empty outcome", not the
+// the tx; this exercises "scan error → empty outcome", NOT the
 // UPDATE-then-rollback path. (For UPDATE-then-rollback specifically, see
 // TestMarkMessagesRead_AtomicityRollback above, where the IN-clause SELECT
-// materializes both rows before the per-row UPDATE loop runs.)
-func TestMarkFolderMessagesRead_AtomicityRollback(t *testing.T) {
+// materializes both rows before the per-row UPDATE loop runs — and the
+// shared markRowsAsSeen helper means coverage on one path covers the other.)
+func TestMarkFolderMessagesRead_ScanErrorRollback(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 

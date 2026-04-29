@@ -41,6 +41,9 @@ func (w *API) GetThread(id int64) ([]api.MessageDTO, error) {
 	return w.a.GetThread(context.Background(), id)
 }
 func (w *API) MarkRead(ids []int64) error { return w.a.MarkRead(context.Background(), ids) }
+func (w *API) MarkFolderRead(folderID int64) (int64, error) {
+	return w.a.MarkFolderRead(context.Background(), folderID)
+}
 func (w *API) AllowRemoteForMessage(id int64) (string, error) {
 	return w.a.AllowRemoteForMessage(context.Background(), id)
 }
