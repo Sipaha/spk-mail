@@ -106,27 +106,62 @@ func (c *Controller) Close() {
 	})
 }
 
-func (c *Controller) showWindow() {
+// raiseToFront makes the window visible (Show if Hidden, Restore if
+// minimised) and forces it above other windows.
+//
+// The SetAlwaysOnTop(true) / SetAlwaysOnTop(false) wrap around Focus() works
+// around Linux WM focus-stealing-prevention: gtk_window_present alone (which
+// is what Wails' Focus() does on Linux — see webview_window_linux.go::focus
+// → present → gtk_window_present) is treated by Mutter/KWin/Xfwm/Sway as a
+// background request without a user-activation timestamp, and the window
+// shows up stacked behind whatever currently has focus. The keep-above hint
+// (gtk_window_set_keep_above) is an ICCCM/EWMH window-state, unconditionally
+// honored — toggling it true → present → false reliably brings the window
+// forward without leaving it pinned.
+//
+// Each call goes through InvokeSync to the GTK main loop, so the four
+// operations serialise in the right order.
+func (c *Controller) raiseToFront() {
 	if c.wnd == nil {
 		return
 	}
-	c.wnd.Show()
+	switch {
+	case !c.wnd.IsVisible():
+		c.wnd.Show()
+	case c.wnd.IsMinimised():
+		c.wnd.Restore()
+	}
+	c.wnd.SetAlwaysOnTop(true)
 	c.wnd.Focus()
+	c.wnd.SetAlwaysOnTop(false)
 }
 
-// toggleWindow is wired to the tray icon's left-click. It hides the window if
-// it's currently visible, otherwise shows and focuses it. This gives users a
-// one-click way to recover the window after the close-to-tray hook hides it.
+func (c *Controller) showWindow() {
+	c.raiseToFront()
+}
+
+// toggleWindow is wired to the tray icon's left-click.
+//
+// Behaviour matrix:
+//
+//	visible + focused           → Hide (click-to-dismiss)
+//	visible + not focused       → raise to front (user wants it up, not gone)
+//	visible + minimised         → Restore + raise to front
+//	hidden  (close-to-tray)     → Show + raise to front
+//
+// The prior implementation hid the window whenever IsVisible() was true,
+// which mis-handled the "behind another window" and "minimised" cases —
+// clicking the tray icon to recover an obscured/iconified window would
+// instead make it disappear entirely.
 func (c *Controller) toggleWindow() {
 	if c.wnd == nil {
 		return
 	}
-	if c.wnd.IsVisible() {
+	if c.wnd.IsVisible() && !c.wnd.IsMinimised() && c.wnd.IsFocused() {
 		c.wnd.Hide()
 		return
 	}
-	c.wnd.Show()
-	c.wnd.Focus()
+	c.raiseToFront()
 }
 
 func (c *Controller) consume(ch <-chan api.Event) {
