@@ -358,24 +358,34 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			// batch dies. UIDValidity is set unconditionally so subsequent runs
 			// don't treat the folder as fresh. last_synced_at gives the UI a
 			// "last synced N seconds ago" handle for per-folder status.
+			//
+			// UIDNext is the cursor's NEW position (batchEnd), not maxUID.
+			// maxUID would be 0 for an empty/expunged folder so the next poll
+			// would re-iterate the whole UID range from 0 again — emitting
+			// "0 / serverUIDNext" repeatedly across hundreds of empty batches
+			// for every Mailspring/Outbox/Drafts-template-style residual
+			// folder. Recording batchEnd means "we have checked everything up
+			// to this UID" and lets diff-sync skip the empty range next time.
 			now := time.Now().Unix()
 			if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
 				AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-				UIDValidity: state.UIDValidity, UIDNext: maxUID, LastSyncedAt: &now,
+				UIDValidity: state.UIDValidity, UIDNext: batchEnd, LastSyncedAt: &now,
 			}); err != nil {
 				return err
 			}
 			// Emit SyncProgress so the UI can show a per-account "Syncing
 			// <folder>: done/total" status line. total is the server-side UIDNext
 			// (next UID the server will assign on new messages); done is the
-			// highest UID we have ingested so far. They converge as the bulk
-			// sync catches up. UI hides the line once done >= total.
+			// cursor position — how far we've scanned, regardless of whether
+			// the scanned UIDs were live messages or expunged tombstones.
+			// They converge as the bulk sync catches up. UI hides the line
+			// once done >= total.
 			if w.em != nil {
 				w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
 					"account_id": w.accountID,
 					"folder_id":  folderID,
 					"folder":     name,
-					"done":       maxUID,
+					"done":       batchEnd,
 					"total":      int64(state.UIDNext),
 				}})
 			}
