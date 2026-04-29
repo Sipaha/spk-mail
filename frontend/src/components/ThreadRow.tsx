@@ -26,7 +26,7 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
   return (
     <button
       onClick={() => onOpen(t.id)}
-      className={`group w-full text-left px-3 py-2.5 border-b border-zinc-800 hover:bg-zinc-900/60 transition-colors flex gap-3 ${isOpen ? 'bg-zinc-900' : ''}`}>
+      className={`group w-full text-left pl-3 pr-4 py-2.5 border-b border-zinc-800 hover:bg-zinc-900/60 transition-colors flex gap-3 ${isOpen ? 'bg-zinc-900' : ''}`}>
       {/* Unread indicator: blue dot, fills the left margin if unread.
           When read, an invisible same-size span keeps row heights aligned. */}
       <span className="pt-1.5 shrink-0">
@@ -66,10 +66,10 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
             }}
             title={t.has_flagged ? 'Unflag thread' : 'Flag thread'}
             aria-label={t.has_flagged ? `Unflag thread "${t.subject || '(no subject)'}"` : `Flag thread "${t.subject || '(no subject)'}"`}
-            className={`text-xs shrink-0 transition-colors ${
+            className={`text-lg leading-none shrink-0 transition-colors ${
               t.has_flagged
                 ? 'text-amber-400 hover:text-amber-300'
-                : 'text-zinc-500 opacity-0 group-hover:opacity-100 hover:text-amber-400'
+                : 'text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-amber-400'
             }`}
           >
             {t.has_flagged ? '★' : '☆'}
