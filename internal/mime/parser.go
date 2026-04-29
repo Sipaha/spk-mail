@@ -8,13 +8,22 @@ import (
 	"log/slog"
 	"mime"
 	"net/mail"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	gomsg "github.com/emersion/go-message"
 	gocharset "github.com/emersion/go-message/charset"
 	gomail "github.com/emersion/go-message/mail"
 )
+
+// MaxFilenameBytes caps the byte length of a filename component on disk.
+// Most Linux/macOS filesystems accept 255 bytes per path component; 200
+// leaves headroom for whatever rename(.tmp-XXXXX) dance the writer does
+// (fsutil.AtomicWrite uses an 18-byte temp suffix, the longest realistic
+// caller suffix we have).
+const MaxFilenameBytes = 200
 
 // ErrMIMEDepthExceeded is returned by Parse when a message's multipart
 // nesting goes past maxMIMEDepth. Tests use errors.Is for a stable
@@ -277,6 +286,60 @@ func isDangerousFilenameRune(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// SafeFilename returns a filesystem-safe form of a (possibly attacker- or
+// legacy-produced) filename. Pipeline:
+//
+//  1. decodeHeader — RFC 2047 encoded-words ("=?UTF-8?B?…?="). Necessary
+//     for legacy DB rows inserted before the WordDecoder charset wiring
+//     (commit 334976a) where Cyrillic koi8-r/windows-1251 names from
+//     Outlook calendar invites etc. failed to decode and the raw form
+//     ended up in the column.
+//  2. filepath.Base — take the leaf component first ("../etc/passwd" →
+//     "passwd"). Done BEFORE SanitizeFilename so sanitize sees just the
+//     component, not the full traversal string (whose '/' separators
+//     would otherwise collapse to no-ops and lose the leaf intent).
+//  3. SanitizeFilename — strip bidi-override / control / path-separator
+//     runes (executable disguise + extra-paranoia path defence in case
+//     filepath.Base left an exotic separator like fullwidth solidus).
+//  4. Cap byte length at MaxFilenameBytes, preserving the extension and
+//     snapping the truncation to a valid UTF-8 rune boundary so we don't
+//     write a half-codepoint to disk.
+//
+// Returns "" only if the input collapses to empty or a degenerate path
+// component (".", "..", "/"); the caller should fall back to SynthFilename.
+// Idempotent: passing in an already-safe ASCII filename returns it unchanged.
+func SafeFilename(raw string) string {
+	decoded := decodeHeader(raw)
+	cleaned := filepath.Base(decoded)
+	cleaned = SanitizeFilename(cleaned)
+	switch cleaned {
+	case "", ".", "..", "/":
+		return ""
+	}
+	if len(cleaned) <= MaxFilenameBytes {
+		return cleaned
+	}
+	// Truncate while preserving the extension. If the extension itself is
+	// pathological (longer than half the cap — e.g. a forged ".docxdocx…")
+	// we drop it rather than letting it eat the whole budget.
+	ext := filepath.Ext(cleaned)
+	if len(ext) > MaxFilenameBytes/2 {
+		ext = ""
+	}
+	keep := MaxFilenameBytes - len(ext)
+	base := cleaned[:len(cleaned)-len(ext)]
+	if keep > len(base) {
+		keep = len(base)
+	}
+	// Snap back to a UTF-8 rune boundary. utf8.RuneStart returns true for
+	// the first byte of each codepoint; backing off one byte at a time is
+	// O(4) worst-case (max UTF-8 sequence is 4 bytes).
+	for keep > 0 && !utf8.RuneStart(base[keep]) {
+		keep--
+	}
+	return base[:keep] + ext
 }
 
 // SynthFilename builds a plausible filename for parts that arrive without

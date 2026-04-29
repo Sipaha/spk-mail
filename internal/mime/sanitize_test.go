@@ -3,6 +3,7 @@ package mime
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -137,3 +138,70 @@ func TestSanitize_StripsDangerousStyleValues(t *testing.T) {
 		})
 	}
 }
+
+// TestSafeFilename_DecodesLegacyRFC2047 verifies that filenames stored in
+// raw RFC 2047 encoded-word form (legacy DB rows from before the
+// koi8-r/windows-1251 charset reader was wired into WordDecoder) get
+// decoded to their actual UTF-8 form when the downloader retries them.
+func TestSafeFilename_DecodesLegacyRFC2047(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "windows-1251 calendar invite name",
+			raw:  `=?windows-1251?B?0cXMyM3A0CDPziDBxMQg0tDFzcjNwyDPziDTz9DAwsvFzcjeINDI0crA?= =?windows-1251?B?zMggws4gwtDFzN8gws7GxMXNyN8gwiDO0cXNzcUtx8jMzcjJIC5pY3M=?=`,
+			want: `СЕМИНАР ПО БДД ТРЕНИНГ ПО УПРАВЛЕНИЮ РИСКАМИ ВО ВРЕМЯ ВОЖДЕНИЯ В ОСЕННЕ-ЗИМНИЙ .ics`,
+		},
+		{
+			name: "UTF-8 base64 multi-chunk",
+			raw:  `=?UTF-8?B?0KHQntCfINCyINCh0K3QlCBCRFMuMDItMjgtMDAyLTAwMSDQn9GA0LjQu9C+0LbQtdC90LjQtSA1Lg==?= =?UTF-8?B?b2N4?=`,
+			want: `СОП в СЭД BDS.02-28-002-001 Приложение 5.ocx`,
+		},
+		{
+			name: "already-decoded ASCII passes through unchanged",
+			raw:  `image001.png`,
+			want: `image001.png`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, SafeFilename(tc.raw))
+		})
+	}
+}
+
+// TestSafeFilename_TruncatesPreservingExtension proves the byte-length cap
+// keeps the file extension intact (so .docx stays .docx) and snaps to a
+// UTF-8 rune boundary so we never write a partial codepoint.
+func TestSafeFilename_TruncatesPreservingExtension(t *testing.T) {
+	// Build a 250-byte Cyrillic base + ".docx" = ~260 bytes raw.
+	base := strings.Repeat("П", 125) // 250 bytes (П = 2 bytes in UTF-8)
+	in := base + ".docx"
+	got := SafeFilename(in)
+	require.LessOrEqual(t, len(got), MaxFilenameBytes)
+	require.True(t, strings.HasSuffix(got, ".docx"), "extension must survive truncation")
+	require.True(t, len(got) > len(".docx"), "truncated name must keep some of the base")
+	// Ensure the truncated string is valid UTF-8 (no half-codepoint at the cut).
+	require.True(t, utf8.ValidString(got), "truncated name must be valid UTF-8")
+}
+
+// TestSafeFilename_StripsPathTraversal confirms filepath.Base keeps a
+// "../etc/passwd" attempt confined to "passwd" — defence-in-depth even
+// though SanitizeFilename strips '/' itself.
+func TestSafeFilename_StripsPathTraversal(t *testing.T) {
+	require.Equal(t, "passwd", SafeFilename(`/etc/passwd`))
+	require.Equal(t, "passwd", SafeFilename(`../../etc/../passwd`))
+}
+
+// TestSafeFilename_ReturnsEmptyForDegenerate covers the "caller should fall
+// back to SynthFilename" contract.
+func TestSafeFilename_ReturnsEmptyForDegenerate(t *testing.T) {
+	require.Equal(t, "", SafeFilename(""))
+	require.Equal(t, "", SafeFilename("."))
+	require.Equal(t, "", SafeFilename(".."))
+	require.Equal(t, "", SafeFilename("/"))
+	require.Equal(t, "", SafeFilename(".....")) // trim-leading-dot collapses to empty
+}
+
