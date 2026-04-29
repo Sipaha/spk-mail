@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 // newSpyStub builds a Stub backed by a real on-disk *storage.Store wrapped in
 // a countingStore so the test can assert call shape (one ListAttachmentsByMessages,
 // one MarkMessagesRead) at the storage seam.

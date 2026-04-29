@@ -3,7 +3,7 @@ package api
 import "sync"
 
 type Event struct {
-	Type    string         `json:"type"` // MessageArrived|MessageInserted|MessageUpdated|SyncProgress|AccountStatus
+	Type    string         `json:"type"` // MessageArrived|MessageInserted|MessageUpdated|SyncProgress|AccountStatus|FolderMarkedRead
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
