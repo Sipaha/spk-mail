@@ -121,6 +121,61 @@ func (s *Store) FindThreadByMessageIDs(ctx context.Context, msgIDs []string) (in
 	return tid, err == nil, err
 }
 
+// seenCandidate is the per-row state that markRowsAsSeen consumes.
+type seenCandidate struct {
+	id, accountID, folderID, uid int64
+	threadID                     *int64
+	flags                        string
+}
+
+// markRowsAsSeen applies \Seen to every candidate that doesn't already carry
+// it. For each flipped row it appends a MarkReadChange to out.Changed and
+// records the row's thread_id (if non-nil) in threadSet for downstream
+// updateThreadStats. Used by both MarkMessagesRead (id-list scope) and
+// MarkFolderMessagesRead (folder scope) — they diverge only in their SELECT
+// shape, the rest of the work is identical.
+func markRowsAsSeen(ctx context.Context, tx *sql.Tx, cands []seenCandidate, out *MarkReadOutcome, threadSet map[int64]struct{}) error {
+	for _, c := range cands {
+		var fl []string
+		if err := json.Unmarshal([]byte(c.flags), &fl); err != nil {
+			return fmt.Errorf("markRowsAsSeen: bad flags JSON for id %d: %w", c.id, err)
+		}
+		if slices.Contains(fl, `\Seen`) {
+			continue
+		}
+		fl = append(fl, `\Seen`)
+		b, err := json.Marshal(fl)
+		if err != nil {
+			return fmt.Errorf("markRowsAsSeen: marshal flags for id %d: %w", c.id, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
+			return err
+		}
+		out.Changed = append(out.Changed, MarkReadChange{
+			MessageID: c.id, AccountID: c.accountID, FolderID: c.folderID,
+			UID: c.uid, ThreadID: c.threadID,
+		})
+		if c.threadID != nil {
+			threadSet[*c.threadID] = struct{}{}
+		}
+	}
+	return nil
+}
+
+// refreshThreadStatsForSet runs updateThreadStats for every thread id in the
+// set (inside the supplied tx) and appends each id to out.ChangedThreadIDs.
+// Order of out.ChangedThreadIDs follows map iteration order — unspecified.
+func refreshThreadStatsForSet(ctx context.Context, tx *sql.Tx, threadSet map[int64]struct{}, out *MarkReadOutcome) error {
+	for tid := range threadSet {
+		if err := updateThreadStats(ctx, tx, tid); err != nil {
+			return err
+		}
+		out.ChangedThreadIDs = append(out.ChangedThreadIDs, tid)
+	}
+	return nil
+}
+
 // MarkMessagesRead marks all supplied message IDs as \Seen in a single
 // writer transaction. Messages that already carry \Seen are skipped.
 // Returns MarkReadOutcome with the per-message metadata needed by the API
@@ -133,7 +188,6 @@ func (s *Store) MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutc
 	threadSet := make(map[int64]struct{})
 
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
-		// SELECT current state of all candidate messages in one shot.
 		q := `SELECT id, account_id, folder_id, uid, thread_id, flags
 		      FROM messages WHERE id IN (`
 		args := make([]any, len(ids))
@@ -145,64 +199,14 @@ func (s *Store) MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutc
 			args[i] = id
 		}
 		q += `)`
-		rows, err := tx.QueryContext(ctx, q, args...)
+		cands, err := scanSeenCandidates(ctx, tx, q, args...)
 		if err != nil {
 			return err
 		}
-		type cand struct {
-			id, accountID, folderID, uid int64
-			threadID                     *int64
-			flags                        string
-		}
-		var cands []cand
-		for rows.Next() {
-			var c cand
-			if err := rows.Scan(&c.id, &c.accountID, &c.folderID, &c.uid, &c.threadID, &c.flags); err != nil {
-				rows.Close()
-				return err
-			}
-			cands = append(cands, c)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
+		if err := markRowsAsSeen(ctx, tx, cands, &out, threadSet); err != nil {
 			return err
 		}
-
-		// For each candidate not already \Seen: append flag, UPDATE, record change.
-		for _, c := range cands {
-			var fl []string
-			if err := json.Unmarshal([]byte(c.flags), &fl); err != nil {
-				return fmt.Errorf("MarkMessagesRead: bad flags JSON for id %d: %w", c.id, err)
-			}
-			if slices.Contains(fl, `\Seen`) {
-				continue
-			}
-			fl = append(fl, `\Seen`)
-			b, err := json.Marshal(fl)
-			if err != nil {
-				return fmt.Errorf("MarkMessagesRead: marshal flags for id %d: %w", c.id, err)
-			}
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
-				return err
-			}
-			out.Changed = append(out.Changed, MarkReadChange{
-				MessageID: c.id, AccountID: c.accountID, FolderID: c.folderID,
-				UID: c.uid, ThreadID: c.threadID,
-			})
-			if c.threadID != nil {
-				threadSet[*c.threadID] = struct{}{}
-			}
-		}
-
-		// Refresh thread stats for each affected thread (in the same tx).
-		for tid := range threadSet {
-			if err := updateThreadStats(ctx, tx, tid); err != nil {
-				return err
-			}
-			out.ChangedThreadIDs = append(out.ChangedThreadIDs, tid)
-		}
-		return nil
+		return refreshThreadStatsForSet(ctx, tx, threadSet, &out)
 	})
 	if err != nil {
 		// Discard out: it was mutated inside the tx closure but the tx rolled
@@ -211,4 +215,53 @@ func (s *Store) MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutc
 		return MarkReadOutcome{}, err
 	}
 	return out, nil
+}
+
+// MarkFolderMessagesRead flips \Seen on every currently-unread message in
+// the folder, in a single writer transaction. Already-\Seen rows are skipped
+// (filtered at the SELECT level via NOT EXISTS json_each). Returns the same
+// MarkReadOutcome shape as MarkMessagesRead so the API layer can fan out a
+// single bulk IMAP STORE op + one SSE event without re-reading rows.
+func (s *Store) MarkFolderMessagesRead(ctx context.Context, folderID int64) (MarkReadOutcome, error) {
+	var out MarkReadOutcome
+	threadSet := make(map[int64]struct{})
+
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		cands, err := scanSeenCandidates(ctx, tx, `
+			SELECT id, account_id, folder_id, uid, thread_id, flags
+			FROM messages
+			WHERE folder_id = ?
+			  AND NOT EXISTS (SELECT 1 FROM json_each(flags) WHERE value = '\Seen')
+		`, folderID)
+		if err != nil {
+			return err
+		}
+		if err := markRowsAsSeen(ctx, tx, cands, &out, threadSet); err != nil {
+			return err
+		}
+		return refreshThreadStatsForSet(ctx, tx, threadSet, &out)
+	})
+	if err != nil {
+		return MarkReadOutcome{}, err
+	}
+	return out, nil
+}
+
+// scanSeenCandidates is the shared post-SELECT scan routine: takes a SQL
+// query that returns the seenCandidate column shape and materializes a slice.
+func scanSeenCandidates(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]seenCandidate, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var cands []seenCandidate
+	for rows.Next() {
+		var c seenCandidate
+		if err := rows.Scan(&c.id, &c.accountID, &c.folderID, &c.uid, &c.threadID, &c.flags); err != nil {
+			return nil, err
+		}
+		cands = append(cands, c)
+	}
+	return cands, rows.Err()
 }

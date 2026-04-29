@@ -201,6 +201,178 @@ func TestMarkMessagesRead_AtomicityRollback(t *testing.T) {
 		"good message must remain byte-identical — tx rolled back after bad row failed mid-loop")
 }
 
+func TestMarkFolderMessagesRead_Batch(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, err := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+
+	t1, err := s.InsertThread(ctx, ThreadRow{SubjectNorm: "t1", LastDate: 100})
+	require.NoError(t, err)
+	t2, err := s.InsertThread(ctx, ThreadRow{SubjectNorm: "t2", LastDate: 200})
+	require.NoError(t, err)
+
+	mkMsg := func(uid int64, threadID int64, flags string) int64 {
+		id, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: uid,
+			ThreadID: &threadID, Flags: flags,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	m1 := mkMsg(1, t1, `[]`)
+	m2 := mkMsg(2, t1, `["\\Flagged"]`)        // unread + extra flag
+	m3 := mkMsg(3, t2, `[]`)
+	m4 := mkMsg(4, t1, `["\\Seen"]`)            // already seen — must skip
+
+	out, err := s.MarkFolderMessagesRead(ctx, folderID)
+	require.NoError(t, err)
+
+	require.Len(t, out.Changed, 3, "m4 was already seen and must be excluded")
+	gotIDs := make([]int64, len(out.Changed))
+	for i, c := range out.Changed {
+		gotIDs[i] = c.MessageID
+	}
+	require.ElementsMatch(t, []int64{m1, m2, m3}, gotIDs)
+	require.ElementsMatch(t, []int64{t1, t2}, out.ChangedThreadIDs,
+		"both touched threads must be reported, deduped")
+
+	for _, id := range []int64{m1, m2, m3} {
+		row, err := s.GetMessage(ctx, id)
+		require.NoError(t, err)
+		require.Contains(t, row.Flags, `\Seen`)
+	}
+	row4, err := s.GetMessage(ctx, m4)
+	require.NoError(t, err)
+	require.Equal(t, `["\\Seen"]`, row4.Flags, "m4 must be byte-identical")
+}
+
+func TestMarkFolderMessagesRead_AllSeen(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	for i := int64(1); i <= 3; i++ {
+		_, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: i, Date: i, Flags: `["\\Seen"]`,
+		})
+		require.NoError(t, err)
+	}
+
+	out, err := s.MarkFolderMessagesRead(ctx, folderID)
+	require.NoError(t, err)
+	require.Empty(t, out.Changed)
+	require.Empty(t, out.ChangedThreadIDs)
+}
+
+func TestMarkFolderMessagesRead_EmptyFolder(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+
+	out, err := s.MarkFolderMessagesRead(ctx, folderID)
+	require.NoError(t, err)
+	require.Empty(t, out.Changed)
+	require.Empty(t, out.ChangedThreadIDs)
+}
+
+func TestMarkFolderMessagesRead_FolderScoped(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderA, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	folderB, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "Other", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+
+	mkUnread := func(folderID, uid int64) int64 {
+		id, err := s.InsertMessage(ctx, MessageRow{
+			AccountID: accID, FolderID: folderID, UID: uid, Date: uid, Flags: `[]`,
+		})
+		require.NoError(t, err)
+		return id
+	}
+	mkUnread(folderA, 1)
+	mkUnread(folderA, 2)
+	bMsg1 := mkUnread(folderB, 1)
+	bMsg2 := mkUnread(folderB, 2)
+
+	out, err := s.MarkFolderMessagesRead(ctx, folderA)
+	require.NoError(t, err)
+	require.Len(t, out.Changed, 2)
+
+	for _, id := range []int64{bMsg1, bMsg2} {
+		row, err := s.GetMessage(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, `[]`, row.Flags, "folder B msg %d should be unchanged", id)
+	}
+}
+
+// TestMarkFolderMessagesRead_AtomicityRollback proves a mid-tx failure rolls
+// back EVERY flag flip in the folder — none of the earlier-in-loop messages
+// stays \Seen. Forces failure by overwriting one row's flags column with
+// invalid JSON so json.Unmarshal aborts the loop after some prior rows in
+// the same tx have already been UPDATEd.
+func TestMarkFolderMessagesRead_AtomicityRollback(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	folderID, _ := s.UpsertFolder(ctx, FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	good, err := s.InsertMessage(ctx, MessageRow{
+		AccountID: accID, FolderID: folderID, UID: 1, Date: 1, Flags: `[]`,
+	})
+	require.NoError(t, err)
+	bad, err := s.InsertMessage(ctx, MessageRow{
+		AccountID: accID, FolderID: folderID, UID: 2, Date: 2, Flags: `[]`,
+	})
+	require.NoError(t, err)
+	_, err = s.DB().ExecContext(ctx, `UPDATE messages SET flags = ? WHERE id = ?`, "not-json", bad)
+	require.NoError(t, err)
+
+	out, err := s.MarkFolderMessagesRead(ctx, folderID)
+	require.Error(t, err, "malformed JSON in one row must surface as an error")
+	require.Empty(t, out.Changed)
+	require.Empty(t, out.ChangedThreadIDs)
+
+	row, err := s.GetMessage(ctx, good)
+	require.NoError(t, err)
+	require.Equal(t, `[]`, row.Flags,
+		"good row must remain unread — tx rolled back after bad row failed mid-loop")
+}
+
 // TestMarkMessagesRead_NilThreadID covers a message with thread_id IS NULL
 // (e.g. mid-flight during sync, before threading runs). The flag flip must
 // still happen and the change must appear in out.Changed with ThreadID=nil,

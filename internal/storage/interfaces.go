@@ -46,6 +46,7 @@ type Writer interface {
 	UpdateFlags(ctx context.Context, id int64, flagsJSON string) error
 	UpdateBodyHTML(ctx context.Context, id int64, html string) error
 	MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutcome, error)
+	MarkFolderMessagesRead(ctx context.Context, folderID int64) (MarkReadOutcome, error)
 
 	InsertAttachment(ctx context.Context, a AttachmentRow) (int64, error)
 	UpdateAttachmentDownloaded(ctx context.Context, id int64, localPath, sha256 string, ts int64) error
