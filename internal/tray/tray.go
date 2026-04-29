@@ -83,7 +83,7 @@ func NewController(
 		c.app.Quit()
 	})
 	c.tray.SetMenu(menu)
-	c.tray.OnClick(c.toggleWindow)
+	c.tray.OnClick(c.raiseToFront)
 
 	ch, unsub := emitter.Subscribe()
 	c.unsub = unsub
@@ -137,30 +137,6 @@ func (c *Controller) raiseToFront() {
 }
 
 func (c *Controller) showWindow() {
-	c.raiseToFront()
-}
-
-// toggleWindow is wired to the tray icon's left-click.
-//
-// Behaviour matrix:
-//
-//	visible + focused           → Hide (click-to-dismiss)
-//	visible + not focused       → raise to front (user wants it up, not gone)
-//	visible + minimised         → Restore + raise to front
-//	hidden  (close-to-tray)     → Show + raise to front
-//
-// The prior implementation hid the window whenever IsVisible() was true,
-// which mis-handled the "behind another window" and "minimised" cases —
-// clicking the tray icon to recover an obscured/iconified window would
-// instead make it disappear entirely.
-func (c *Controller) toggleWindow() {
-	if c.wnd == nil {
-		return
-	}
-	if c.wnd.IsVisible() && !c.wnd.IsMinimised() && c.wnd.IsFocused() {
-		c.wnd.Hide()
-		return
-	}
 	c.raiseToFront()
 }
 
