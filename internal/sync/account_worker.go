@@ -55,8 +55,8 @@ func (w *AccountWorker) SubmitFlagOp(op flagop.Op) {
 	default:
 		slog.Warn("flag op dropped: queue full",
 			"account_id", w.accountID,
-			"folder_id", op.FolderUID.FolderID,
-			"uid", op.FolderUID.UID,
+			"folder_id", op.FolderID,
+			"uid_count", len(op.UIDs),
 			"add", op.Add,
 			"flags", op.Flags)
 	}
@@ -185,7 +185,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		case <-runCtx.Done():
 			return nil
 		case op := <-w.flagOps:
-			name := folderName(op.FolderUID.FolderID)
+			name := folderName(op.FolderID)
 			if name == "" {
 				// Folder wasn't in the startup snapshot (e.g. server-side
 				// folder discovered after runOnce began). Refresh from the
@@ -194,7 +194,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 				// next restarts.
 				if folders, err := w.store.ListFolders(runCtx, w.accountID); err == nil {
 					for _, f := range folders {
-						if f.ID == op.FolderUID.FolderID {
+						if f.ID == op.FolderID {
 							name = f.Name
 							synced = append(synced, syncedFolder{ID: f.ID, Name: f.Name, Role: roleStr(f.Role)})
 							break
@@ -204,7 +204,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 			}
 			if name == "" {
 				slog.Warn("store flag dropped: unknown folder",
-					"account_id", w.accountID, "folder_id", op.FolderUID.FolderID, "uid", op.FolderUID.UID)
+					"account_id", w.accountID, "folder_id", op.FolderID, "uid_count", len(op.UIDs))
 				continue
 			}
 			if name != currentSel {
@@ -214,8 +214,8 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 				}
 				currentSel = name
 			}
-			if err := c.StoreFlags(runCtx, op.FolderUID.UID, op.Flags, op.Add); err != nil {
-				slog.Warn("store flag failed", "folder", name, "uid", op.FolderUID.UID, "err", err)
+			if err := c.StoreFlags(runCtx, op.UIDs, op.Flags, op.Add); err != nil {
+				slog.Warn("store flag failed", "folder", name, "uid_count", len(op.UIDs), "err", err)
 			}
 		}
 	}

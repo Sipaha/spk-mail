@@ -143,12 +143,13 @@ done:
 		"one MessageUpdated event per FLIPPED message (m3 was already \\Seen — no event)")
 
 	require.Len(t, eng.worker.ops, 2, "one IMAP STORE op per flipped message")
-	storeUIDs := []int64{eng.worker.ops[0].FolderUID.UID, eng.worker.ops[1].FolderUID.UID}
+	storeUIDs := []int64{eng.worker.ops[0].UIDs[0], eng.worker.ops[1].UIDs[0]}
 	require.ElementsMatch(t, []int64{1, 2}, storeUIDs)
 	for _, op := range eng.worker.ops {
 		require.True(t, op.Add)
 		require.Equal(t, []string{`\Seen`}, op.Flags)
 		require.Equal(t, accID, op.AccountID)
-		require.Equal(t, folderID, op.FolderUID.FolderID)
+		require.Equal(t, folderID, op.FolderID)
+		require.Len(t, op.UIDs, 1, "per-message MarkRead must emit one Op per message with a 1-element UIDs slice")
 	}
 }

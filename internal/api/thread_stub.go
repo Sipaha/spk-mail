@@ -144,7 +144,8 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 			if w := s.Engine.WorkerFor(ch.AccountID); w != nil {
 				w.SubmitFlagOp(flagop.Op{
 					AccountID: ch.AccountID,
-					FolderUID: flagop.FolderUID{FolderID: ch.FolderID, UID: ch.UID},
+					FolderID:  ch.FolderID,
+					UIDs:      []int64{ch.UID},
 					Add:       true,
 					Flags:     []string{`\Seen`},
 				})
