@@ -44,6 +44,9 @@ func (w *API) MarkRead(ids []int64) error { return w.a.MarkRead(context.Backgrou
 func (w *API) MarkFolderRead(folderID int64) (int64, error) {
 	return w.a.MarkFolderRead(context.Background(), folderID)
 }
+func (w *API) ToggleThreadFlagged(threadID int64) (api.FlagToggleResult, error) {
+	return w.a.ToggleThreadFlagged(context.Background(), threadID)
+}
 func (w *API) AllowRemoteForMessage(id int64) (string, error) {
 	return w.a.AllowRemoteForMessage(context.Background(), id)
 }

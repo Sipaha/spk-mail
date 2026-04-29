@@ -17,6 +17,7 @@ type countingStore struct {
 	listAttsCalls       atomic.Int64
 	markReadCalls       atomic.Int64
 	markFolderReadCalls atomic.Int64
+	toggleFlaggedCalls  atomic.Int64
 }
 
 func (c *countingStore) ListAttachmentsByMessages(ctx context.Context, ids []int64) (map[int64][]storage.AttachmentRow, error) {
@@ -32,6 +33,11 @@ func (c *countingStore) MarkMessagesRead(ctx context.Context, ids []int64) (stor
 func (c *countingStore) MarkFolderMessagesRead(ctx context.Context, folderID int64) (storage.MarkReadOutcome, error) {
 	c.markFolderReadCalls.Add(1)
 	return c.Writer.MarkFolderMessagesRead(ctx, folderID)
+}
+
+func (c *countingStore) ToggleThreadFlagged(ctx context.Context, threadID int64) (storage.FlagToggleOutcome, error) {
+	c.toggleFlaggedCalls.Add(1)
+	return c.Writer.ToggleThreadFlagged(ctx, threadID)
 }
 
 // spyEngine + spyWorker capture IMAP STORE submissions so MarkRead's

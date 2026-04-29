@@ -104,3 +104,11 @@ type AddAccountRequest struct {
 	UseMock      bool   `json:"use_mock,omitempty"`
 	ProfileID    *int64 `json:"profile_id,omitempty"`
 }
+
+// FlagToggleResult is the wire shape returned by ToggleThreadFlagged.
+// Action mirrors storage.FlagToggleOutcome.Action ("added"/"removed"/"noop")
+// so the frontend can decide whether to refresh optimistically vs no-op.
+type FlagToggleResult struct {
+	Action string `json:"action"`
+	Count  int64  `json:"count"`
+}

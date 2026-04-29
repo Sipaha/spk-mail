@@ -167,6 +167,11 @@ func (h *HTTP) routes() {
 		}
 		return map[string]any{"count": n}, nil
 	}))
+	h.mux.HandleFunc("POST /api/ToggleThreadFlagged", httpHandle(func(ctx context.Context, req *struct {
+		ThreadID int64 `json:"thread_id"`
+	}) (any, error) {
+		return h.api.ToggleThreadFlagged(ctx, req.ThreadID)
+	}))
 	h.mux.HandleFunc("POST /api/AllowRemoteForMessage", httpHandle(func(ctx context.Context, req *struct {
 		ID int64 `json:"id"`
 	}) (any, error) {
