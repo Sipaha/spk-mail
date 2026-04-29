@@ -94,15 +94,32 @@ export function useEventStream() {
         }
         case 'FolderMarkedRead': {
           const accId = Number(ev.payload.account_id)
+          const folderId = Number(ev.payload.folder_id)
           if (Number.isFinite(accId) && accId > 0) {
             client.listFolders(accId)
               .then(fs => useStore.getState().setFolders(accId, fs))
               .catch(err => console.warn('listFolders refresh failed', err))
           }
-          // Mirror the MessageInserted scope-intersect refetch — open thread might
-          // have been in this folder; current thread list scope might intersect.
+          // Scope gate: skip the threads/openThread refetch when we know
+          // for sure the user's view doesn't intersect the affected folder.
+          // Unlike MessageInserted (which can land in any folder the user
+          // is currently viewing via Unread/Flagged virtual rows), the
+          // payload here gives us the EXACT folder. If the user has a
+          // narrowed filter that pins to a different account or folder,
+          // there's nothing to refresh in their current threads list.
           const s = useStore.getState()
           const reqFilter = s.filter
+          const accountMismatches = reqFilter.accountId !== undefined && reqFilter.accountId !== accId
+          const folderMismatches = reqFilter.folderId !== undefined && reqFilter.folderId !== folderId
+          if (accountMismatches || folderMismatches) {
+            // Folder counts already refreshed above. Open thread can't be in
+            // the affected folder if the active filter excludes it (the
+            // thread row wouldn't have been visible to open in the first
+            // place — except if the filter changed since opening, which is
+            // a corner case where a stale "read" indicator self-heals on
+            // the next interaction).
+            break
+          }
           const reqProfileId = s.activeProfileId
           const reqSig = filterSig(reqFilter, reqProfileId)
           const result = await client.listThreads({
