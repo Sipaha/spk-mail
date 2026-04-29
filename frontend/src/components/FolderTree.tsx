@@ -87,6 +87,15 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
               {(unread > 0 || total > 0) && (
                 <span className="ml-auto text-[10px] shrink-0 flex items-center gap-1.5">
                   {unread > 0 && (
+                    // Note: <button> nested inside the row's <button> is
+                    // technically invalid HTML per the W3C content model
+                    // (interactive content cannot contain interactive
+                    // descendants). React builds the DOM via createElement
+                    // not the HTML parser, so the nested button is rendered
+                    // as authored and Chromium (the Wails runtime) handles
+                    // the click + stopPropagation correctly. Refactor to a
+                    // sibling element if we ever need stricter HTML
+                    // validity or to support non-Chromium screen readers.
                     <button
                       type="button"
                       onClick={(e) => {
@@ -95,7 +104,7 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
                       }}
                       title="Mark all as read"
                       aria-label={`Mark all messages in ${f.name} as read`}
-                      className="size-1.5 rounded-full bg-zinc-500 hover:bg-blue-400 hover:size-2 transition-all"
+                      className="size-1.5 rounded-full bg-zinc-500 hover:bg-blue-400 hover:size-2 transition-[width,height,background-color]"
                     />
                   )}
                   {unread > 0 && <span className="text-blue-400">{unread}</span>}
