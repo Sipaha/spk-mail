@@ -69,7 +69,7 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
           <span>⭐</span>
           <span className="truncate">Flagged</span>
           {totalFlagged > 0 && (
-            <span className="ml-auto rounded-full bg-amber-600 text-white px-1.5 leading-tight">{totalFlagged}</span>
+            <span className="ml-auto text-[10px] text-amber-400 shrink-0">{totalFlagged}</span>
           )}
         </button>
       </li>
