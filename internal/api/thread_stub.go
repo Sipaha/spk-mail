@@ -201,6 +201,64 @@ func (s *Stub) MarkFolderRead(ctx context.Context, folderID int64) (int64, error
 	return int64(len(out.Changed)), nil
 }
 
+// ToggleThreadFlagged orchestrates a thread-level \Flagged toggle. Storage
+// runs the toggle in a single writer tx and returns per-message metadata;
+// this layer fans the IMAP STORE ops out as ONE bulk flagop.Op per
+// (account, folder) pair (a thread can in principle span folders) and
+// emits one MessageUpdated SSE per changed message — the existing events.ts
+// handler picks those up and refetches threads + open thread, so
+// has_flagged on ThreadRow refreshes without a new event-type.
+func (s *Stub) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagToggleResult, error) {
+	out, err := s.Store.ToggleThreadFlagged(ctx, threadID)
+	if err != nil {
+		return FlagToggleResult{}, err
+	}
+	if out.Action == "noop" {
+		return FlagToggleResult{Action: "noop", Count: 0}, nil
+	}
+
+	// Group changed UIDs by (account, folder) — typically one group, but a
+	// thread CAN span folders if a message moved between them, and IMAP
+	// UIDs are folder-scoped, so a single Op covering both would address
+	// the wrong messages.
+	type key struct {
+		accountID int64
+		folderID  int64
+	}
+	groups := make(map[key][]int64)
+	for _, ch := range out.Changed {
+		k := key{ch.AccountID, ch.FolderID}
+		groups[k] = append(groups[k], ch.UID)
+	}
+
+	if s.Engine != nil {
+		for k, uids := range groups {
+			w := s.Engine.WorkerFor(k.accountID)
+			if w == nil {
+				slog.Warn("ToggleThreadFlagged: no worker for account",
+					"account_id", k.accountID, "folder_id", k.folderID)
+				continue
+			}
+			w.SubmitFlagOp(flagop.Op{
+				AccountID: k.accountID,
+				FolderID:  k.folderID,
+				UIDs:      uids,
+				Add:       out.Action == "added",
+				Flags:     []string{`\Flagged`},
+			})
+		}
+	}
+
+	for _, ch := range out.Changed {
+		s.Emitter.Emit(Event{
+			Type:    "MessageUpdated",
+			Payload: map[string]any{"id": ch.MessageID},
+		})
+	}
+
+	return FlagToggleResult{Action: out.Action, Count: int64(len(out.Changed))}, nil
+}
+
 func (s *Stub) AllowRemoteForMessage(ctx context.Context, id int64) (string, error) {
 	m, err := s.Store.GetMessage(ctx, id)
 	if err != nil {

@@ -16,6 +16,7 @@ type API interface {
 
 	MarkRead(ctx context.Context, messageIDs []int64) error
 	MarkFolderRead(ctx context.Context, folderID int64) (int64, error)
+	ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagToggleResult, error)
 	AllowRemoteForMessage(ctx context.Context, id int64) (string, error) // returns updated body_html
 	Search(ctx context.Context, query string, limit, offset int) ([]SearchHitDTO, error)
 
