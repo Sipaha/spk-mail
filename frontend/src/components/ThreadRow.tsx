@@ -69,7 +69,7 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
             className={`text-xs shrink-0 transition-colors ${
               t.has_flagged
                 ? 'text-amber-400 hover:text-amber-300'
-                : 'text-zinc-700 opacity-0 group-hover:opacity-100 hover:text-amber-400'
+                : 'text-zinc-500 opacity-0 group-hover:opacity-100 hover:text-amber-400'
             }`}
           >
             {t.has_flagged ? '★' : '☆'}
