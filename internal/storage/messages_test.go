@@ -606,8 +606,8 @@ func TestToggleThreadFlagged_AtomicityRollback(t *testing.T) {
 		require.NoError(t, err)
 		return id
 	}
-	good := mkMsg(1, 100, `["\Flagged"]`)
-	bad := mkMsg(2, 200, `["\Flagged"]`)
+	good := mkMsg(1, 100, `["\\Flagged"]`)
+	bad := mkMsg(2, 200, `["\\Flagged"]`)
 	// Poison the bad row's flags column AFTER InsertMessage (which would
 	// have rejected the malformed JSON via the json.Marshal-built input
 	// path). Direct UPDATE bypasses any future validation.

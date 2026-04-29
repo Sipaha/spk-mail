@@ -357,9 +357,9 @@ func TestToggleThreadFlagged_Remove(t *testing.T) {
 		require.NoError(t, err)
 		return id
 	}
-	mkMsg(1, 100, `["\\Flagged"]`)
+	m1 := mkMsg(1, 100, `["\\Flagged"]`)
 	mkMsg(2, 200, `[]`) // not flagged — must be skipped
-	mkMsg(3, 300, `["\\Seen","\\Flagged"]`)
+	m3 := mkMsg(3, 300, `["\\Seen","\\Flagged"]`)
 
 	evCh, unsub := stub.Emitter.Subscribe()
 	defer unsub()
@@ -388,9 +388,15 @@ func TestToggleThreadFlagged_Remove(t *testing.T) {
 	}
 done:
 	require.Len(t, events, 2, "one MessageUpdated per flipped message")
+	gotIDs := make([]int64, 0, len(events))
 	for _, ev := range events {
 		require.Equal(t, "MessageUpdated", ev.Type)
+		id, ok := ev.Payload["id"].(int64)
+		require.True(t, ok, "payload.id must be int64; got %T", ev.Payload["id"])
+		gotIDs = append(gotIDs, id)
 	}
+	require.ElementsMatch(t, []int64{m1, m3}, gotIDs,
+		"MessageUpdated must fire for the two flipped messages — m2 was unflagged, no event")
 }
 
 // TestToggleThreadFlagged_Noop — empty/unknown thread id. Storage IS
