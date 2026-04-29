@@ -141,6 +141,9 @@ func markRowsAsSeen(ctx context.Context, tx *sql.Tx, cands []seenCandidate, out 
 			return fmt.Errorf("markRowsAsSeen: bad flags JSON for id %d: %w", c.id, err)
 		}
 		if slices.Contains(fl, `\Seen`) {
+			// Defensive skip — required for the MarkMessagesRead path (the IN-clause
+			// SELECT does not pre-filter by flag), redundant for MarkFolderMessagesRead
+			// (its NOT EXISTS json_each filter excludes \Seen rows at the SELECT level).
 			continue
 		}
 		fl = append(fl, `\Seen`)
@@ -248,7 +251,12 @@ func (s *Store) MarkFolderMessagesRead(ctx context.Context, folderID int64) (Mar
 }
 
 // scanSeenCandidates is the shared post-SELECT scan routine: takes a SQL
-// query that returns the seenCandidate column shape and materializes a slice.
+// query and materializes its result set into seenCandidates. The query MUST
+// project columns in this exact order:
+//   id, account_id, folder_id, uid, thread_id, flags
+// Wrong column order yields silent scan miscorrelation (e.g. folderID lands
+// in uid). Used by both MarkMessagesRead (id-list SELECT) and
+// MarkFolderMessagesRead (folder-scope SELECT).
 func scanSeenCandidates(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]seenCandidate, error) {
 	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
