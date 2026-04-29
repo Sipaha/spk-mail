@@ -158,6 +158,49 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 	return nil
 }
 
+// MarkFolderRead flips \Seen on every unread message in the folder. The
+// storage layer does the work in one writer transaction; the API layer fans
+// out a SINGLE bulk flagop.Op (so AccountWorker issues one IMAP STORE for
+// the whole set, not N) and emits ONE FolderMarkedRead SSE event so the
+// frontend can refetch folder counts + open thread once instead of N times.
+func (s *Stub) MarkFolderRead(ctx context.Context, folderID int64) (int64, error) {
+	out, err := s.Store.MarkFolderMessagesRead(ctx, folderID)
+	if err != nil {
+		return 0, err
+	}
+	if len(out.Changed) == 0 {
+		return 0, nil
+	}
+	accountID := out.Changed[0].AccountID
+	uids := make([]int64, len(out.Changed))
+	for i, ch := range out.Changed {
+		uids[i] = ch.UID
+	}
+	if s.Engine != nil {
+		if w := s.Engine.WorkerFor(accountID); w != nil {
+			w.SubmitFlagOp(flagop.Op{
+				AccountID: accountID,
+				FolderID:  folderID,
+				UIDs:      uids,
+				Add:       true,
+				Flags:     []string{`\Seen`},
+			})
+		} else {
+			slog.Warn("MarkFolderRead: no worker for account",
+				"account_id", accountID, "folder_id", folderID)
+		}
+	}
+	s.Emitter.Emit(Event{
+		Type: "FolderMarkedRead",
+		Payload: map[string]any{
+			"account_id": accountID,
+			"folder_id":  folderID,
+			"count":      int64(len(out.Changed)),
+		},
+	})
+	return int64(len(out.Changed)), nil
+}
+
 func (s *Stub) AllowRemoteForMessage(ctx context.Context, id int64) (string, error) {
 	m, err := s.Store.GetMessage(ctx, id)
 	if err != nil {

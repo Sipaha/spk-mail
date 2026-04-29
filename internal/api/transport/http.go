@@ -158,6 +158,15 @@ func (h *HTTP) routes() {
 	}) (any, error) {
 		return nil, h.api.MarkRead(ctx, req.IDs)
 	}))
+	h.mux.HandleFunc("POST /api/MarkFolderRead", httpHandle(func(ctx context.Context, req *struct {
+		FolderID int64 `json:"folder_id"`
+	}) (any, error) {
+		n, err := h.api.MarkFolderRead(ctx, req.FolderID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"count": n}, nil
+	}))
 	h.mux.HandleFunc("POST /api/AllowRemoteForMessage", httpHandle(func(ctx context.Context, req *struct {
 		ID int64 `json:"id"`
 	}) (any, error) {
