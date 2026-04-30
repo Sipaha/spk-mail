@@ -2,7 +2,9 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -84,28 +86,47 @@ func (e *Engine) Run(ctx context.Context) {
 		e.StartAccount(ctx, a.ID)
 	}
 
-	// Best-effort startup blob maintenance, gated on attachDir which
-	// doubles as the data-dir root that BlobPath composes under (set
-	// by NewEngineWithDir). Two passes, in order:
+	// Best-effort startup blob maintenance, gated on attachDir (the
+	// data-dir root BlobPath composes under) AND on the
+	// SPK_DISABLE_MAINTENANCE env var being unset. The killswitch
+	// exists because the backfill pass — re-hashing legacy
+	// per-message attachment files into the content-addressed store
+	// — is heavy I/O that competes with the sync writer; on a huge
+	// inbox it can starve incoming-message inserts on first run
+	// after upgrade. Setting SPK_DISABLE_MAINTENANCE=1 is the escape
+	// hatch if the user observes that.
 	//
-	//  1. Backfill legacy per-message files into the content-addressed
-	//     store. Idempotent — picks up only rows where blob_id is
-	//     still NULL and local_path points at an extant file.
-	//  2. GC sweep for blobs at refcount=0: reclaim disk after account
-	//     removal / UIDVALIDITY purge / a previous crash between the
-	//     message-DELETE tx and a prior sweep.
+	// Two passes, in order:
+	//   1. Backfill legacy files into the content-addressed store
+	//      (idempotent, capped at backfillBatchSize per pass — the
+	//      remaining rows roll over to the next start).
+	//   2. GC sweep for refcount=0 blobs (reclaim disk after account
+	//      removal / UIDVALIDITY purge / a prior crash between the
+	//      message-DELETE tx and a previous sweep).
 	//
 	// Backfill must come first so newly-created blob rows don't
 	// briefly look like sweep candidates.
-	if e.attachDir != "" {
+	//
+	// We also gate the start of the maintenance goroutine on a
+	// 30-second delay after Run, so the first real-time sync the
+	// user sees on startup gets uncontended writer access. (The
+	// initial bulk sync is started from StartAccount above and runs
+	// concurrently — the delay is for the IDLE / poll loops that
+	// kick in once initial sync per folder completes.)
+	if e.attachDir != "" && os.Getenv("SPK_DISABLE_MAINTENANCE") != "1" {
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
 			migrated, bErr := e.store.BackfillLegacyAttachments(ctx, e.attachDir)
-			if bErr != nil {
+			if bErr != nil && !errors.Is(bErr, context.Canceled) {
 				slog.Warn("legacy attachments backfill failed", "err", bErr)
 			} else if migrated > 0 {
-				slog.Info("legacy attachments backfill complete", "migrated", migrated)
+				slog.Info("legacy attachments backfill pass complete", "migrated", migrated)
 			}
 			rows, bytes, err := e.store.SweepBlobs(ctx, e.attachDir)
 			if err != nil {

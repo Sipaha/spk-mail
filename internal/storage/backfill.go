@@ -10,6 +10,25 @@ import (
 	"github.com/spk/spk-mail/internal/fsutil"
 )
 
+// backfillBatchSize caps how many legacy attachment rows a single
+// startup backfill pass migrates. The work is heavy (read + hash +
+// write + fsync per file) and competes with the sync writer for the
+// single SQLite write connection. Without a cap, a 90k-message inbox
+// with 10k+ legacy attachment files would peg the disk for an hour
+// on first run after upgrade — long enough to look like sync is
+// permanently broken because the writer keeps timing out against
+// busy_timeout. With a cap, each run does a digestible chunk and
+// the next start picks up the rest. (LIMIT in the SELECT is what
+// actually enforces the cap; the value here is the only knob.)
+const backfillBatchSize = 500
+
+// backfillRowSleep yields the writer connection between rows so the
+// AccountWorker / StoreWriter can interleave its own short
+// transactions. 50ms × 500 rows = 25s of idle time per pass —
+// negligible compared to the disk I/O cost of the batch and worth
+// it for the responsiveness gain.
+const backfillRowSleep = 50 * time.Millisecond
+
 // BackfillLegacyAttachments rehashes pre-v7 per-message attachment
 // files into the content-addressed blob store. Idempotent: each call
 // picks up only rows where blob_id IS NULL AND local_path IS NOT NULL,
@@ -36,9 +55,15 @@ func (s *Store) BackfillLegacyAttachments(ctx context.Context, dataDir string) (
 		return 0, errors.New("BackfillLegacyAttachments: dataDir is empty")
 	}
 
+	// Bounded query: take at most backfillBatchSize rows per call so
+	// the work fits in a startup window without hammering disk and
+	// the writer connection. Leftover rows are picked up on the next
+	// process start (idempotent — the WHERE clause filters them
+	// back in).
 	rows, err := s.readDB.QueryContext(ctx,
 		`SELECT id, local_path FROM attachments
-		 WHERE blob_id IS NULL AND local_path IS NOT NULL AND local_path != ''`)
+		 WHERE blob_id IS NULL AND local_path IS NOT NULL AND local_path != ''
+		 LIMIT ?`, backfillBatchSize)
 	if err != nil {
 		return 0, err
 	}
@@ -63,9 +88,28 @@ func (s *Store) BackfillLegacyAttachments(ctx context.Context, dataDir string) (
 		return 0, nil
 	}
 
-	slog.Info("legacy attachments backfill started", "candidates", len(pending))
+	slog.Info("legacy attachments backfill started", "this_pass", len(pending))
 
-	for _, c := range pending {
+	for i, c := range pending {
+		// Respect ctx so a process shutdown during a long pass exits
+		// promptly instead of fsyncing every remaining file.
+		select {
+		case <-ctx.Done():
+			slog.Info("legacy attachments backfill cancelled", "completed", migrated, "of_pass", len(pending))
+			return migrated, ctx.Err()
+		default:
+		}
+		// Yield between rows so the sync writer gets airtime on the
+		// single write connection. Skip on the very first iteration
+		// so a small backfill (1 row) doesn't pay the latency.
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return migrated, ctx.Err()
+			case <-time.After(backfillRowSleep):
+			}
+		}
+
 		f, openErr := os.Open(c.localPath)
 		if openErr != nil {
 			if os.IsNotExist(openErr) {

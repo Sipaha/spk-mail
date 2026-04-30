@@ -471,6 +471,7 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 	notifs := make(chan imap.IdleNotification, 8)
 	stop := c.Idle(sessionCtx, notifs)
 	defer stop()
+	slog.Info("IDLE session started", "account_id", acc.ID, "folder", folder)
 	for {
 		select {
 		case <-sessionCtx.Done():
@@ -480,6 +481,13 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 				return
 			}
 			if n.Kind == imap.NotifExists {
+				// One-line breadcrumb so a "new mail not arriving"
+				// report can be diagnosed from journalctl: if we never
+				// log this, the server isn't pushing EXISTS (firewall,
+				// IDLE timeout, server-side issue); if we do log it but
+				// no MessageInserted follows, the failure is in the
+				// post-EXISTS sync path.
+				slog.Info("IDLE EXISTS received", "account_id", acc.ID, "folder", folder)
 				folders, _ := w.store.ListFolders(ctx, acc.ID)
 				for _, f := range folders {
 					if strings.EqualFold(f.Name, folder) {
@@ -488,14 +496,18 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 							Username: acc.IMAPUsername, Password: string(pw),
 							UseTLS: acc.UseTLS,
 						})
-						if err == nil {
-							// runIDLE post-EXISTS — these messages just landed
-							// on the server while we were connected, so they
-							// are real-time arrivals and should produce a
-							// MessageArrived notification.
-							_ = w.syncFolder(ctx, syncC, f.ID, folder, role, true)
-							_ = syncC.Close()
+						if err != nil {
+							slog.Warn("IDLE post-EXISTS dial failed", "account_id", acc.ID, "err", err)
+							break
 						}
+						// runIDLE post-EXISTS — these messages just landed
+						// on the server while we were connected, so they
+						// are real-time arrivals and should produce a
+						// MessageArrived notification.
+						if syncErr := w.syncFolder(ctx, syncC, f.ID, folder, role, true); syncErr != nil {
+							slog.Warn("IDLE post-EXISTS sync failed", "account_id", acc.ID, "folder", folder, "err", syncErr)
+						}
+						_ = syncC.Close()
 						break
 					}
 				}
