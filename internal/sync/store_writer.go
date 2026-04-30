@@ -105,7 +105,15 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 		}
 	}
 
-	flagsJSON, _ := json.Marshal(m.Flags)
+	// json.Marshal of a nil []string emits "null" — round-tripped via the
+	// frontend that becomes JS null, and `null.includes('\Seen')` blows up
+	// the open-thread mark-read path. Force an empty array for nil/empty so
+	// the frontend always sees an iterable list.
+	flagsSrc := m.Flags
+	if flagsSrc == nil {
+		flagsSrc = []string{}
+	}
+	flagsJSON, _ := json.Marshal(flagsSrc)
 	toJSON, _ := json.Marshal(parsed.To)
 	ccJSON, _ := json.Marshal(parsed.Cc)
 	refsJoined := strings.Join(parsed.References, " ")

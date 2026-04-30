@@ -33,7 +33,9 @@ func TestListFolders_OrderedByRole(t *testing.T) {
 		names[i] = f.Name
 	}
 	// Expected sort: inbox(0), sent(1), drafts(2), archive(3-none), ""(4) [Custom, Trash alphabetical], spam(5)
-	require.Equal(t, []string{"INBOX", "Sent", "Drafts", "Custom", "Trash", "Spam folder"}, names)
+	// Display names: ALL-CAPS segments are title-cased ("INBOX" → "Inbox");
+	// already-mixed-case names ("Sent", "Drafts", …) pass through untouched.
+	require.Equal(t, []string{"Inbox", "Sent", "Drafts", "Custom", "Trash", "Spam folder"}, names)
 }
 
 func TestListFolders_UnreadCounts(t *testing.T) {
@@ -50,7 +52,7 @@ func TestListFolders_UnreadCounts(t *testing.T) {
 	fs, err := a.ListFolders(ctx, accID)
 	require.NoError(t, err)
 	require.Len(t, fs, 1)
-	require.Equal(t, "INBOX", fs[0].Name)
+	require.Equal(t, "Inbox", fs[0].Name)
 	require.Equal(t, int64(2), fs[0].UnreadCount)
 	require.Equal(t, int64(3), fs[0].TotalCount)
 	require.Equal(t, int64(0), fs[0].FlaggedCount)

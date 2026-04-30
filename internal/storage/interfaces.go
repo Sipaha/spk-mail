@@ -34,6 +34,8 @@ type Reader interface {
 	ListProfiles(ctx context.Context) ([]ProfileRow, error)
 
 	Search(ctx context.Context, query string, limit, offset int) ([]SearchHit, error)
+
+	ListApprovedRemoteURLs(ctx context.Context) (map[string]bool, error)
 }
 
 // Writer adds mutating methods on top of Reader. A Writer can also read —
@@ -68,6 +70,8 @@ type Writer interface {
 
 	InsertParsedMessageBundle(ctx context.Context, b MessageBundle) (int64, int64, error)
 	WithTx(ctx context.Context, fn func(*sql.Tx) error) error
+
+	AddApprovedRemoteURLs(ctx context.Context, urls []string) error
 }
 
 // Compile-time assertion: *Store must implement both interfaces. If you add a

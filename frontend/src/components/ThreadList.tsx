@@ -173,7 +173,7 @@ export default function ThreadList() {
             if (fresh) setPinned(fresh)
             client.getThread(id).then(msgs => {
               setOpenThread(id, msgs)
-              const unread = msgs.filter(m => !m.flags.includes('\\Seen')).map(m => m.id)
+              const unread = msgs.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
               if (unread.length) {
                 client.markRead(unread)
                   .then(() => useStore.getState().markThreadRead(id))

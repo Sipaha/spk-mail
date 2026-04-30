@@ -25,6 +25,97 @@ var roleOrder = map[string]int{
 	"trash":   6,
 }
 
+// prettyFolderName converts the raw IMAP mailbox name into a display-friendly
+// label: ALL-CAPS segments become Title Case (so "INBOX" → "Inbox", "GMAIL"
+// → "Gmail"), while names that already use mixed case ("Spam", "[Gmail]/All
+// Mail") are left untouched. The hierarchy delimiter is preserved so nested
+// folders like "Drafts|template" still split into "Drafts|Template".
+//
+// We only normalize a segment when it is ENTIRELY upper-case ASCII letters /
+// digits — that's the only form we're confident is a mechanical convention
+// (the IMAP RFC special-cases "INBOX" as case-insensitive; everything else
+// is a server-defined label). User-named all-caps folders ("WORK", "TODO")
+// will get title-cased too — that's an intentional cosmetic improvement,
+// not a regression.
+func prettyFolderName(name, delim string) string {
+	if name == "" {
+		return name
+	}
+	d := delim
+	if d == "" {
+		// No declared delimiter — most common with single-segment names.
+		return titleSegment(name)
+	}
+	parts := splitDelim(name, d)
+	for i, p := range parts {
+		parts[i] = titleSegment(p)
+	}
+	return joinDelim(parts, d)
+}
+
+func splitDelim(s, d string) []string {
+	if d == "" || len(d) > 1 {
+		return []string{s}
+	}
+	out := []string{}
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == d[0] {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
+
+func joinDelim(parts []string, d string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out += d + p
+	}
+	return out
+}
+
+func titleSegment(s string) string {
+	if s == "" {
+		return s
+	}
+	// Detect "all upper-case ASCII letters" — leave anything with a lower-case
+	// letter or non-ASCII alone (Russian / German / mixed-case names).
+	allUpper := false
+	hasLetter := false
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			allUpper = true
+			hasLetter = true
+		} else if r >= 'a' && r <= 'z' {
+			allUpper = false
+			hasLetter = true
+			break
+		}
+	}
+	if !hasLetter || !allUpper {
+		return s
+	}
+	out := make([]byte, 0, len(s))
+	prevAlpha := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isAlpha := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+		if c >= 'A' && c <= 'Z' && prevAlpha {
+			out = append(out, c+('a'-'A'))
+		} else {
+			out = append(out, c)
+		}
+		prevAlpha = isAlpha
+	}
+	return string(out)
+}
+
 func (s *Stub) ListFolders(ctx context.Context, accountID int64) ([]FolderDTO, error) {
 	rows, err := s.Store.ListFolders(ctx, accountID)
 	if err != nil {
@@ -40,7 +131,7 @@ func (s *Stub) ListFolders(ctx context.Context, accountID int64) ([]FolderDTO, e
 		c := counts[r.ID]
 		out = append(out, FolderDTO{
 			ID: r.ID, AccountID: accountID,
-			Name: r.Name, Role: role,
+			Name: prettyFolderName(r.Name, r.Delimiter), Role: role,
 			UnreadCount:  c.Unread,
 			TotalCount:   c.Total,
 			FlaggedCount: c.Flagged,
@@ -103,6 +194,17 @@ func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
 		return nil, err
 	}
 
+	// Build the cross-message remote-image allowlist once per call. URLs
+	// the user has approved on any past message auto-unblock here without
+	// touching the stored body_html — the persisted column keeps its
+	// data-spk-original-src markers so reverting an approval (a future
+	// feature) wouldn't have to reconstruct them.
+	approved, err := s.Store.ListApprovedRemoteURLs(ctx)
+	if err != nil {
+		slog.Warn("GetThread: ListApprovedRemoteURLs failed; rendering with no allowlist", "err", err)
+		approved = nil
+	}
+
 	out := make([]MessageDTO, 0, len(rows))
 	for _, r := range rows {
 		var to []string
@@ -123,11 +225,15 @@ func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
 				SizeBytes: a.SizeBytes, Downloaded: a.LocalPath != nil,
 			})
 		}
+		bodyHTML := strFrom(r.BodyHTML)
+		if bodyHTML != "" && len(approved) > 0 {
+			bodyHTML = mimep.UnblockApproved(bodyHTML, approved)
+		}
 		out = append(out, MessageDTO{
 			ID: r.ID, AccountID: r.AccountID, FolderID: r.FolderID,
 			Subject: strFrom(r.Subject), FromAddr: strFrom(r.FromAddr), ToAddrs: to,
 			Date: r.Date, Flags: fl,
-			BodyText: strFrom(r.BodyText), BodyHTML: strFrom(r.BodyHTML),
+			BodyText: strFrom(r.BodyText), BodyHTML: bodyHTML,
 			Attachments: dtoAtts,
 		})
 	}
@@ -153,7 +259,11 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 				slog.Warn("MarkRead: no worker for account", "account_id", ch.AccountID)
 			}
 		}
-		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": ch.MessageID}})
+		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{
+			"id":         ch.MessageID,
+			"account_id": ch.AccountID,
+			"folder_id":  ch.FolderID,
+		}})
 	}
 	return nil
 }
@@ -251,8 +361,12 @@ func (s *Stub) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTog
 
 	for _, ch := range out.Changed {
 		s.Emitter.Emit(Event{
-			Type:    "MessageUpdated",
-			Payload: map[string]any{"id": ch.MessageID},
+			Type: "MessageUpdated",
+			Payload: map[string]any{
+				"id":         ch.MessageID,
+				"account_id": ch.AccountID,
+				"folder_id":  ch.FolderID,
+			},
 		})
 	}
 
@@ -267,11 +381,24 @@ func (s *Stub) AllowRemoteForMessage(ctx context.Context, id int64) (string, err
 	if m.BodyHTML == nil {
 		return "", nil
 	}
+	// Cache the URLs the user is approving so other messages with the same
+	// remote images render inline on the next GetThread without forcing
+	// another click. Done before UnblockRemote so we can still see the
+	// data-spk-original-src markers.
+	if urls := mimep.ExtractBlockedURLs(*m.BodyHTML); len(urls) > 0 {
+		if err := s.Store.AddApprovedRemoteURLs(ctx, urls); err != nil {
+			slog.Warn("AllowRemoteForMessage: AddApprovedRemoteURLs failed", "id", id, "err", err)
+		}
+	}
 	updated := mimep.UnblockRemote(*m.BodyHTML)
 	if err := s.Store.UpdateBodyHTML(ctx, id, updated); err != nil {
 		return "", err
 	}
-	s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{"id": id}})
+	s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{
+		"id":         id,
+		"account_id": m.AccountID,
+		"folder_id":  m.FolderID,
+	}})
 	return updated, nil
 }
 

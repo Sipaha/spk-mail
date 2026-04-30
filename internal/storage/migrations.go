@@ -17,6 +17,7 @@ var migrationSteps = []migrationStep{
 	{version: 3, apply: applyMigrationV3},
 	{version: 4, apply: applyMigrationV4},
 	{version: 5, apply: applyMigrationV5},
+	{version: 6, apply: applyMigrationV6},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -184,6 +185,31 @@ func applyMigrationV5(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations(version, applied_at) VALUES (5, strftime('%s','now'))`); err != nil {
 		return fmt.Errorf("v5 record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// applyMigrationV6 introduces remote_urls_approved — a per-URL allowlist that
+// lets GetThread auto-unblock images at view time across messages, so the
+// user only has to click "Show remote content" once for a given URL (a
+// company logo, a recurring CDN-served avatar, etc.) and future emails that
+// reference the same URL render it without the gate.
+func applyMigrationV6(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS remote_urls_approved (
+			url         TEXT PRIMARY KEY,
+			approved_at INTEGER NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("v6 create remote_urls_approved: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (6, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v6 record version: %w", err)
 	}
 	return tx.Commit()
 }
