@@ -8,6 +8,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -144,37 +145,58 @@ func (c *Controller) consume(ch <-chan api.Event) {
 	for ev := range ch {
 		switch ev.Type {
 		case "MessageArrived":
-			if c.notifier != nil {
-				// Lookup account_id from payload; tolerate both in-process int64
-				// (Emitter delivers Go values directly) and JSON-decoded float64
-				// (Wails event bus round-trips through JSON).
-				var accID int64
-				switch v := ev.Payload["account_id"].(type) {
-				case int64:
-					accID = v
-				case float64:
-					accID = int64(v)
-				}
-				muted := false
-				if accID > 0 {
-					if m, err := c.api.AccountIsMuted(context.Background(), accID); err == nil {
-						muted = m
-					} else {
-						log.Printf("tray: AccountIsMuted failed: %v", err)
-					}
-				}
-				if !muted {
-					from, _ := ev.Payload["from"].(string)
-					subject, _ := ev.Payload["subject"].(string)
-					if _, err := c.notifier.Notify("New mail · "+from, subject); err != nil {
-						log.Printf("tray: notify failed: %v", err)
-					}
-				}
-			}
+			// Hand off to a goroutine: AccountIsMuted is a SQLite read
+			// and Notify is a dbus call with a 5s timeout. Running them
+			// inline here would block the consume loop, which is the
+			// only drainer of a bounded (cap=64) subscriber channel.
+			// Two MessageArrived events landing while the dbus call is
+			// in flight would otherwise overflow into the channel-drop
+			// path and the user would silently miss notifications.
+			ev := ev
+			go c.handleMessageArrived(ev)
 			c.refreshUnread()
 		case "MessageInserted", "MessageUpdated", "AccountStatus", "FolderMarkedRead":
 			c.refreshUnread()
 		}
+	}
+}
+
+// handleMessageArrived runs the notify side-effect off the consume
+// goroutine — see the comment in consume() for why decoupling matters.
+// Logs at INFO so missing notifications can be diagnosed from the
+// in-memory log buffer / journalctl: every fired path leaves a trail.
+func (c *Controller) handleMessageArrived(ev api.Event) {
+	if c.notifier == nil {
+		log.Printf("tray: MessageArrived received but notifier is nil (dbus init failed at startup)")
+		return
+	}
+	// account_id may arrive as int64 (in-process Emitter) or float64
+	// (JSON round-trip via Wails event bus); accept both.
+	var accID int64
+	switch v := ev.Payload["account_id"].(type) {
+	case int64:
+		accID = v
+	case float64:
+		accID = int64(v)
+	}
+	muted := false
+	if accID > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		m, err := c.api.AccountIsMuted(ctx, accID)
+		cancel()
+		if err != nil {
+			log.Printf("tray: AccountIsMuted failed: %v (treating as not muted)", err)
+		} else {
+			muted = m
+		}
+	}
+	if muted {
+		return
+	}
+	from, _ := ev.Payload["from"].(string)
+	subject, _ := ev.Payload["subject"].(string)
+	if _, err := c.notifier.Notify("New mail · "+from, subject); err != nil {
+		log.Printf("tray: notify failed: %v (account_id=%d from=%q)", err, accID, from)
 	}
 }
 
