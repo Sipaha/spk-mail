@@ -54,9 +54,13 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, t
 	}
 
 	em := api.NewEmitter()
-	eng := mailsync.NewEngineWithDir(st, sec, em, paths.AttachmentsDir)
+	// Engine writes attachments into the content-addressed blob store
+	// rooted at paths.DataDir; the legacy AttachmentsDir is retained
+	// only for migration v8 backfill of pre-v7 rows.
+	eng := mailsync.NewEngineWithDir(st, sec, em, paths.DataDir)
 	go eng.Run(ctx)
 	stub := api.NewStub(st, sec, em, engineAdapter{eng: eng})
+	stub.DataDir = paths.DataDir
 
 	mux := http.NewServeMux()
 	httpAPI := transport.NewHTTP(stub, em)

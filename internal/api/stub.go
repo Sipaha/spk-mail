@@ -54,6 +54,12 @@ type Stub struct {
 	Secrets *secrets.Store
 	Emitter *Emitter
 	Engine  Engine
+	// DataDir is the on-disk root the content-addressed blob store
+	// lives under (composed via storage.BlobPath). Production wires
+	// it from config.AppPaths.DataDir; tests can leave it zero, in
+	// which case GetAttachmentLocalPath falls back to the legacy
+	// per-message local_path stored on the row.
+	DataDir string
 }
 
 func NewStub(s storage.Writer, sec *secrets.Store, em *Emitter, eng Engine) *Stub {

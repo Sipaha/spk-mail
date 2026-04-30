@@ -41,10 +41,11 @@ func runDesktop(ctx context.Context) error {
 	}
 
 	em := api.NewEmitter()
-	eng := mailsync.NewEngineWithDir(st, sec, em, paths.AttachmentsDir)
+	eng := mailsync.NewEngineWithDir(st, sec, em, paths.DataDir)
 	go eng.Run(ctx)
 
 	stub := api.NewStub(st, sec, em, engineAdapter{eng: eng})
+	stub.DataDir = paths.DataDir
 
 	icon, _ := appfiles.FS.ReadFile("icons/spk-mail.png")
 	unreadIcon, _ := appfiles.FS.ReadFile("icons/spk-mail-unread.png")

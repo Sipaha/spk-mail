@@ -13,6 +13,7 @@ func TestPaths_RespectsEnvOverride(t *testing.T) {
 	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail", "db.sqlite"), p.DBFile)
 	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail", "secrets.bin"), p.SecretsFile)
 	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail", "attachments"), p.AttachmentsDir)
+	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail"), p.DataDir)
 }
 
 func TestPaths_DefaultsWhenUnset(t *testing.T) {

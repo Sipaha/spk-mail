@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestAttachmentDownloader_FetchesAndUpdatesRow drives the post-v7 happy
+// path: the downloader fetches the part bytes, writes them to the
+// content-addressed store at <dataDir>/blobs/aa/bb/<sha>, points the
+// row at the resulting blob, and the file on disk contains the IMAP
+// payload byte-for-byte.
 func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
 	require.NoError(t, err)
@@ -42,7 +46,6 @@ func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sec.Set(fmt.Sprintf("account:%d", accID), []byte("secret")))
 
-	// Append a multipart message with an attachment to mock before workers start.
 	u := mock.User("alice@example.com")
 	require.NotNil(t, u)
 	raw := []byte("From: x@y\r\n" +
@@ -75,35 +78,34 @@ func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 	w := NewAccountWorker(accID, st, sec, writer, em)
 	go w.Run(runCtx)
 
-	// Wait for the AccountWorker + StoreWriter to insert the message and its
-	// attachment row.
 	var attID int64
 	require.Eventually(t, func() bool {
 		row := st.DB().QueryRow(`SELECT id FROM attachments LIMIT 1`)
 		return row.Scan(&attID) == nil
 	}, 5*time.Second, 50*time.Millisecond, "attachment row was never inserted")
-	require.NotZero(t, attID, "attachment row was never inserted")
+	require.NotZero(t, attID)
 
-	// Drive the downloader directly via runOnce — calling Run would have us
-	// wait for a 5s ticker, which races the test deadline. Same package so
-	// runOnce is reachable.
-	d := NewAttachmentDownloader(accID, st, sec, em, filepath.Join(dir, "attachments"))
+	d := NewAttachmentDownloader(accID, st, sec, em, dir)
 	d.runOnce(context.Background())
 
-	var lp *string
-	require.NoError(t, st.DB().QueryRow(`SELECT local_path FROM attachments WHERE id = ?`, attID).Scan(&lp))
-	require.NotNil(t, lp, "local_path should be set after download")
+	// Row must now point at a blob; sha resolves into a path under
+	// <dir>/blobs/ that contains the IMAP body.
+	blobID, sha, found, err := st.GetAttachmentBlob(context.Background(), attID)
+	require.NoError(t, err)
+	require.True(t, found, "blob_id should be set after download")
+	require.NotZero(t, blobID)
+	require.Len(t, sha, 64)
 
-	body, err := os.ReadFile(*lp)
+	path := storage.BlobPath(dir, sha)
+	body, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(body), "DATA")
 }
 
-// TestAttachmentDownloader_RejectsPathTraversal asserts that a malicious
-// Content-Disposition filename containing ".." segments cannot escape the
-// attachment root. The downloader strips directory components via
-// filepath.Base before joining onto rootDir.
-func TestAttachmentDownloader_RejectsPathTraversal(t *testing.T) {
+// TestAttachmentDownloader_DedupesIdenticalContent: two attachments
+// with byte-identical payloads must share ONE on-disk file (refcount=2)
+// and the directory tree must hold exactly one blob.
+func TestAttachmentDownloader_DedupesIdenticalContent(t *testing.T) {
 	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
 	require.NoError(t, err)
 	defer mock.Close()
@@ -129,70 +131,67 @@ func TestAttachmentDownloader_RejectsPathTraversal(t *testing.T) {
 
 	u := mock.User("alice@example.com")
 	require.NotNil(t, u)
-	// Malicious filename: tries to escape the attachment root with ".."
-	// segments. After filepath.Base sanitization the on-disk name should
-	// be just "escape.bin" inside <attachDir>/<accID>/<msgID>/.
-	raw := []byte("From: x@y\r\n" +
-		"Subject: t\r\n" +
-		"Date: Mon, 27 Apr 2026 10:30:00 +0000\r\n" +
-		"Message-ID: <evil@x>\r\n" +
-		"MIME-Version: 1.0\r\n" +
-		`Content-Type: multipart/mixed; boundary="b"` + "\r\n" +
-		"\r\n" +
-		"--b\r\n" +
-		"Content-Type: text/plain\r\n" +
-		"\r\n" +
-		"body\r\n" +
-		"--b\r\n" +
-		"Content-Type: application/octet-stream\r\n" +
-		"Content-Disposition: attachment; filename=\"../../escape.bin\"\r\n" +
-		"\r\n" +
-		"PWNED\r\n" +
-		"--b--\r\n")
-	_, err = u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
+
+	mkMsg := func(msgID string) []byte {
+		return []byte("From: x@y\r\n" +
+			"Subject: t " + msgID + "\r\n" +
+			"Date: Mon, 27 Apr 2026 10:30:00 +0000\r\n" +
+			"Message-ID: <" + msgID + "@x>\r\n" +
+			"MIME-Version: 1.0\r\n" +
+			`Content-Type: multipart/mixed; boundary="b"` + "\r\n" +
+			"\r\n" +
+			"--b\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"\r\n" +
+			"body\r\n" +
+			"--b\r\n" +
+			"Content-Type: image/png; name=\"logo.png\"\r\n" +
+			"Content-Disposition: attachment; filename=\"logo.png\"\r\n" +
+			"\r\n" +
+			"DUPLICATEPAYLOAD\r\n" +
+			"--b--\r\n")
+	}
+	_, err = u.Append("INBOX", bytes.NewReader(mkMsg("a")), &imap.AppendOptions{})
+	require.NoError(t, err)
+	_, err = u.Append("INBOX", bytes.NewReader(mkMsg("b")), &imap.AppendOptions{})
 	require.NoError(t, err)
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-
 	em := api.NewEmitter()
 	writer := NewStoreWriter(st, em)
 	go writer.Run(runCtx)
-
 	w := NewAccountWorker(accID, st, sec, writer, em)
 	go w.Run(runCtx)
 
-	var attID int64
 	require.Eventually(t, func() bool {
-		row := st.DB().QueryRow(`SELECT id FROM attachments LIMIT 1`)
-		return row.Scan(&attID) == nil
-	}, 5*time.Second, 50*time.Millisecond, "attachment row was never inserted")
-	require.NotZero(t, attID, "attachment row was never inserted")
+		var n int
+		st.DB().QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&n)
+		return n == 2
+	}, 5*time.Second, 50*time.Millisecond, "both attachments must be inserted")
 
-	attachRoot := filepath.Join(dir, "attachments")
-	d := NewAttachmentDownloader(accID, st, sec, em, attachRoot)
+	d := NewAttachmentDownloader(accID, st, sec, em, dir)
 	d.runOnce(context.Background())
 
-	var lp *string
-	require.NoError(t, st.DB().QueryRow(`SELECT local_path FROM attachments WHERE id = ?`, attID).Scan(&lp))
-	require.NotNil(t, lp, "local_path should be set after download")
+	// Two attachments, ONE blob, refcount=2.
+	var nBlobs int
+	require.NoError(t, st.DB().QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&nBlobs))
+	require.Equal(t, 1, nBlobs, "identical content must collapse to a single blob row")
 
-	// Resolve both paths to absolute form before checking containment so
-	// any ".." in the stored path would be detected (it shouldn't be — we
-	// sanitize via filepath.Base).
-	absRoot, err := filepath.Abs(attachRoot)
-	require.NoError(t, err)
-	absStored, err := filepath.Abs(*lp)
-	require.NoError(t, err)
-	rel, err := filepath.Rel(absRoot, absStored)
-	require.NoError(t, err)
-	require.False(t, strings.HasPrefix(rel, ".."),
-		"attachment escaped root: stored=%s root=%s rel=%s", absStored, absRoot, rel)
-	// On-disk basename must be the sanitized form.
-	require.Equal(t, "escape.bin", filepath.Base(*lp))
+	var refcount int
+	require.NoError(t, st.DB().QueryRow(`SELECT refcount FROM blobs LIMIT 1`).Scan(&refcount))
+	require.Equal(t, 2, refcount, "two attachments referencing the same content => refcount=2")
 
-	// Belt-and-suspenders: the would-be escape target must not exist.
-	escapePath := filepath.Join(dir, "escape.bin")
-	_, statErr := os.Stat(escapePath)
-	require.True(t, os.IsNotExist(statErr), "file escaped to %s", escapePath)
+	// Walk the on-disk tree: exactly one file under <dir>/blobs/.
+	var fileCount int
+	require.NoError(t, filepath.Walk(filepath.Join(dir, "blobs"), func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			fileCount++
+		}
+		return nil
+	}))
+	require.Equal(t, 1, fileCount, "blobs/ must hold exactly one file for two identical-payload attachments")
 }

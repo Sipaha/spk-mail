@@ -137,9 +137,9 @@ func insertMessage(ctx context.Context, exec dbtx, m MessageRow) (int64, error) 
 
 func insertAttachment(ctx context.Context, exec dbtx, a AttachmentRow) (int64, error) {
 	res, err := exec.ExecContext(ctx, `
-		INSERT INTO attachments(message_id,part_id,filename,content_type,size_bytes,sha256,local_path,downloaded_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		a.MessageID, a.PartID, a.Filename, a.ContentType, a.SizeBytes, a.SHA256, a.LocalPath, a.DownloadedAt)
+		INSERT INTO attachments(message_id,part_id,filename,content_type,size_bytes,sha256,local_path,blob_id,downloaded_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		a.MessageID, a.PartID, a.Filename, a.ContentType, a.SizeBytes, a.SHA256, a.LocalPath, a.BlobID, a.DownloadedAt)
 	if err != nil {
 		return 0, err
 	}
