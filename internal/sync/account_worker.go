@@ -397,6 +397,16 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		}
 		cursor = batchEnd
 	}
+	// Apply CONDSTORE flag deltas at the end of every successful
+	// syncFolder pass — initial bulk sync, IDLE post-EXISTS, and
+	// runPoll all funnel through here, so this single hook keeps
+	// flag state in sync across every code path that touches a
+	// folder. syncFlagDeltas no-ops when the server doesn't support
+	// CONDSTORE or when the watermark is already current; both are
+	// cheap.
+	if _, err := w.syncFlagDeltas(ctx, c, folderID, state.HighestModSeq); err != nil {
+		slog.Warn("flag delta sync failed", "account_id", w.accountID, "folder", name, "err", err)
+	}
 	return nil
 }
 
@@ -414,16 +424,6 @@ const fetchBatchSize int64 = 200
 // is already dead. A full reconnect at 25 min sidesteps the silent-death
 // window without churning live connections.
 const idleSessionMaxLifetime = 25 * time.Minute
-
-// flagRefreshLookback bounds how many of the most-recent UIDs we
-// fetch FLAGS for at IDLE session start (and at runPoll tick) to
-// detect server-side \Seen / \Flagged changes the user made on
-// another client. Bounded because the alternative — fetching FLAGS
-// for the entire mailbox — would mean tens of thousands of UIDs on
-// a corporate inbox. The window covers "messages the user has
-// realistically interacted with recently", which is the only set
-// where lag matters.
-const flagRefreshLookback int64 = 500
 
 // folderIDByName resolves a folder name to its DB id for the given
 // account. Used by IDLE / poll paths that hold the folder NAME (the
@@ -443,45 +443,71 @@ func (w *AccountWorker) folderIDByName(ctx context.Context, accountID int64, nam
 	return 0, false
 }
 
-// refreshRecentFlags fetches FLAGS for the most-recent `lookback`
-// UIDs in the currently-selected folder and applies any deltas to
-// the messages table. Returns the number of rows whose flags
-// actually changed. Reuses fetchUIDRange with body=false so the
-// network cost is just a metadata fetch on a small UID set.
+// syncFlagDeltas applies CONDSTORE (RFC 7162) flag deltas for the
+// currently-selected folder. The caller passes the SELECT response's
+// HIGHESTMODSEQ; we compare it to the value persisted from the last
+// sync of this folder and ask the server for "every message that
+// changed since that watermark":
 //
-// Triggers thread-stat recompute via UpdateThreadStats for any
-// thread whose member messages changed flags, so unread_count and
-// has_flagged on the thread row mirror the new reality.
-func (w *AccountWorker) refreshRecentFlags(ctx context.Context, c *imap.Client, folderID, lookback int64) (int, error) {
-	// Use the storage's MaxUIDByFolder as the upper bound and back off
-	// by `lookback`. This is the cheapest call: same query the bulk
-	// sync uses to resume.
-	maxUID, err := w.store.MaxUIDByFolder(ctx, folderID)
+//	UID FETCH 1:* (FLAGS UID) (CHANGEDSINCE <stored_modseq>)
+//
+// The server filters in O(changed messages), not O(mailbox size).
+// On a 90k-inbox where the user marked three messages read on the
+// phone, this returns three rows — not a probabilistic sample of
+// "the last N UIDs and pray it covered the changes".
+//
+// First-call semantics: when the stored watermark is 0 (just-
+// migrated v8 row, or folder seen for the first time), we skip the
+// sweep entirely and just record the current modseq as the baseline
+// for next time. Trying to fetch CHANGEDSINCE 0 on a huge mailbox
+// would mean "send me every message" — a worse brute-force than what
+// we just removed.
+//
+// Server without CONDSTORE: serverModSeq == 0. Skip silently —
+// flag-delta sync is unsupported on this server, only new-message
+// flags propagate (via the body-fetch path in syncFolder).
+//
+// Returns the number of rows whose flags actually changed.
+func (w *AccountWorker) syncFlagDeltas(ctx context.Context, c *imap.Client, folderID int64, serverModSeq uint64) (int, error) {
+	if serverModSeq == 0 {
+		return 0, nil // server doesn't support CONDSTORE
+	}
+	folders, err := w.store.ListFolders(ctx, w.accountID)
 	if err != nil {
 		return 0, err
 	}
-	if maxUID <= 0 {
+	var stored uint64
+	for _, f := range folders {
+		if f.ID == folderID {
+			stored = f.HighestModSeq
+			break
+		}
+	}
+	if stored == 0 {
+		// First sighting — record baseline, skip the sweep. Future
+		// connects will see stored != 0 and fetch real deltas.
+		return 0, w.store.SetFolderHighestModSeq(ctx, folderID, serverModSeq)
+	}
+	if stored >= serverModSeq {
+		// Nothing changed since we last looked. The most common case
+		// during normal operation — answers in zero round-trips.
 		return 0, nil
 	}
-	from := maxUID - lookback + 1
-	if from < 1 {
-		from = 1
-	}
-	msgCh, errCh := c.FetchSinceUIDRange(ctx, from, maxUID, false)
+
+	msgCh, errCh := c.FetchFlagsChangedSince(ctx, stored)
 	threadSet := make(map[int64]struct{})
 	changed := 0
-	for fm := range msgCh {
-		// FetchedMessage.Flags is []string; persist as JSON like
-		// store_writer.go does (so the format matches existing rows).
-		flagsJSON, err := json.Marshal(fm.Flags)
+	for fd := range msgCh {
+		flagsJSON, err := json.Marshal(fd.Flags)
 		if err != nil {
 			continue
 		}
-		_, threadID, didChange, err := w.store.UpdateFlagsByUID(ctx, folderID, fm.UID, string(flagsJSON))
+		_, threadID, didChange, err := w.store.UpdateFlagsByUID(ctx, folderID, fd.UID, string(flagsJSON))
 		if err != nil {
-			// Row missing is the common case for UIDs we never
-			// fetched the body of (rare — usually only happens on
-			// resync gaps). Skip silently.
+			// Likely the row isn't in our DB yet — server reports a
+			// modseq change for a UID we haven't fetched the body
+			// of. The bulk-sync path will pick it up on its own
+			// pass; nothing for us to do here.
 			continue
 		}
 		if didChange {
@@ -494,19 +520,17 @@ func (w *AccountWorker) refreshRecentFlags(ctx context.Context, c *imap.Client, 
 	if err := <-errCh; err != nil {
 		return changed, err
 	}
-	// Recompute thread stats so unread_count / has_flagged on the
-	// thread row reflect the new flag set. Done after the fetch loop
-	// so a slow server doesn't hold a writer tx open longer than
-	// needed.
 	for tid := range threadSet {
 		if err := w.store.UpdateThreadStats(ctx, tid); err != nil {
-			slog.Warn("flag refresh: thread stats recompute failed", "thread_id", tid, "err", err)
+			slog.Warn("flag delta: thread stats recompute failed", "thread_id", tid, "err", err)
 		}
 	}
-	// Emit a single SyncProgress-equivalent so the UI's folder
-	// counters refresh after the refresh sweep. Reusing the existing
-	// MessageUpdated event surface (handler in events.ts already
-	// re-pulls folder counts on it).
+	// Persist the new watermark so the next call asks for deltas
+	// from this point. SetFolderHighestModSeq only writes if the
+	// new value is greater (defensive against out-of-order calls).
+	if err := w.store.SetFolderHighestModSeq(ctx, folderID, serverModSeq); err != nil {
+		slog.Warn("flag delta: watermark update failed", "folder_id", folderID, "err", err)
+	}
 	if changed > 0 && w.em != nil {
 		w.em.Emit(api.Event{Type: "MessageUpdated", Payload: map[string]any{
 			"account_id": w.accountID,
@@ -564,24 +588,30 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 		return
 	}
 	defer c.Close()
-	if _, err := c.Select(sessionCtx, folder); err != nil {
+	state, err := c.Select(sessionCtx, folder)
+	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("IDLE Select failed", "account_id", acc.ID, "folder", folder, "err", err)
 		}
 		return
 	}
 	notifs := make(chan imap.IdleNotification, 8)
-	// Refresh flags on the most-recent UIDs BEFORE entering IDLE so
-	// server-side flag changes that happened while we weren't watching
-	// (user read messages on phone / webmail / Mailspring) propagate
-	// into our DB. Cheap: metadata-only fetch on a bounded UID range.
-	// Failures are logged and ignored — IDLE setup must not depend on
-	// this opportunistic sweep.
+	// CONDSTORE-based flag-delta sync BEFORE entering IDLE: ask the
+	// server for FLAGS of every message whose modseq changed since
+	// our last sync of this folder. Server filters in O(changes),
+	// the network cost is exactly the deltas we need to apply. No
+	// brute-force scan, no probabilistic "last N UIDs" guess.
+	//
+	// `state` came from c.Select above, which uses CondStore=true so
+	// state.HighestModSeq is the live server value. syncFlagDeltas
+	// handles the "server doesn't support CONDSTORE" (modseq=0) and
+	// the "first sighting, just baseline the watermark" cases
+	// internally — see its doc.
 	if folderID, ok := w.folderIDByName(ctx, acc.ID, folder); ok {
-		if n, err := w.refreshRecentFlags(sessionCtx, c, folderID, flagRefreshLookback); err != nil {
-			slog.Warn("flag refresh failed", "account_id", acc.ID, "folder", folder, "err", err)
+		if n, err := w.syncFlagDeltas(sessionCtx, c, folderID, state.HighestModSeq); err != nil {
+			slog.Warn("flag delta sync failed", "account_id", acc.ID, "folder", folder, "err", err)
 		} else if n > 0 {
-			slog.Info("flag refresh applied", "account_id", acc.ID, "folder", folder, "changed", n)
+			slog.Info("flag delta applied", "account_id", acc.ID, "folder", folder, "changed", n)
 		}
 	}
 
@@ -654,15 +684,11 @@ func (w *AccountWorker) runPoll(ctx context.Context, acc storage.AccountRow, fol
 						// between ticks — keep notifications quiet here to
 						// avoid bursts. The frontend's per-folder unread
 						// badge still updates via SyncProgress / refresh.
+						// syncFolder also runs CONDSTORE flag-delta sync at
+						// the end, so server-side \Seen / \Flagged changes
+						// on this folder propagate every poll tick without
+						// any extra hook here.
 						_ = w.syncFolder(ctx, c, f.ID, folder, role, false)
-						// Mirror server-side flag changes for messages
-						// already in the local DB. Same rationale as
-						// runIDLESession's pre-IDLE refresh: catches the
-						// "user marked read on phone" case for non-inbox
-						// folders too. Cheap (FLAGS-only fetch).
-						if _, fErr := w.refreshRecentFlags(ctx, c, f.ID, flagRefreshLookback); fErr != nil {
-							slog.Warn("flag refresh failed in poll", "account_id", acc.ID, "folder", folder, "err", fErr)
-						}
 						_ = c.Close()
 					}
 				}

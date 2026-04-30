@@ -19,6 +19,7 @@ var migrationSteps = []migrationStep{
 	{version: 5, apply: applyMigrationV5},
 	{version: 6, apply: applyMigrationV6},
 	{version: 7, apply: applyMigrationV7},
+	{version: 8, apply: applyMigrationV8},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -261,6 +262,38 @@ func applyMigrationV7(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations(version, applied_at) VALUES (7, strftime('%s','now'))`); err != nil {
 		return fmt.Errorf("v7 record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// applyMigrationV8 adds folders.highest_modseq — the CONDSTORE
+// (RFC 7162) watermark per mailbox. The sync layer feeds it back to
+// the server as CHANGEDSINCE on subsequent FETCHes so server-side
+// flag deltas (\Seen on phone, \Flagged in webmail) propagate at
+// O(changed messages) instead of the previous "fetch FLAGS for
+// last N UIDs" brute scan.
+//
+// Existing rows initialise to 0; the first SELECT after upgrade
+// records the live value as the baseline. No back-scan happens —
+// flag drift accumulated before the upgrade is intentionally NOT
+// reconciled (any reconciliation strategy is brute-force by
+// definition; the user accepts a one-time manual correction in
+// exchange for a clean go-forward sync model).
+func applyMigrationV8(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`ALTER TABLE folders ADD COLUMN highest_modseq INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !isDuplicateColumnErr(err) {
+			return fmt.Errorf("v8 add folders.highest_modseq: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (8, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v8 record version: %w", err)
 	}
 	return tx.Commit()
 }

@@ -151,3 +151,16 @@ func (c *Client) HasIDLE() bool {
 	}
 	return caps["IDLE"]
 }
+
+// HasCondStore reports whether the server advertises CONDSTORE
+// (RFC 7162). The Select wrapper consults this before passing
+// CondStore=true in the SELECT options — sending the option to a
+// server that doesn't support it is a protocol error (CLIENTBUG /
+// BAD), not just a silent no-op.
+func (c *Client) HasCondStore() bool {
+	caps, err := c.Capabilities()
+	if err != nil {
+		return false
+	}
+	return caps["CONDSTORE"]
+}
