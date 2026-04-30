@@ -63,7 +63,7 @@ func (s *Store) GetMessagesByThread(ctx context.Context, threadID int64) ([]Mess
 	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id,account_id,folder_id,uid,message_id,in_reply_to,references_,thread_id,
 			subject,from_addr,to_addrs,cc_addrs,date,flags,has_attachments,size_bytes,body_text,body_html
-		FROM messages WHERE thread_id = ? ORDER BY date`, threadID)
+		FROM messages WHERE thread_id = ? ORDER BY date DESC`, threadID)
 	if err != nil {
 		return nil, err
 	}

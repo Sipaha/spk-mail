@@ -94,3 +94,54 @@ func UnblockRemote(html string) string {
 		return `<img` + newAttrs + `>`
 	})
 }
+
+// ExtractBlockedURLs returns the set of remote URLs currently held in
+// data-spk-original-src placeholders inside html. Used to record the URLs
+// the user is unblocking so future messages with the same URLs auto-unblock.
+func ExtractBlockedURLs(html string) []string {
+	matches := dataAttrPat.FindAllStringSubmatch(html, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) != 2 {
+			continue
+		}
+		u := m[1]
+		if _, dup := seen[u]; dup {
+			continue
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	return out
+}
+
+// UnblockApproved restores src= ONLY for <img> whose data-spk-original-src
+// URL is in the approved set. Other placeholders are left intact (still
+// blocked, with their data-spk-original-src marker preserved so the UI
+// can still offer "Show remote content"). Approved-set lookups are O(1).
+func UnblockApproved(html string, approved map[string]bool) string {
+	if len(approved) == 0 {
+		return html
+	}
+	return imgFullPattern.ReplaceAllStringFunc(html, func(match string) string {
+		sub := imgFullPattern.FindStringSubmatch(match)
+		if len(sub) != 2 {
+			return match
+		}
+		attrs := sub[1]
+		m := dataAttrPat.FindStringSubmatch(attrs)
+		if len(m) != 2 {
+			return match
+		}
+		if !approved[m[1]] {
+			return match
+		}
+		newAttrs := dataAttrPat.ReplaceAllString(attrs, "")
+		newAttrs = srcAttrPat.ReplaceAllString(newAttrs, ` src="`+m[1]+`"`)
+		return `<img` + newAttrs + `>`
+	})
+}
