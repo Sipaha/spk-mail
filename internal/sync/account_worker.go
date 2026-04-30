@@ -2,10 +2,11 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	stdsync "sync"
 	"strings"
+	stdsync "sync"
 	"time"
 
 	"github.com/spk/spk-mail/internal/api"
@@ -414,6 +415,107 @@ const fetchBatchSize int64 = 200
 // window without churning live connections.
 const idleSessionMaxLifetime = 25 * time.Minute
 
+// flagRefreshLookback bounds how many of the most-recent UIDs we
+// fetch FLAGS for at IDLE session start (and at runPoll tick) to
+// detect server-side \Seen / \Flagged changes the user made on
+// another client. Bounded because the alternative — fetching FLAGS
+// for the entire mailbox — would mean tens of thousands of UIDs on
+// a corporate inbox. The window covers "messages the user has
+// realistically interacted with recently", which is the only set
+// where lag matters.
+const flagRefreshLookback int64 = 500
+
+// folderIDByName resolves a folder name to its DB id for the given
+// account. Used by IDLE / poll paths that hold the folder NAME (the
+// IMAP address) but need the DB id for storage calls. Returns
+// (0, false) when the folder isn't known yet — callers should skip
+// the operation rather than fail.
+func (w *AccountWorker) folderIDByName(ctx context.Context, accountID int64, name string) (int64, bool) {
+	folders, err := w.store.ListFolders(ctx, accountID)
+	if err != nil {
+		return 0, false
+	}
+	for _, f := range folders {
+		if strings.EqualFold(f.Name, name) {
+			return f.ID, true
+		}
+	}
+	return 0, false
+}
+
+// refreshRecentFlags fetches FLAGS for the most-recent `lookback`
+// UIDs in the currently-selected folder and applies any deltas to
+// the messages table. Returns the number of rows whose flags
+// actually changed. Reuses fetchUIDRange with body=false so the
+// network cost is just a metadata fetch on a small UID set.
+//
+// Triggers thread-stat recompute via UpdateThreadStats for any
+// thread whose member messages changed flags, so unread_count and
+// has_flagged on the thread row mirror the new reality.
+func (w *AccountWorker) refreshRecentFlags(ctx context.Context, c *imap.Client, folderID, lookback int64) (int, error) {
+	// Use the storage's MaxUIDByFolder as the upper bound and back off
+	// by `lookback`. This is the cheapest call: same query the bulk
+	// sync uses to resume.
+	maxUID, err := w.store.MaxUIDByFolder(ctx, folderID)
+	if err != nil {
+		return 0, err
+	}
+	if maxUID <= 0 {
+		return 0, nil
+	}
+	from := maxUID - lookback + 1
+	if from < 1 {
+		from = 1
+	}
+	msgCh, errCh := c.FetchSinceUIDRange(ctx, from, maxUID, false)
+	threadSet := make(map[int64]struct{})
+	changed := 0
+	for fm := range msgCh {
+		// FetchedMessage.Flags is []string; persist as JSON like
+		// store_writer.go does (so the format matches existing rows).
+		flagsJSON, err := json.Marshal(fm.Flags)
+		if err != nil {
+			continue
+		}
+		_, threadID, didChange, err := w.store.UpdateFlagsByUID(ctx, folderID, fm.UID, string(flagsJSON))
+		if err != nil {
+			// Row missing is the common case for UIDs we never
+			// fetched the body of (rare — usually only happens on
+			// resync gaps). Skip silently.
+			continue
+		}
+		if didChange {
+			changed++
+			if threadID != nil {
+				threadSet[*threadID] = struct{}{}
+			}
+		}
+	}
+	if err := <-errCh; err != nil {
+		return changed, err
+	}
+	// Recompute thread stats so unread_count / has_flagged on the
+	// thread row reflect the new flag set. Done after the fetch loop
+	// so a slow server doesn't hold a writer tx open longer than
+	// needed.
+	for tid := range threadSet {
+		if err := w.store.UpdateThreadStats(ctx, tid); err != nil {
+			slog.Warn("flag refresh: thread stats recompute failed", "thread_id", tid, "err", err)
+		}
+	}
+	// Emit a single SyncProgress-equivalent so the UI's folder
+	// counters refresh after the refresh sweep. Reusing the existing
+	// MessageUpdated event surface (handler in events.ts already
+	// re-pulls folder counts on it).
+	if changed > 0 && w.em != nil {
+		w.em.Emit(api.Event{Type: "MessageUpdated", Payload: map[string]any{
+			"account_id": w.accountID,
+			"folder_id":  folderID,
+		}})
+	}
+	return changed, nil
+}
+
 func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, folder, role string) {
 	// Cache the password once at goroutine start. The previous code re-fetched
 	// from the secrets store on every EXISTS notification, which is wasted
@@ -469,6 +571,20 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 		return
 	}
 	notifs := make(chan imap.IdleNotification, 8)
+	// Refresh flags on the most-recent UIDs BEFORE entering IDLE so
+	// server-side flag changes that happened while we weren't watching
+	// (user read messages on phone / webmail / Mailspring) propagate
+	// into our DB. Cheap: metadata-only fetch on a bounded UID range.
+	// Failures are logged and ignored — IDLE setup must not depend on
+	// this opportunistic sweep.
+	if folderID, ok := w.folderIDByName(ctx, acc.ID, folder); ok {
+		if n, err := w.refreshRecentFlags(sessionCtx, c, folderID, flagRefreshLookback); err != nil {
+			slog.Warn("flag refresh failed", "account_id", acc.ID, "folder", folder, "err", err)
+		} else if n > 0 {
+			slog.Info("flag refresh applied", "account_id", acc.ID, "folder", folder, "changed", n)
+		}
+	}
+
 	stop := c.Idle(sessionCtx, notifs)
 	defer stop()
 	slog.Info("IDLE session started", "account_id", acc.ID, "folder", folder)
@@ -539,6 +655,14 @@ func (w *AccountWorker) runPoll(ctx context.Context, acc storage.AccountRow, fol
 						// avoid bursts. The frontend's per-folder unread
 						// badge still updates via SyncProgress / refresh.
 						_ = w.syncFolder(ctx, c, f.ID, folder, role, false)
+						// Mirror server-side flag changes for messages
+						// already in the local DB. Same rationale as
+						// runIDLESession's pre-IDLE refresh: catches the
+						// "user marked read on phone" case for non-inbox
+						// folders too. Cheap (FLAGS-only fetch).
+						if _, fErr := w.refreshRecentFlags(ctx, c, f.ID, flagRefreshLookback); fErr != nil {
+							slog.Warn("flag refresh failed in poll", "account_id", acc.ID, "folder", folder, "err", fErr)
+						}
 						_ = c.Close()
 					}
 				}

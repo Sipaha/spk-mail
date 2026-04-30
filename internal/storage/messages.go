@@ -43,6 +43,37 @@ func (s *Store) InsertMessage(ctx context.Context, m MessageRow) (int64, error) 
 	return res.LastInsertId()
 }
 
+// UpdateFlagsByUID updates the JSON flags blob for a message identified
+// by (folder_id, uid). Used by the flag-refresh sweep to mirror
+// server-side flag changes (a message marked \Seen on the user's phone
+// or webmail) into our local DB without re-fetching the body.
+//
+// Returns (msgID, threadID, true) if the row's flags column actually
+// changed; (0, nil, false) if the message wasn't found OR if the flags
+// were already identical (no-op writes are filtered out so the caller
+// can short-circuit downstream events). The thread id is returned so
+// the caller can recompute thread.unread_count after a \Seen flip
+// without an extra round-trip.
+func (s *Store) UpdateFlagsByUID(ctx context.Context, folderID, uid int64, flagsJSON string) (int64, *int64, bool, error) {
+	var msgID int64
+	var threadID *int64
+	var existing string
+	err := s.readDB.QueryRowContext(ctx,
+		`SELECT id, thread_id, flags FROM messages WHERE folder_id = ? AND uid = ?`,
+		folderID, uid).Scan(&msgID, &threadID, &existing)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	if existing == flagsJSON {
+		return msgID, threadID, false, nil
+	}
+	if _, err := s.writeDB.ExecContext(ctx,
+		`UPDATE messages SET flags = ? WHERE id = ?`, flagsJSON, msgID); err != nil {
+		return 0, nil, false, err
+	}
+	return msgID, threadID, true, nil
+}
+
 func (s *Store) GetMessage(ctx context.Context, id int64) (MessageRow, error) {
 	row := s.readDB.QueryRowContext(ctx, `
 		SELECT id,account_id,folder_id,uid,message_id,in_reply_to,references_,thread_id,
