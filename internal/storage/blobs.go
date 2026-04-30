@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
+	"os"
 	"path/filepath"
 )
 
@@ -153,6 +155,46 @@ func (s *Store) ListZeroRefBlobs(ctx context.Context) ([]BlobRow, error) {
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// SweepBlobs is the GC pass: list every blob with refcount = 0,
+// unlink the on-disk file, and (if the unlink succeeded or the file was
+// already gone) drop the row. Returns counts so callers can log how
+// much disk reclaim happened.
+//
+// Failure modes:
+//   - file unlink fails (permission denied, disk weirdness): the row is
+//     left in place and reported in `errors`. The next sweep retries.
+//   - row was resurrected by a concurrent download between enumeration
+//     and DeleteBlobIfZero: the conditional DELETE refuses to drop it,
+//     deletedRows undercounts the candidates, no harm done.
+//
+// Run on a single goroutine: there's no scheduled-sweep contention to
+// guard against, and serializing keeps the slog output coherent.
+func (s *Store) SweepBlobs(ctx context.Context, dataDir string) (deletedRows, deletedBytes int64, err error) {
+	rows, err := s.ListZeroRefBlobs(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, b := range rows {
+		path := BlobPath(dataDir, b.SHA256)
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("blob sweep: unlink failed; row left in place for next pass",
+				"blob_id", b.ID, "sha256", b.SHA256, "err", rmErr)
+			continue
+		}
+		dropped, dErr := s.DeleteBlobIfZero(ctx, b.ID)
+		if dErr != nil {
+			slog.Warn("blob sweep: row delete failed",
+				"blob_id", b.ID, "sha256", b.SHA256, "err", dErr)
+			continue
+		}
+		if dropped {
+			deletedRows++
+			deletedBytes += b.SizeBytes
+		}
+	}
+	return deletedRows, deletedBytes, nil
 }
 
 // DeleteBlobIfZero atomically deletes a blob row IF its refcount is

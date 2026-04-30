@@ -84,6 +84,41 @@ func (e *Engine) Run(ctx context.Context) {
 		e.StartAccount(ctx, a.ID)
 	}
 
+	// Best-effort startup blob maintenance, gated on attachDir which
+	// doubles as the data-dir root that BlobPath composes under (set
+	// by NewEngineWithDir). Two passes, in order:
+	//
+	//  1. Backfill legacy per-message files into the content-addressed
+	//     store. Idempotent — picks up only rows where blob_id is
+	//     still NULL and local_path points at an extant file.
+	//  2. GC sweep for blobs at refcount=0: reclaim disk after account
+	//     removal / UIDVALIDITY purge / a previous crash between the
+	//     message-DELETE tx and a prior sweep.
+	//
+	// Backfill must come first so newly-created blob rows don't
+	// briefly look like sweep candidates.
+	if e.attachDir != "" {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			migrated, bErr := e.store.BackfillLegacyAttachments(ctx, e.attachDir)
+			if bErr != nil {
+				slog.Warn("legacy attachments backfill failed", "err", bErr)
+			} else if migrated > 0 {
+				slog.Info("legacy attachments backfill complete", "migrated", migrated)
+			}
+			rows, bytes, err := e.store.SweepBlobs(ctx, e.attachDir)
+			if err != nil {
+				slog.Warn("startup blob sweep failed", "err", err)
+				return
+			}
+			if rows > 0 {
+				slog.Info("startup blob sweep complete",
+					"rows_deleted", rows, "bytes_reclaimed", bytes)
+			}
+		}()
+	}
+
 	<-ctx.Done()
 	e.mu.Lock()
 	for _, c := range e.cancels {

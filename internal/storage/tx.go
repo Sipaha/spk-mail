@@ -93,8 +93,60 @@ func (s *Store) InsertParsedMessageBundle(ctx context.Context, b MessageBundle) 
 // DeleteMessagesByFolder deletes every message row for the given folder.
 // Used by the sync layer when UIDVALIDITY changes — the server has reused
 // UID space, so the local cache is forced to re-fetch.
+//
+// Blob refcount: each attachment in the folder that references a blob
+// must decrement that blob's refcount by 1; a blob referenced N times
+// from the folder loses N. Done in the same tx as the message DELETE so
+// either both go through or neither does — a power-cut between the two
+// would otherwise leave dangling blob refs the GC sweep can't reclaim.
+// The sweep itself (file unlink + blob row delete for refcount=0) runs
+// out-of-band; this function only adjusts the counter.
 func (s *Store) DeleteMessagesByFolder(ctx context.Context, folderID int64) error {
-	_, err := s.writeDB.ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID)
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := decBlobRefsByFolder(ctx, tx, folderID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID)
+		return err
+	})
+}
+
+// decBlobRefsByFolder finds every (blob_id, count) pair contributed by
+// attachments in messages of `folderID` and subtracts that count from
+// blobs.refcount. The CTE collapses N attachment rows pointing at the
+// same blob into a single UPDATE — without that, a blob referenced
+// twice in the folder would only get refcount-=1 from a per-row UPDATE
+// and end up with a phantom positive count after the DELETE CASCADE.
+func decBlobRefsByFolder(ctx context.Context, tx *sql.Tx, folderID int64) error {
+	_, err := tx.ExecContext(ctx, `
+		WITH dec AS (
+			SELECT a.blob_id AS bid, COUNT(*) AS n
+			FROM attachments a
+			JOIN messages m ON m.id = a.message_id
+			WHERE m.folder_id = ? AND a.blob_id IS NOT NULL
+			GROUP BY a.blob_id
+		)
+		UPDATE blobs
+		SET refcount = refcount - (SELECT n FROM dec WHERE bid = blobs.id)
+		WHERE id IN (SELECT bid FROM dec)`, folderID)
+	return err
+}
+
+// decBlobRefsByAccount mirrors decBlobRefsByFolder but spans every
+// folder of the account — used by DeleteAccount to drain refcounts in
+// the same tx as the cascade.
+func decBlobRefsByAccount(ctx context.Context, tx *sql.Tx, accountID int64) error {
+	_, err := tx.ExecContext(ctx, `
+		WITH dec AS (
+			SELECT a.blob_id AS bid, COUNT(*) AS n
+			FROM attachments a
+			JOIN messages m ON m.id = a.message_id
+			WHERE m.account_id = ? AND a.blob_id IS NOT NULL
+			GROUP BY a.blob_id
+		)
+		UPDATE blobs
+		SET refcount = refcount - (SELECT n FROM dec WHERE bid = blobs.id)
+		WHERE id IN (SELECT bid FROM dec)`, accountID)
 	return err
 }
 

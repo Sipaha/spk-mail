@@ -80,6 +80,8 @@ type Writer interface {
 	InsertOrIncBlob(ctx context.Context, sha256 string, size, nowUnix int64) (int64, bool, error)
 	DecBlobRef(ctx context.Context, blobID int64) (int64, error)
 	DeleteBlobIfZero(ctx context.Context, blobID int64) (bool, error)
+	SweepBlobs(ctx context.Context, dataDir string) (deletedRows, deletedBytes int64, err error)
+	BackfillLegacyAttachments(ctx context.Context, dataDir string) (migrated int, err error)
 }
 
 // Compile-time assertion: *Store must implement both interfaces. If you add a
