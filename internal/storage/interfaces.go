@@ -50,6 +50,7 @@ type Writer interface {
 
 	InsertMessage(ctx context.Context, m MessageRow) (int64, error)
 	UpdateFlags(ctx context.Context, id int64, flagsJSON string) error
+	UpdateFlagsByUID(ctx context.Context, folderID, uid int64, flagsJSON string) (msgID int64, threadID *int64, changed bool, err error)
 	UpdateBodyHTML(ctx context.Context, id int64, html string) error
 	MarkMessagesRead(ctx context.Context, ids []int64) (MarkReadOutcome, error)
 	MarkFolderMessagesRead(ctx context.Context, folderID int64) (MarkReadOutcome, error)
