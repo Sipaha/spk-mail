@@ -18,6 +18,7 @@ var migrationSteps = []migrationStep{
 	{version: 4, apply: applyMigrationV4},
 	{version: 5, apply: applyMigrationV5},
 	{version: 6, apply: applyMigrationV6},
+	{version: 7, apply: applyMigrationV7},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -210,6 +211,56 @@ func applyMigrationV6(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations(version, applied_at) VALUES (6, strftime('%s','now'))`); err != nil {
 		return fmt.Errorf("v6 record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// applyMigrationV7 introduces the content-addressed blob store. Attachments
+// previously kept their bytes at a per-message path (one file per attachment
+// row, even when multiple emails reference the same logo / avatar / banner);
+// after v7 the bytes live exactly once in <data>/blobs/aa/bb/<sha256> and the
+// `attachments` row references a `blobs` entry by id. `blobs.refcount` tracks
+// how many attachments point at the blob — the GC drops the file when it
+// reaches zero.
+//
+// This migration only adds the schema. Backfill of existing per-message
+// files into the content-addressed store happens in a separate migration
+// (v8) so the schema change can be reasoned about independently and the
+// (potentially expensive) byte rehash + copy doesn't block app startup
+// when the schema-only step is enough.
+func applyMigrationV7(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS blobs (
+			id          INTEGER PRIMARY KEY,
+			sha256      TEXT NOT NULL UNIQUE,
+			size_bytes  INTEGER NOT NULL,
+			refcount    INTEGER NOT NULL DEFAULT 0,
+			created_at  INTEGER NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("v7 create blobs: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_blobs_refcount ON blobs(refcount) WHERE refcount = 0`); err != nil {
+		return fmt.Errorf("v7 index blobs.refcount: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`ALTER TABLE attachments ADD COLUMN blob_id INTEGER REFERENCES blobs(id)`); err != nil {
+		if !isDuplicateColumnErr(err) {
+			return fmt.Errorf("v7 add attachments.blob_id: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_attachments_blob ON attachments(blob_id)`); err != nil {
+		return fmt.Errorf("v7 index attachments.blob_id: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (7, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v7 record version: %w", err)
 	}
 	return tx.Commit()
 }

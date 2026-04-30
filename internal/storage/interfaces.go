@@ -17,6 +17,7 @@ type Reader interface {
 	ListAttachmentsByMessages(ctx context.Context, msgIDs []int64) (map[int64][]AttachmentRow, error)
 	ListPendingAttachments(ctx context.Context, accountID int64, limit int) ([]PendingAttachment, error)
 	GetAttachmentLocalPath(ctx context.Context, id int64) (string, bool, error)
+	GetAttachmentBlob(ctx context.Context, id int64) (blobID int64, sha256 string, found bool, err error)
 
 	ListFolders(ctx context.Context, accountID int64) ([]FolderRow, error)
 	MaxUIDByFolder(ctx context.Context, folderID int64) (int64, error)
@@ -36,6 +37,9 @@ type Reader interface {
 	Search(ctx context.Context, query string, limit, offset int) ([]SearchHit, error)
 
 	ListApprovedRemoteURLs(ctx context.Context) (map[string]bool, error)
+
+	GetBlob(ctx context.Context, id int64) (BlobRow, error)
+	ListZeroRefBlobs(ctx context.Context) ([]BlobRow, error)
 }
 
 // Writer adds mutating methods on top of Reader. A Writer can also read —
@@ -52,8 +56,8 @@ type Writer interface {
 	ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagToggleOutcome, error)
 
 	InsertAttachment(ctx context.Context, a AttachmentRow) (int64, error)
-	UpdateAttachmentDownloaded(ctx context.Context, id int64, localPath, sha256 string, ts int64) error
-	ClearAttachmentLocalPath(ctx context.Context, id int64) error
+	UpdateAttachmentDownloaded(ctx context.Context, id int64, blobID int64, sha256 string, ts int64) error
+	ClearAttachmentBlob(ctx context.Context, id int64) (*int64, error)
 
 	UpsertFolder(ctx context.Context, r FolderRow) (int64, error)
 	DeleteMessagesByFolder(ctx context.Context, folderID int64) error
@@ -72,6 +76,10 @@ type Writer interface {
 	WithTx(ctx context.Context, fn func(*sql.Tx) error) error
 
 	AddApprovedRemoteURLs(ctx context.Context, urls []string) error
+
+	InsertOrIncBlob(ctx context.Context, sha256 string, size, nowUnix int64) (int64, bool, error)
+	DecBlobRef(ctx context.Context, blobID int64) (int64, error)
+	DeleteBlobIfZero(ctx context.Context, blobID int64) (bool, error)
 }
 
 // Compile-time assertion: *Store must implement both interfaces. If you add a

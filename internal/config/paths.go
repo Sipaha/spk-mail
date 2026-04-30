@@ -10,7 +10,8 @@ const appName = "spk-mail"
 type AppPaths struct {
 	DBFile         string
 	SecretsFile    string
-	AttachmentsDir string
+	AttachmentsDir string // legacy: pre-v7 per-message file tree; kept for migration v8
+	DataDir        string // root the content-addressed blob store lives under (<DataDir>/blobs/...)
 }
 
 func Paths() (AppPaths, error) {
@@ -27,5 +28,6 @@ func Paths() (AppPaths, error) {
 		DBFile:         filepath.Join(dataDir, "db.sqlite"),
 		SecretsFile:    filepath.Join(dataDir, "secrets.bin"),
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
+		DataDir:        dataDir,
 	}, nil
 }
