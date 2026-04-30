@@ -172,7 +172,7 @@ func (c *Controller) consume(ch <-chan api.Event) {
 				}
 			}
 			c.refreshUnread()
-		case "MessageInserted", "MessageUpdated", "AccountStatus":
+		case "MessageInserted", "MessageUpdated", "AccountStatus", "FolderMarkedRead":
 			c.refreshUnread()
 		}
 	}
