@@ -16,23 +16,114 @@ import (
 )
 
 // FolderState captures the bits of SELECT response the engine cares about.
+//
+// HighestModSeq is the server's per-mailbox CONDSTORE counter (RFC 7162):
+// a monotonically-increasing version number that bumps on ANY metadata
+// change to ANY message in the mailbox (flag flip, store, append). The
+// sync layer persists it as a watermark and feeds it back as
+// CHANGEDSINCE on subsequent FETCHes — the server returns deltas only,
+// so a `Прочитано` propagation is O(changed messages) instead of O(N).
+//
+// Zero means the server didn't return HIGHESTMODSEQ — either it doesn't
+// support CONDSTORE, or we didn't ask for it (CondStore=false in
+// SelectOptions). Callers fall back to no flag-delta sync in that case
+// rather than guess.
 type FolderState struct {
-	UIDValidity int64
-	UIDNext     int64
-	Exists      int64
+	UIDValidity   int64
+	UIDNext       int64
+	Exists        int64
+	HighestModSeq uint64
 }
 
-// Select issues a SELECT for the given mailbox and returns its state.
+// Select issues a SELECT for the given mailbox, opting into CONDSTORE
+// when the server advertises the capability. The CondStore option is
+// gated because RFC 7162 requires it: sending CONDSTORE to a server
+// that doesn't advertise it is a CLIENTBUG protocol error, not a
+// silent no-op. Servers without CONDSTORE return HighestModSeq=0,
+// which the sync layer treats as "skip flag-delta sync" — see
+// FolderState's doc.
 func (c *Client) Select(_ context.Context, mailbox string) (FolderState, error) {
-	sel, err := c.c.Select(mailbox, nil).Wait()
+	var opts *imap.SelectOptions
+	if c.HasCondStore() {
+		opts = &imap.SelectOptions{CondStore: true}
+	}
+	sel, err := c.c.Select(mailbox, opts).Wait()
 	if err != nil {
 		return FolderState{}, err
 	}
 	return FolderState{
-		UIDValidity: int64(sel.UIDValidity),
-		UIDNext:     int64(sel.UIDNext),
-		Exists:      int64(sel.NumMessages),
+		UIDValidity:   int64(sel.UIDValidity),
+		UIDNext:       int64(sel.UIDNext),
+		Exists:        int64(sel.NumMessages),
+		HighestModSeq: sel.HighestModSeq,
 	}, nil
+}
+
+// FlagDelta is one row of a CHANGEDSINCE flag-delta sweep: the UID of
+// a message whose metadata changed since the caller's watermark, plus
+// the new flag set as the server sees it.
+type FlagDelta struct {
+	UID   int64
+	Flags []string
+}
+
+// FetchFlagsChangedSince streams (uid, flags) pairs for every message
+// in the currently-selected mailbox whose CONDSTORE MODSEQ is greater
+// than `sinceModSeq`. Issues:
+//
+//	UID FETCH 1:* (FLAGS UID) (CHANGEDSINCE <sinceModSeq>)
+//
+// Server-side filter — we never see messages that didn't change.
+//
+// Caller is responsible for having selected the mailbox with
+// CondStore=true; otherwise the server returns BAD on CHANGEDSINCE.
+func (c *Client) FetchFlagsChangedSince(ctx context.Context, sinceModSeq uint64) (<-chan FlagDelta, <-chan error) {
+	out := make(chan FlagDelta, 16)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(out)
+		defer close(errCh)
+		var seq imap.UIDSet
+		seq.AddRange(1, 0) // 1:* — server does the modseq filter
+		opts := &imap.FetchOptions{
+			Flags:        true,
+			UID:          true,
+			ChangedSince: sinceModSeq,
+		}
+		cmd := c.c.Fetch(seq, opts)
+		defer cmd.Close()
+		for {
+			select {
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			default:
+			}
+			msg := cmd.Next()
+			if msg == nil {
+				break
+			}
+			data, err := msg.Collect()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			fd := FlagDelta{UID: int64(data.UID)}
+			for _, f := range data.Flags {
+				fd.Flags = append(fd.Flags, string(f))
+			}
+			select {
+			case out <- fd:
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			}
+		}
+		if err := cmd.Close(); err != nil {
+			errCh <- err
+		}
+	}()
+	return out, errCh
 }
 
 // FetchedMessage is the per-message payload streamed by FetchSinceUID.

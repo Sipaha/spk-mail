@@ -61,6 +61,7 @@ type Writer interface {
 	ClearAttachmentBlob(ctx context.Context, id int64) (*int64, error)
 
 	UpsertFolder(ctx context.Context, r FolderRow) (int64, error)
+	SetFolderHighestModSeq(ctx context.Context, folderID int64, modseq uint64) error
 	DeleteMessagesByFolder(ctx context.Context, folderID int64) error
 
 	UpdateThreadStats(ctx context.Context, threadID int64) error
