@@ -13,21 +13,24 @@ import (
 // backfillBatchSize caps how many legacy attachment rows a single
 // startup backfill pass migrates. The work is heavy (read + hash +
 // write + fsync per file) and competes with the sync writer for the
-// single SQLite write connection. Without a cap, a 90k-message inbox
-// with 10k+ legacy attachment files would peg the disk for an hour
-// on first run after upgrade — long enough to look like sync is
-// permanently broken because the writer keeps timing out against
-// busy_timeout. With a cap, each run does a digestible chunk and
-// the next start picks up the rest. (LIMIT in the SELECT is what
-// actually enforces the cap; the value here is the only knob.)
-const backfillBatchSize = 500
+// single SQLite write connection.
+//
+// 50 is small on purpose: with a typical mix of attachment sizes
+// (most a few hundred KB, some 10MB+), a single pass finishes in
+// well under a minute even on a slow HDD with the EXDEV-fallback
+// copy path. A 10k-row legacy backlog catches up in ~200 launches —
+// most users restart the app daily or twice daily, so a few weeks
+// of normal usage covers it without a single noticeable disk spike.
+// If a user wants to drain faster they can set
+// SPK_DISABLE_MAINTENANCE=0 and just let it run for several launches.
+const backfillBatchSize = 50
 
 // backfillRowSleep yields the writer connection between rows so the
 // AccountWorker / StoreWriter can interleave its own short
-// transactions. 50ms × 500 rows = 25s of idle time per pass —
+// transactions. 200ms × 50 rows = 10s of idle time per pass —
 // negligible compared to the disk I/O cost of the batch and worth
 // it for the responsiveness gain.
-const backfillRowSleep = 50 * time.Millisecond
+const backfillRowSleep = 200 * time.Millisecond
 
 // BackfillLegacyAttachments rehashes pre-v7 per-message attachment
 // files into the content-addressed blob store. Idempotent: each call
