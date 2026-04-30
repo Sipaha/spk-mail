@@ -71,12 +71,25 @@ func (s *Store) ListAccounts(ctx context.Context) ([]AccountRow, error) {
 }
 
 func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
-	res, err := s.writeDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, id)
+	var deleted bool
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		// Drain blob refcounts BEFORE the cascade removes the
+		// attachments rows we'd otherwise count from.
+		if err := decBlobRefsByAccount(ctx, tx, id); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, id)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		deleted = n > 0
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	if !deleted {
 		return ErrNotFound
 	}
 	return nil

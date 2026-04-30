@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,6 +97,122 @@ func TestBlobs_Dec_to_Zero(t *testing.T) {
 	zero, err = s.ListZeroRefBlobs(ctx)
 	require.NoError(t, err)
 	require.Empty(t, zero)
+}
+
+// TestBlobs_DeleteMessages_DecRefcount — the central invariant of the
+// GC integration: deleting messages drains the refcount of every blob
+// they reference, including the multi-ref case where a single blob is
+// pointed at by N attachments inside the same folder. After the
+// DELETE, refcount must equal initial - N for that blob (not initial -
+// 1 — that would be the bug a per-row UPDATE introduces).
+func TestBlobs_DeleteMessages_DecRefcount(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
+	fID, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1})
+
+	const sha = "0000000000000000000000000000000000000000000000000000000000000001"
+	blobID, _, err := s.InsertOrIncBlob(ctx, sha, 100, 1700000000)
+	require.NoError(t, err)
+	// Bump to refcount=3 by inserting two more attachments that all
+	// reference the same blob.
+	_, _, _ = s.InsertOrIncBlob(ctx, sha, 100, 1700000000)
+	_, _, _ = s.InsertOrIncBlob(ctx, sha, 100, 1700000000)
+
+	// Three attachments in the SAME folder, all pointing at the blob.
+	// (Two messages, three attachments — to also exercise the
+	// multi-message path of the JOIN.)
+	for i := 1; i <= 2; i++ {
+		mID, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fID, UID: int64(i), Date: int64(i), Flags: "[]"})
+		_, _ = s.InsertAttachment(ctx, AttachmentRow{MessageID: mID, PartID: "1", Filename: "x", ContentType: "x", SizeBytes: 100, BlobID: &blobID})
+		if i == 1 {
+			_, _ = s.InsertAttachment(ctx, AttachmentRow{MessageID: mID, PartID: "2", Filename: "y", ContentType: "x", SizeBytes: 100, BlobID: &blobID})
+		}
+	}
+
+	got, _ := s.GetBlob(ctx, blobID)
+	require.EqualValues(t, 3, got.Refcount, "sanity: refcount must be 3 before delete")
+
+	require.NoError(t, s.DeleteMessagesByFolder(ctx, fID))
+
+	got, err = s.GetBlob(ctx, blobID)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, got.Refcount,
+		"all 3 references in the folder must drop refcount by exactly 3 (not 1 from per-row dec)")
+}
+
+// TestBlobs_DeleteAccount_DecRefcount: same invariant for the
+// account-wide drain — a blob referenced from multiple folders of the
+// same account must lose every reference at once.
+func TestBlobs_DeleteAccount_DecRefcount(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
+	f1, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1})
+	f2, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "Sent", Delimiter: "/", UIDValidity: 1, UIDNext: 1})
+
+	const sha = "0000000000000000000000000000000000000000000000000000000000000002"
+	blobID, _, _ := s.InsertOrIncBlob(ctx, sha, 50, 1700000000)
+	_, _, _ = s.InsertOrIncBlob(ctx, sha, 50, 1700000000)
+
+	m1, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: f1, UID: 1, Date: 1, Flags: "[]"})
+	m2, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: f2, UID: 1, Date: 2, Flags: "[]"})
+	_, _ = s.InsertAttachment(ctx, AttachmentRow{MessageID: m1, PartID: "1", Filename: "x", ContentType: "x", SizeBytes: 50, BlobID: &blobID})
+	_, _ = s.InsertAttachment(ctx, AttachmentRow{MessageID: m2, PartID: "1", Filename: "x", ContentType: "x", SizeBytes: 50, BlobID: &blobID})
+
+	got, _ := s.GetBlob(ctx, blobID)
+	require.EqualValues(t, 2, got.Refcount)
+
+	require.NoError(t, s.DeleteAccount(ctx, accID))
+
+	got, err := s.GetBlob(ctx, blobID)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, got.Refcount, "both refs across folders must drain")
+}
+
+// TestBlobs_SweepBlobs_UnlinksAndDeletes — full integration: a blob
+// row at refcount=0 with a real file on disk gets the file unlinked
+// and the row dropped. Live blobs are untouched.
+func TestBlobs_SweepBlobs_UnlinksAndDeletes(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	dataDir := t.TempDir()
+
+	const orphanSha = "1111111111111111111111111111111111111111111111111111111111111111"
+	const liveSha = "2222222222222222222222222222222222222222222222222222222222222222"
+	orphanID, _, _ := s.InsertOrIncBlob(ctx, orphanSha, 7, 1700000000)
+	liveID, _, _ := s.InsertOrIncBlob(ctx, liveSha, 7, 1700000000)
+
+	// Materialize both files so the unlink has something to remove.
+	for _, sha := range []string{orphanSha, liveSha} {
+		path := BlobPath(dataDir, sha)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte("payload"), 0o600))
+	}
+
+	// Drop orphan to refcount=0; live stays at 1.
+	_, err := s.DecBlobRef(ctx, orphanID)
+	require.NoError(t, err)
+
+	rows, bytes, err := s.SweepBlobs(ctx, dataDir)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rows, "exactly one zero-ref blob must be reclaimed")
+	require.EqualValues(t, 7, bytes)
+
+	// Orphan: row gone, file gone.
+	_, err = s.GetBlob(ctx, orphanID)
+	require.True(t, errors.Is(err, ErrNotFound))
+	_, err = os.Stat(BlobPath(dataDir, orphanSha))
+	require.True(t, os.IsNotExist(err))
+
+	// Live: row + file untouched.
+	got, err := s.GetBlob(ctx, liveID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, got.Refcount)
+	_, err = os.Stat(BlobPath(dataDir, liveSha))
+	require.NoError(t, err)
 }
 
 // TestBlobs_Dec_RaceResurrect — between sweep enumeration and the
