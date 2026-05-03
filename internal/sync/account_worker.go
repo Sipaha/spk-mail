@@ -249,6 +249,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID int64, name, role string, notify bool) error {
 	state, err := c.Select(ctx, name)
 	if err != nil {
+		slog.Warn("syncFolder Select failed", "account_id", w.accountID, "folder", name, "err", err)
 		return err
 	}
 
@@ -260,6 +261,10 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			break
 		}
 	}
+	slog.Info("syncFolder enter",
+		"account_id", w.accountID, "folder", name, "notify", notify,
+		"prev_uidnext", prev.UIDNext, "server_uidnext", state.UIDNext,
+		"prev_modseq", prev.HighestModSeq, "server_modseq", state.HighestModSeq)
 
 	if prev.UIDValidity != 0 && prev.UIDValidity != state.UIDValidity {
 		// UIDVALIDITY changed: nuke the folder's messages and resync.
@@ -416,14 +421,22 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 // large enough that a 100k-message mailbox completes in ~500 round-trips.
 const fetchBatchSize int64 = 200
 
-// idleSessionMaxLifetime caps how long we keep one IMAP connection in IDLE
-// before tearing it down and dialing a fresh one. Servers, NATs, and home
-// routers silently kill TCP after their own idle thresholds (30 min is a
-// common low end); the existing 28-min IDLE refresh inside imap.Idle issues
-// another IDLE on the SAME connection, which doesn't help if the connection
-// is already dead. A full reconnect at 25 min sidesteps the silent-death
-// window without churning live connections.
-const idleSessionMaxLifetime = 25 * time.Minute
+// idleSessionMaxLifetime caps how long we keep one IMAP connection in
+// IDLE before tearing it down and dialing a fresh one.
+//
+// 5 minutes is short on purpose — it doubles as the safety-net catchup
+// cadence: every bounce calls syncFolder before entering IDLE, so even
+// if the server stops pushing EXISTS reliably (observed in the field
+// against Yandex under load), the user sees at most 5 minutes of
+// staleness instead of "waits until process restart". TCP+TLS+LOGIN is
+// ~300ms of churn per bounce, negligible compared to the UX cost of
+// missing mail.
+//
+// The previous 25-min value was sized to dodge NAT/router idle
+// thresholds while minimising reconnects, but it leaned too hard on
+// IDLE pushes actually arriving — and that turns out not to be a safe
+// assumption in production.
+const idleSessionMaxLifetime = 5 * time.Minute
 
 // folderIDByName resolves a folder name to its DB id for the given
 // account. Used by IDLE / poll paths that hold the folder NAME (the
@@ -588,33 +601,39 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 		return
 	}
 	defer c.Close()
-	state, err := c.Select(sessionCtx, folder)
-	if err != nil {
-		if ctx.Err() == nil {
-			slog.Warn("IDLE Select failed", "account_id", acc.ID, "folder", folder, "err", err)
-		}
-		return
-	}
-	notifs := make(chan imap.IdleNotification, 8)
-	// CONDSTORE-based flag-delta sync BEFORE entering IDLE: ask the
-	// server for FLAGS of every message whose modseq changed since
-	// our last sync of this folder. Server filters in O(changes),
-	// the network cost is exactly the deltas we need to apply. No
-	// brute-force scan, no probabilistic "last N UIDs" guess.
+
+	// Catchup syncFolder BEFORE entering IDLE. Reasons:
 	//
-	// `state` came from c.Select above, which uses CondStore=true so
-	// state.HighestModSeq is the live server value. syncFlagDeltas
-	// handles the "server doesn't support CONDSTORE" (modseq=0) and
-	// the "first sighting, just baseline the watermark" cases
-	// internally — see its doc.
+	//  1. New messages that arrived between the previous IDLE session
+	//     ending (idleSessionMaxLifetime, the connection-bounce loop)
+	//     and this session starting would otherwise wait for an
+	//     EXISTS push that may never come. We saw this in the field:
+	//     "новые письма появляются только при перезапуске".
+	//  2. If the server stops pushing EXISTS reliably (Yandex has
+	//     been observed to do this under load), the periodic IDLE
+	//     bounce gives us a deterministic catchup cadence — at most
+	//     idleSessionMaxLifetime of staleness instead of "waits
+	//     until process restart".
+	//
+	// syncFolder also internally Selects with CondStore (when the
+	// server supports it) and runs syncFlagDeltas at the end, so this
+	// single call covers BOTH new-message fetch AND server-side flag
+	// propagation. The sessionCtx scopes us to the IDLE-session
+	// lifetime; if the user shuts down mid-catchup, the worker exits
+	// cleanly.
 	if folderID, ok := w.folderIDByName(ctx, acc.ID, folder); ok {
-		if n, err := w.syncFlagDeltas(sessionCtx, c, folderID, state.HighestModSeq); err != nil {
-			slog.Warn("flag delta sync failed", "account_id", acc.ID, "folder", folder, "err", err)
-		} else if n > 0 {
-			slog.Info("flag delta applied", "account_id", acc.ID, "folder", folder, "changed", n)
+		if err := w.syncFolder(sessionCtx, c, folderID, folder, role, true); err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("IDLE pre-IDLE catchup sync failed", "account_id", acc.ID, "folder", folder, "err", err)
+			}
+			return
 		}
 	}
 
+	// syncFolder above already Selected the mailbox; the connection is
+	// in SELECTED state and Idle() can be called directly. No need to
+	// re-Select.
+	notifs := make(chan imap.IdleNotification, 8)
 	stop := c.Idle(sessionCtx, notifs)
 	defer stop()
 	slog.Info("IDLE session started", "account_id", acc.ID, "folder", folder)
