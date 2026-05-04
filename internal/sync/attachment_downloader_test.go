@@ -166,7 +166,7 @@ func TestAttachmentDownloader_DedupesIdenticalContent(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		var n int
-		st.DB().QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&n)
+		_ = st.DB().QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&n)
 		return n == 2
 	}, 5*time.Second, 50*time.Millisecond, "both attachments must be inserted")
 
@@ -184,7 +184,7 @@ func TestAttachmentDownloader_DedupesIdenticalContent(t *testing.T) {
 
 	// Walk the on-disk tree: exactly one file under <dir>/blobs/.
 	var fileCount int
-	require.NoError(t, filepath.Walk(filepath.Join(dir, "blobs"), func(p string, info os.FileInfo, err error) error {
+	require.NoError(t, filepath.Walk(filepath.Join(dir, "blobs"), func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

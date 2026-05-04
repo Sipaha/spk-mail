@@ -75,7 +75,7 @@ func (c *Client) Select(_ context.Context, mailbox string) (FolderState, error) 
 //
 // Filter inclusively (uid > sinceUID) so the function name's
 // promise actually holds.
-func (c *Client) UIDsAbove(ctx context.Context, sinceUID int64) ([]int64, error) {
+func (c *Client) UIDsAbove(_ context.Context, sinceUID int64) ([]int64, error) {
 	var rng imap.UIDSet
 	rng.AddRange(imap.UID(sinceUID+1), 0) // 0 = '*'
 	criteria := &imap.SearchCriteria{UID: []imap.UIDSet{rng}}

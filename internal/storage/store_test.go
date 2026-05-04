@@ -80,7 +80,7 @@ func TestReadsDoNotBlockOnLongWriteTx(t *testing.T) {
 	txDone := make(chan struct{})
 	go func() {
 		defer close(txDone)
-		_ = s.WithTx(ctx, func(tx *sql.Tx) error {
+		_ = s.WithTx(ctx, func(_ *sql.Tx) error {
 			close(txStarted)
 			time.Sleep(500 * time.Millisecond)
 			return nil
