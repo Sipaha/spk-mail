@@ -59,6 +59,48 @@ func (c *Client) Select(_ context.Context, mailbox string) (FolderState, error) 
 	}, nil
 }
 
+// UIDsAbove returns the actual UIDs present in the currently-selected
+// mailbox whose value is strictly greater than `sinceUID`. Issues:
+//
+//	UID SEARCH UID <sinceUID+1>:*
+//
+// Server returns the live UIDs — no trust in UIDNEXT, no eventual-
+// consistency surprises (Yandex has been observed to push EXISTS
+// before bumping UIDNEXT, leaving a `UID FETCH 1:UIDNEXT` range
+// returning zero rows). Callers fetch the returned UIDs explicitly.
+func (c *Client) UIDsAbove(ctx context.Context, sinceUID int64) ([]int64, error) {
+	var rng imap.UIDSet
+	rng.AddRange(imap.UID(sinceUID+1), 0) // 0 = '*'
+	criteria := &imap.SearchCriteria{UID: []imap.UIDSet{rng}}
+	cmd := c.c.UIDSearch(criteria, nil)
+	data, err := cmd.Wait()
+	if err != nil {
+		return nil, err
+	}
+	uids, ok := data.All.(imap.UIDSet)
+	if !ok || len(uids) == 0 {
+		return nil, nil
+	}
+	out := make([]int64, 0, 16)
+	for _, r := range uids {
+		// UIDSet ranges are inclusive on both ends; Stop=0 means "*".
+		// Defensive: in our use case the server only echoes actual
+		// UIDs (single-value ranges), but iterating handles the
+		// general case so a future server quirk doesn't surprise us.
+		stop := r.Stop
+		if stop == 0 {
+			// "Up to highest" without an explicit number — shouldn't
+			// happen for SEARCH responses, but skip rather than loop
+			// to infinity.
+			continue
+		}
+		for u := r.Start; u <= stop; u++ {
+			out = append(out, int64(u))
+		}
+	}
+	return out, nil
+}
+
 // FlagDelta is one row of a CHANGEDSINCE flag-delta sweep: the UID of
 // a message whose metadata changed since the caller's watermark, plus
 // the new flag set as the server sees it.
