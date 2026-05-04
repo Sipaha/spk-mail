@@ -297,15 +297,65 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 	// (>~3000 messages we observed Yandex closing the connection mid-stream).
 	// Persisting maxUID after each batch makes partial sync survive crashes.
 	//
-	// Termination is driven by the server's UIDNEXT (the next UID the server
-	// will assign), not by per-batch emptiness: a sparse mailbox where UIDs
-	// 51..399 were expunged but UID 400 is live would otherwise return an
-	// empty batch [51,250] and the loop would exit without ever fetching
-	// the live UIDs at 400+. We keep stepping until cursor reaches UIDNext.
-	serverUIDNext := int64(state.UIDNext)
+	// Termination is driven by the actual UIDs the server reports via
+	// UID SEARCH UID prev+1:*. We don't trust UIDNEXT alone: Yandex
+	// pushes EXISTS for every state change (incl. expunges and
+	// internal index bumps) without necessarily having a new live UID
+	// in the range, so a naive UID FETCH (prev+1):UIDNEXT range can
+	// return zero results and we'd advance the cursor past nothing
+	// useful. Searching first gives us the live UIDs to fetch.
+	//
+	// On a server that has nothing new (UIDNEXT == prev+1, no new
+	// mail), SEARCH returns an empty set and we skip the fetch loop
+	// entirely — saves the wasted UID FETCH round-trip too.
 	rolePtr := prev.Role
+	serverUIDNext := int64(state.UIDNext)
 	cursor := prev.UIDNext
 	maxUID := cursor
+	liveUIDs, searchErr := c.UIDsAbove(ctx, prev.UIDNext)
+	if searchErr != nil {
+		slog.Warn("syncFolder UIDSearch failed; falling back to UIDNEXT range",
+			"account_id", w.accountID, "folder", name, "err", searchErr)
+		liveUIDs = nil // sentinel: fall through to legacy range loop
+	}
+	if searchErr == nil {
+		slog.Info("syncFolder live UIDs",
+			"account_id", w.accountID, "folder", name, "count", len(liveUIDs))
+		// Fast path: SEARCH said nothing new. Still checkpoint to
+		// serverUIDNext so future bounces don't re-search the same
+		// empty range, and run syncFlagDeltas at the end of the
+		// function.
+		if len(liveUIDs) == 0 {
+			now := time.Now().Unix()
+			if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+				AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
+				UIDValidity: state.UIDValidity, UIDNext: serverUIDNext, LastSyncedAt: &now,
+			}); err != nil {
+				return err
+			}
+			if w.em != nil {
+				w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
+					"account_id": w.accountID,
+					"folder_id":  folderID,
+					"folder":     name,
+					"done":       serverUIDNext,
+					"total":      serverUIDNext,
+				}})
+			}
+			if _, err := w.syncFlagDeltas(ctx, c, folderID, state.HighestModSeq); err != nil {
+				slog.Warn("flag delta sync failed", "account_id", w.accountID, "folder", name, "err", err)
+			}
+			return nil
+		}
+		// Replace the legacy UIDNEXT-cursor with one bounded by the
+		// last live UID we actually need to fetch — the loop below
+		// then operates on a real upper bound.
+		serverUIDNext = liveUIDs[len(liveUIDs)-1] + 1
+		cursor = liveUIDs[0] - 1
+		if cursor < prev.UIDNext {
+			cursor = prev.UIDNext
+		}
+	}
 	for cursor < serverUIDNext {
 		select {
 		case <-ctx.Done():
