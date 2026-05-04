@@ -68,24 +68,22 @@ type FolderInfo struct {
 // and returns a ready-to-use Client. Callers must call Close when done.
 func Dial(ctx context.Context, opts DialOpts) (*Client, error) {
 	addr := net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port))
-	// TCP keepalive is mandatory for IDLE: a freshly-established IMAP
-	// connection that goes silent (which IDLE deliberately does — that's
-	// the whole point) gets garbage-collected by NAT / firewall / SOHO
-	// router idle timers after 5-10 minutes. Without keepalive, our side
-	// has no signal that the route died and stays parked on a dead
-	// socket; the server pushes EXISTS into the void and we never wake
-	// up. SO_KEEPALIVE-derived probes refresh the NAT mapping AND surface
-	// dead connections promptly so the runIDLESession bounce can dial
-	// fresh instead of waiting on a corpse.
+	// TCP keepalive is mandatory for IDLE. An IMAP IDLE connection
+	// deliberately goes silent — that's the whole point — so any NAT
+	// / firewall / SOHO router on the path silently garbage-collects
+	// the flow after 5-10 minutes. Without keepalive, our side has no
+	// signal the route died and stays parked on a dead socket; the
+	// server pushes EXISTS into the void and we never wake up.
 	//
-	// 30s is well under typical NAT idle thresholds (Linux conntrack:
-	// ~120s for ESTABLISHED-with-no-traffic on most distros; consumer
-	// routers commonly 5min) and follows the RFC 1122 spirit of "send
-	// keepalives before the silence is suspicious to anyone in the
-	// path."
+	// net.Dialer.KeepAlive only sets SO_KEEPALIVE + TCP_KEEPIDLE.
+	// The probe INTERVAL and COUNT are still kernel defaults
+	// (tcp_keepalive_intvl=75s × tcp_keepalive_probes=9 ≈ 11 min on
+	// stock Linux) — useless for "detect dead IDLE socket within 60
+	// seconds" which is what we actually need. Tune all three
+	// explicitly via the raw socket controls below.
 	d := &net.Dialer{
-		Timeout:   10 * time.Second,
-		KeepAlive: 30 * time.Second,
+		Timeout: 10 * time.Second,
+		Control: tuneTCPKeepAlive,
 	}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
