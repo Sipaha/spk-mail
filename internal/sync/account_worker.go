@@ -265,6 +265,9 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		"account_id", w.accountID, "folder", name, "notify", notify,
 		"prev_uidnext", prev.UIDNext, "server_uidnext", state.UIDNext,
 		"prev_modseq", prev.HighestModSeq, "server_modseq", state.HighestModSeq)
+	defer func() {
+		slog.Info("syncFolder exit", "account_id", w.accountID, "folder", name)
+	}()
 
 	if prev.UIDValidity != 0 && prev.UIDValidity != state.UIDValidity {
 		// UIDVALIDITY changed: nuke the folder's messages and resync.
@@ -320,13 +323,18 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		err := func() error {
 			w.syncMu.Lock()
 			defer w.syncMu.Unlock()
+			batchStart := cursor
+			slog.Info("syncFolder batch fetch", "account_id", w.accountID, "folder", name, "from_uid", batchStart+1, "to_uid", batchEnd)
 			msgCh, errCh := c.FetchSinceUIDRange(ctx, cursor, batchEnd, true)
 			// batchAck tracks how many of this batch's messages are still
 			// in-flight in the StoreWriter. We Wait on it before emitting
 			// SyncProgress so the frontend can't see "all synced" before
 			// the matching MessageInserted events have fired.
 			var batchAck stdsync.WaitGroup
+			fetchedCount := 0
 			for msg := range msgCh {
+				fetchedCount++
+				slog.Info("syncFolder fetched msg", "account_id", w.accountID, "folder", name, "uid", msg.UID, "flags", msg.Flags, "size", len(msg.Raw))
 				if msg.UID > maxUID {
 					maxUID = msg.UID
 				}
@@ -347,8 +355,10 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 				}
 			}
 			if err := <-errCh; err != nil {
+				slog.Warn("syncFolder fetch errCh", "account_id", w.accountID, "folder", name, "err", err)
 				return err
 			}
+			slog.Info("syncFolder batch waiting for writer", "account_id", w.accountID, "folder", name, "fetched", fetchedCount)
 			// Wait for the writer to finish persisting every message in this
 			// batch before we tell the UI we're done with it. Plain Wait()
 			// would block on a stuck writer past ctx cancellation, so wrap it
@@ -357,6 +367,7 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			go func() { batchAck.Wait(); close(drained) }()
 			select {
 			case <-drained:
+				slog.Info("syncFolder batch persisted", "account_id", w.accountID, "folder", name, "fetched", fetchedCount, "max_uid", maxUID)
 			case <-ctx.Done():
 				return ctx.Err()
 			}
