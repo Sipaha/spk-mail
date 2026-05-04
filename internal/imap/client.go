@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -136,18 +135,6 @@ func Dial(ctx context.Context, opts DialOpts) (*Client, error) {
 	if err := wrap.c.Login(opts.Username, opts.Password).Wait(); err != nil {
 		_ = wrap.c.Close()
 		return nil, fmt.Errorf("imap login: %w", err)
-	}
-	// One-line breadcrumb of advertised capabilities right after LOGIN.
-	// Useful for diagnosing CONDSTORE / IDLE behaviour against a
-	// specific server (the user reports server_modseq=0 even though
-	// Yandex documents CONDSTORE; this confirms what's actually
-	// advertised). Best-effort: if Capability errors we just don't log.
-	if caps, err := wrap.Capabilities(); err == nil {
-		keys := make([]string, 0, len(caps))
-		for k := range caps {
-			keys = append(keys, k)
-		}
-		slog.Info("imap capabilities", "host", opts.Host, "caps", keys)
 	}
 	return wrap, nil
 }

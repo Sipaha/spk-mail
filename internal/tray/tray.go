@@ -206,19 +206,7 @@ func (c *Controller) refreshUnread() {
 		log.Printf("tray: TotalUnreadExcludingMuted failed: %v", err)
 		return
 	}
-	prev := c.unread.Load()
 	c.unread.Store(total)
-	// Log only on transitions so steady-state ticks don't spam the
-	// journal, but every change leaves a breadcrumb. A "no unread
-	// shown after new mail arrives" report can be triaged by
-	// looking for this line: if total stayed at 0, the SQL count
-	// itself is the culprit (probably a folder.role mis-detection
-	// or messages.flags rewrite); if total bumped but the icon
-	// didn't visually update, the issue is in tray.SetIcon /
-	// RenderBadge.
-	if prev != total {
-		log.Printf("tray: unread count %d -> %d", prev, total)
-	}
 
 	// Pick base icon by state. Unread > 0 → accent (blue) variant, so the tray
 	// stripe pops out of the desktop chrome at a glance even before the user

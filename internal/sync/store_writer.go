@@ -64,10 +64,8 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 	if m.Ack != nil {
 		defer m.Ack()
 	}
-	slog.Info("StoreWriter process enter", "account_id", m.AccountID, "folder_id", m.FolderID, "uid", m.UID, "is_resync", m.IsResync, "raw_size", len(m.Raw))
 	parsed, err := mimep.Parse(m.Raw)
 	if err != nil {
-		slog.Warn("StoreWriter Parse failed", "uid", m.UID, "err", err)
 		return err
 	}
 
@@ -157,12 +155,8 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 		Attachments: atts,
 	})
 	if err != nil {
-		slog.Warn("StoreWriter InsertParsedMessageBundle failed", "uid", m.UID, "err", err)
 		return err
 	}
-	slog.Info("StoreWriter inserted",
-		"account_id", m.AccountID, "folder_id", m.FolderID, "uid", m.UID,
-		"msg_id", msgID, "thread_id", threadID, "is_resync", m.IsResync, "folder_role", m.FolderRole, "subject", parsed.Subject)
 
 	w.em.Emit(api.Event{Type: "MessageInserted", Payload: map[string]any{
 		"id": msgID, "thread_id": threadID, "account_id": m.AccountID, "folder_id": m.FolderID,
@@ -172,7 +166,6 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 			"id": msgID, "thread_id": threadID, "account_id": m.AccountID,
 			"subject": parsed.Subject, "from": parsed.From,
 		}})
-		slog.Info("MessageArrived emitted", "uid", m.UID, "msg_id", msgID, "subject", parsed.Subject)
 	}
 	return nil
 }

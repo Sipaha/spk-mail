@@ -261,14 +261,6 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			break
 		}
 	}
-	slog.Info("syncFolder enter",
-		"account_id", w.accountID, "folder", name, "notify", notify,
-		"prev_uidnext", prev.UIDNext, "server_uidnext", state.UIDNext,
-		"prev_modseq", prev.HighestModSeq, "server_modseq", state.HighestModSeq)
-	defer func() {
-		slog.Info("syncFolder exit", "account_id", w.accountID, "folder", name)
-	}()
-
 	if prev.UIDValidity != 0 && prev.UIDValidity != state.UIDValidity {
 		// UIDVALIDITY changed: nuke the folder's messages and resync.
 		if err := w.store.DeleteMessagesByFolder(ctx, folderID); err != nil {
@@ -295,154 +287,49 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 	// Batch fetch in chunks of fetchBatchSize UIDs. A single open-ended
 	// "UID FETCH N:*" works for small mailboxes but breaks on huge ones
 	// (>~3000 messages we observed Yandex closing the connection mid-stream).
-	// Drive new-message fetch from a UID SEARCH against the actual
-	// max UID we have in the local DB — NOT from the server-reported
-	// UIDNEXT. Two reasons:
+	// Drive new-message fetch from a UID SEARCH against the actual max
+	// UID we have in the local DB — NOT from server-reported UIDNEXT.
 	//
-	//   * UIDNEXT-trust is fragile against Yandex: the server pushes
-	//     EXISTS for every state change (expunge, internal index bumps,
-	//     reserved-but-unindexed UIDs, …) without necessarily having
-	//     a live message at UIDNEXT-1, and a naive
-	//     `UID FETCH prev:UIDNEXT` returns zero rows on those.
+	// Why: Yandex (and presumably any RFC-strict server) pushes EXISTS
+	// for every state change of the mailbox, not just for live new
+	// messages. UIDNEXT can advance on EXPUNGE, on internal index
+	// bumps, on UIDs reserved but never assigned. A naive
+	// `UID FETCH prev:UIDNEXT` then returns zero rows and a cursor
+	// advanced past nothing useful. SEARCH gives us the actual live
+	// UIDs the server has, which we can then FETCH explicitly.
 	//
-	//   * SEARCH returns the live UIDs the server actually has in the
-	//     range, which we can then FETCH explicitly. No range-collapse
-	//     quirks (RFC 3501 9.6: `start:*` with start > max becomes
-	//     `max:start`), no eventual-consistency surprises.
-	//
-	// dbMaxUID is the source of truth for "what we have"; UIDNext on
-	// the folder row is just a conservative checkpoint that may run
-	// ahead of dbMaxUID by one (when an earlier sync advanced the
-	// cursor past a dead UID). Always anchor the SEARCH on dbMaxUID
-	// so we re-check those edge UIDs.
+	// dbMaxUID is the source of truth for "what we have". The folder
+	// row's UIDNext field is a checkpoint that may run one ahead of
+	// dbMaxUID after a sync hit a reserved-but-empty UID; anchoring
+	// SEARCH on dbMaxUID re-checks those edge UIDs on the next pass.
 	rolePtr := prev.Role
 	serverUIDNext := int64(state.UIDNext)
 	if dbMaxUID > prev.UIDNext {
-		// (This recovery existed before; preserved for downstream
-		// callers that read prev.UIDNext.)
+		// Recovery for the legacy "checkpoint ran ahead" case.
 		prev.UIDNext = dbMaxUID
 	}
-	liveUIDs, searchErr := c.UIDsAbove(ctx, dbMaxUID)
-	if searchErr != nil {
-		slog.Warn("syncFolder UIDSearch failed; falling back to UIDNEXT range",
-			"account_id", w.accountID, "folder", name, "err", searchErr)
+	liveUIDs, err := c.UIDsAbove(ctx, dbMaxUID)
+	if err != nil {
+		return fmt.Errorf("UID SEARCH (account_id=%d folder=%s): %w", w.accountID, name, err)
 	}
-	slog.Info("syncFolder live UIDs",
-		"account_id", w.accountID, "folder", name, "count", len(liveUIDs), "uids", liveUIDs)
 
-	if searchErr == nil {
-		// Fast path: SEARCH said nothing new. Checkpoint to
-		// serverUIDNext, emit SyncProgress, run flag-delta sync,
-		// return. Skips the wasted FETCH round-trip the old code paid
-		// every EXISTS push.
-		if len(liveUIDs) == 0 {
-			now := time.Now().Unix()
-			if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
-				AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-				UIDValidity: state.UIDValidity, UIDNext: serverUIDNext, LastSyncedAt: &now,
-			}); err != nil {
-				return err
-			}
-			if w.em != nil {
-				w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
-					"account_id": w.accountID,
-					"folder_id":  folderID,
-					"folder":     name,
-					"done":       serverUIDNext,
-					"total":      serverUIDNext,
-				}})
-			}
-			if _, err := w.syncFlagDeltas(ctx, c, folderID, state.HighestModSeq); err != nil {
-				slog.Warn("flag delta sync failed", "account_id", w.accountID, "folder", name, "err", err)
-			}
-			return nil
+	// SEARCH empty: nothing live above our DB max. Checkpoint
+	// UIDNext, emit SyncProgress, run the flag-delta sweep, return.
+	// EXISTS pushed for an EXPUNGE / state-change no longer triggers
+	// a wasted UID FETCH round-trip.
+	if len(liveUIDs) == 0 {
+		now := time.Now().Unix()
+		if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+			AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
+			UIDValidity: state.UIDValidity, UIDNext: serverUIDNext, LastSyncedAt: &now,
+		}); err != nil {
+			return err
 		}
-
-		// SEARCH-driven path: fetch the explicit UIDs in batches.
-		maxUID := dbMaxUID
-		for i := 0; i < len(liveUIDs); i += int(fetchBatchSize) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			end := i + int(fetchBatchSize)
-			if end > len(liveUIDs) {
-				end = len(liveUIDs)
-			}
-			chunk := liveUIDs[i:end]
-			err := func() error {
-				w.syncMu.Lock()
-				defer w.syncMu.Unlock()
-				slog.Info("syncFolder batch fetch (search-driven)",
-					"account_id", w.accountID, "folder", name, "uids", chunk)
-				msgCh, errCh := c.FetchByUIDs(ctx, chunk)
-				var batchAck stdsync.WaitGroup
-				fetchedCount := 0
-				for msg := range msgCh {
-					fetchedCount++
-					slog.Info("syncFolder fetched msg",
-						"account_id", w.accountID, "folder", name,
-						"uid", msg.UID, "flags", msg.Flags, "size", len(msg.Raw))
-					if msg.UID > maxUID {
-						maxUID = msg.UID
-					}
-					batchAck.Add(1)
-					if err := w.writer.Submit(ctx, IncomingMessage{
-						AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
-						Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
-						IsResync: !notify,
-						Ack:      batchAck.Done,
-					}); err != nil {
-						batchAck.Done()
-						return err
-					}
-				}
-				if err := <-errCh; err != nil {
-					slog.Warn("syncFolder fetch errCh", "account_id", w.accountID, "folder", name, "err", err)
-					return err
-				}
-				slog.Info("syncFolder batch waiting for writer",
-					"account_id", w.accountID, "folder", name, "fetched", fetchedCount)
-				drained := make(chan struct{})
-				go func() { batchAck.Wait(); close(drained) }()
-				select {
-				case <-drained:
-					slog.Info("syncFolder batch persisted",
-						"account_id", w.accountID, "folder", name, "fetched", fetchedCount, "max_uid", maxUID)
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				now := time.Now().Unix()
-				// Checkpoint to max(maxUID+1, serverUIDNext): record
-				// the highest UID we actually saw so a subsequent
-				// EXISTS doesn't replay these, but never regress the
-				// stored cursor below what the server already
-				// announced.
-				ckpt := maxUID + 1
-				if ckpt < serverUIDNext {
-					ckpt = serverUIDNext
-				}
-				if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
-					AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-					UIDValidity: state.UIDValidity, UIDNext: ckpt, LastSyncedAt: &now,
-				}); err != nil {
-					return err
-				}
-				if w.em != nil {
-					w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
-						"account_id": w.accountID,
-						"folder_id":  folderID,
-						"folder":     name,
-						"done":       int64(end),
-						"total":      int64(len(liveUIDs)),
-					}})
-				}
-				return nil
-			}()
-			if err != nil {
-				return err
-			}
+		if w.em != nil {
+			w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
+				"account_id": w.accountID, "folder_id": folderID, "folder": name,
+				"done": serverUIDNext, "total": serverUIDNext,
+			}})
 		}
 		if _, err := w.syncFlagDeltas(ctx, c, folderID, state.HighestModSeq); err != nil {
 			slog.Warn("flag delta sync failed", "account_id", w.accountID, "folder", name, "err", err)
@@ -450,39 +337,27 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		return nil
 	}
 
-	// Legacy fallback: UIDSearch failed, drive fetch from the
-	// UIDNEXT range like the pre-SEARCH-rewrite code did.
-	cursor := prev.UIDNext
-	maxUID := cursor
-	for cursor < serverUIDNext {
+	// Fetch the live UIDs in chunks of fetchBatchSize. Each chunk is
+	// one UID FETCH command; the per-chunk syncMu lock preserves the
+	// "one bulk fetch in flight per account" invariant.
+	maxUID := dbMaxUID
+	for i := 0; i < len(liveUIDs); i += int(fetchBatchSize) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		batchEnd := cursor + fetchBatchSize
-		if batchEnd > serverUIDNext {
-			batchEnd = serverUIDNext
+		end := i + int(fetchBatchSize)
+		if end > len(liveUIDs) {
+			end = len(liveUIDs)
 		}
-		// Per-batch lock — see syncFolder doc comment. The closure form
-		// keeps `defer Unlock()` straightforward across the four early-
-		// return paths (Submit error, errCh err, drain ctx-done,
-		// UpsertFolder err) without an explicit Unlock at every site.
+		chunk := liveUIDs[i:end]
 		err := func() error {
 			w.syncMu.Lock()
 			defer w.syncMu.Unlock()
-			batchStart := cursor
-			slog.Info("syncFolder batch fetch", "account_id", w.accountID, "folder", name, "from_uid", batchStart+1, "to_uid", batchEnd)
-			msgCh, errCh := c.FetchSinceUIDRange(ctx, cursor, batchEnd, true)
-			// batchAck tracks how many of this batch's messages are still
-			// in-flight in the StoreWriter. We Wait on it before emitting
-			// SyncProgress so the frontend can't see "all synced" before
-			// the matching MessageInserted events have fired.
+			msgCh, errCh := c.FetchByUIDs(ctx, chunk)
 			var batchAck stdsync.WaitGroup
-			fetchedCount := 0
 			for msg := range msgCh {
-				fetchedCount++
-				slog.Info("syncFolder fetched msg", "account_id", w.accountID, "folder", name, "uid", msg.UID, "flags", msg.Flags, "size", len(msg.Raw))
 				if msg.UID > maxUID {
 					maxUID = msg.UID
 				}
@@ -490,68 +365,45 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 				if err := w.writer.Submit(ctx, IncomingMessage{
 					AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
 					Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
-					// IsResync gates the MessageArrived event in StoreWriter: true
-					// means "stored silently". Driven by the syncFolder caller's
-					// notify flag, not by UIDValidity (UIDValidity only signals
-					// "this is the very first fetch ever for this folder", not
-					// "this fetch is a real-time arrival").
+					// IsResync gates the MessageArrived event in
+					// StoreWriter: true means "stored silently".
+					// Driven by syncFolder's notify flag.
 					IsResync: !notify,
 					Ack:      batchAck.Done,
 				}); err != nil {
-					batchAck.Done() // never enqueued
+					batchAck.Done()
 					return err
 				}
 			}
 			if err := <-errCh; err != nil {
-				slog.Warn("syncFolder fetch errCh", "account_id", w.accountID, "folder", name, "err", err)
 				return err
 			}
-			slog.Info("syncFolder batch waiting for writer", "account_id", w.accountID, "folder", name, "fetched", fetchedCount)
-			// Wait for the writer to finish persisting every message in this
-			// batch before we tell the UI we're done with it. Plain Wait()
-			// would block on a stuck writer past ctx cancellation, so wrap it
-			// in a goroutine + select.
 			drained := make(chan struct{})
 			go func() { batchAck.Wait(); close(drained) }()
 			select {
 			case <-drained:
-				slog.Info("syncFolder batch persisted", "account_id", w.accountID, "folder", name, "fetched", fetchedCount, "max_uid", maxUID)
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			// Checkpoint after every batch — keeps partial progress if the next
-			// batch dies. UIDValidity is set unconditionally so subsequent runs
-			// don't treat the folder as fresh. last_synced_at gives the UI a
-			// "last synced N seconds ago" handle for per-folder status.
-			//
-			// UIDNext is the cursor's NEW position (batchEnd), not maxUID.
-			// maxUID would be 0 for an empty/expunged folder so the next poll
-			// would re-iterate the whole UID range from 0 again — emitting
-			// "0 / serverUIDNext" repeatedly across hundreds of empty batches
-			// for every Mailspring/Outbox/Drafts-template-style residual
-			// folder. Recording batchEnd means "we have checked everything up
-			// to this UID" and lets diff-sync skip the empty range next time.
+			// Checkpoint to max(maxUID+1, serverUIDNext): record the
+			// highest UID we actually saw so a subsequent EXISTS
+			// doesn't replay these, but never regress below what the
+			// server already announced.
+			ckpt := maxUID + 1
+			if ckpt < serverUIDNext {
+				ckpt = serverUIDNext
+			}
 			now := time.Now().Unix()
 			if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
 				AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-				UIDValidity: state.UIDValidity, UIDNext: batchEnd, LastSyncedAt: &now,
+				UIDValidity: state.UIDValidity, UIDNext: ckpt, LastSyncedAt: &now,
 			}); err != nil {
 				return err
 			}
-			// Emit SyncProgress so the UI can show a per-account "Syncing
-			// <folder>: done/total" status line. total is the server-side UIDNext
-			// (next UID the server will assign on new messages); done is the
-			// cursor position — how far we've scanned, regardless of whether
-			// the scanned UIDs were live messages or expunged tombstones.
-			// They converge as the bulk sync catches up. UI hides the line
-			// once done >= total.
 			if w.em != nil {
 				w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
-					"account_id": w.accountID,
-					"folder_id":  folderID,
-					"folder":     name,
-					"done":       batchEnd,
-					"total":      int64(state.UIDNext),
+					"account_id": w.accountID, "folder_id": folderID, "folder": name,
+					"done": int64(end), "total": int64(len(liveUIDs)),
 				}})
 			}
 			return nil
@@ -559,15 +411,11 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		if err != nil {
 			return err
 		}
-		cursor = batchEnd
 	}
-	// Apply CONDSTORE flag deltas at the end of every successful
-	// syncFolder pass — initial bulk sync, IDLE post-EXISTS, and
-	// runPoll all funnel through here, so this single hook keeps
-	// flag state in sync across every code path that touches a
-	// folder. syncFlagDeltas no-ops when the server doesn't support
-	// CONDSTORE or when the watermark is already current; both are
-	// cheap.
+	// CONDSTORE flag-delta sweep at the end of every successful
+	// syncFolder pass — initial bulk, IDLE post-EXISTS, runPoll all
+	// funnel through here. No-op when the server doesn't support
+	// CONDSTORE (e.g. Yandex) or when the watermark is current.
 	if _, err := w.syncFlagDeltas(ctx, c, folderID, state.HighestModSeq); err != nil {
 		slog.Warn("flag delta sync failed", "account_id", w.accountID, "folder", name, "err", err)
 	}
@@ -581,21 +429,12 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 const fetchBatchSize int64 = 200
 
 // idleSessionMaxLifetime caps how long we keep one IMAP connection in
-// IDLE before tearing it down and dialing a fresh one.
-//
-// 5 minutes is short on purpose — it doubles as the safety-net catchup
-// cadence: every bounce calls syncFolder before entering IDLE, so even
-// if the server stops pushing EXISTS reliably (observed in the field
-// against Yandex under load), the user sees at most 5 minutes of
-// staleness instead of "waits until process restart". TCP+TLS+LOGIN is
-// ~300ms of churn per bounce, negligible compared to the UX cost of
-// missing mail.
-//
-// The previous 25-min value was sized to dodge NAT/router idle
-// thresholds while minimising reconnects, but it leaned too hard on
-// IDLE pushes actually arriving — and that turns out not to be a safe
-// assumption in production.
-const idleSessionMaxLifetime = 5 * time.Minute
+// IDLE before tearing it down and dialing a fresh one. 25 minutes
+// sits inside the typical 28–30-min server / NAT inactivity cutoff.
+// Each bounce runs a pre-IDLE syncFolder, which doubles as a
+// defence-in-depth catchup against any push the previous session
+// missed.
+const idleSessionMaxLifetime = 25 * time.Minute
 
 // folderIDByName resolves a folder name to its DB id for the given
 // account. Used by IDLE / poll paths that hold the folder NAME (the
