@@ -101,9 +101,8 @@ func TestBackfill_DedupesAcrossLegacyRows(t *testing.T) {
 
 	for i := 1; i <= 2; i++ {
 		mID, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fID, UID: int64(i), Date: int64(i), Flags: "[]"})
-		legacyPath := filepath.Join(legacyDir, "logo-msg.bin")
 		// Same byte content for both, different paths (per-message tree).
-		legacyPath = filepath.Join(legacyDir, "msg-"+itoa(i)+"-logo.bin")
+		legacyPath := filepath.Join(legacyDir, "msg-"+itoa(i)+"-logo.bin")
 		require.NoError(t, os.WriteFile(legacyPath, []byte("identical payload"), 0o600))
 		lp := legacyPath
 		_, _ = s.InsertAttachment(ctx, AttachmentRow{

@@ -54,6 +54,6 @@ type spyEngine struct {
 	worker *spyWorker
 }
 
-func (e *spyEngine) StartAccount(ctx context.Context, id int64) {}
-func (e *spyEngine) StopAccount(id int64)                       {}
-func (e *spyEngine) WorkerFor(id int64) FlagOpSubmitter         { return e.worker }
+func (e *spyEngine) StartAccount(_ context.Context, _ int64) {}
+func (e *spyEngine) StopAccount(_ int64)                     {}
+func (e *spyEngine) WorkerFor(_ int64) FlagOpSubmitter       { return e.worker }

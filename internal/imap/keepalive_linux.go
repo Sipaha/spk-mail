@@ -26,7 +26,7 @@ import (
 // Failures here are best-effort: a kernel that rejects setsockopt
 // just leaves the connection on system defaults; we still benefit
 // from the per-IDLE 5-min bounce safety net at the application layer.
-func tuneTCPKeepAlive(network, address string, c syscall.RawConn) error {
+func tuneTCPKeepAlive(_, _ string, c syscall.RawConn) error {
 	return c.Control(func(fd uintptr) {
 		_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1)
 		_ = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPIDLE, 30)
