@@ -68,7 +68,25 @@ type FolderInfo struct {
 // and returns a ready-to-use Client. Callers must call Close when done.
 func Dial(ctx context.Context, opts DialOpts) (*Client, error) {
 	addr := net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port))
-	d := &net.Dialer{Timeout: 10 * time.Second}
+	// TCP keepalive is mandatory for IDLE: a freshly-established IMAP
+	// connection that goes silent (which IDLE deliberately does — that's
+	// the whole point) gets garbage-collected by NAT / firewall / SOHO
+	// router idle timers after 5-10 minutes. Without keepalive, our side
+	// has no signal that the route died and stays parked on a dead
+	// socket; the server pushes EXISTS into the void and we never wake
+	// up. SO_KEEPALIVE-derived probes refresh the NAT mapping AND surface
+	// dead connections promptly so the runIDLESession bounce can dial
+	// fresh instead of waiting on a corpse.
+	//
+	// 30s is well under typical NAT idle thresholds (Linux conntrack:
+	// ~120s for ESTABLISHED-with-no-traffic on most distros; consumer
+	// routers commonly 5min) and follows the RFC 1122 spirit of "send
+	// keepalives before the silence is suspicious to anyone in the
+	// path."
+	d := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
