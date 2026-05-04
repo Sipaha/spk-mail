@@ -60,14 +60,21 @@ func (c *Client) Select(_ context.Context, mailbox string) (FolderState, error) 
 }
 
 // UIDsAbove returns the actual UIDs present in the currently-selected
-// mailbox whose value is strictly greater than `sinceUID`. Issues:
+// mailbox whose value is strictly greater than `sinceUID`. Issues a
+// `UID SEARCH UID start:*` and filters the response client-side.
 //
-//	UID SEARCH UID <sinceUID+1>:*
+// IMAP range semantics (RFC 3501 9.6 / 6.4.4) treat `start:*` where
+// start > current-max as equivalent to `current-max:start`, i.e. it
+// matches the highest UID currently in the mailbox even though that
+// UID is BELOW our threshold. Yandex faithfully implements this.
+// Without the post-search filter, `UIDsAbove(91266)` against a
+// mailbox whose max UID is 91266 would return [91266] — the very
+// UID we already have — and the caller would either re-fetch it
+// or, worse, derive a wrong upper bound and miss the real new UID
+// later.
 //
-// Server returns the live UIDs — no trust in UIDNEXT, no eventual-
-// consistency surprises (Yandex has been observed to push EXISTS
-// before bumping UIDNEXT, leaving a `UID FETCH 1:UIDNEXT` range
-// returning zero rows). Callers fetch the returned UIDs explicitly.
+// Filter inclusively (uid > sinceUID) so the function name's
+// promise actually holds.
 func (c *Client) UIDsAbove(ctx context.Context, sinceUID int64) ([]int64, error) {
 	var rng imap.UIDSet
 	rng.AddRange(imap.UID(sinceUID+1), 0) // 0 = '*'
@@ -83,10 +90,6 @@ func (c *Client) UIDsAbove(ctx context.Context, sinceUID int64) ([]int64, error)
 	}
 	out := make([]int64, 0, 16)
 	for _, r := range uids {
-		// UIDSet ranges are inclusive on both ends; Stop=0 means "*".
-		// Defensive: in our use case the server only echoes actual
-		// UIDs (single-value ranges), but iterating handles the
-		// general case so a future server quirk doesn't surprise us.
 		stop := r.Stop
 		if stop == 0 {
 			// "Up to highest" without an explicit number — shouldn't
@@ -95,10 +98,81 @@ func (c *Client) UIDsAbove(ctx context.Context, sinceUID int64) ([]int64, error)
 			continue
 		}
 		for u := r.Start; u <= stop; u++ {
-			out = append(out, int64(u))
+			if int64(u) > sinceUID {
+				out = append(out, int64(u))
+			}
 		}
 	}
 	return out, nil
+}
+
+// FetchByUIDs streams full message data for the explicit UID set.
+// Used after UIDsAbove identifies the actual live UIDs we still need
+// to fetch — bypasses UIDNEXT-derived ranges and the eventual-
+// consistency / range-collapse quirks they invite.
+func (c *Client) FetchByUIDs(ctx context.Context, uids []int64) (<-chan FetchedMessage, <-chan error) {
+	out := make(chan FetchedMessage, 16)
+	errCh := make(chan error, 1)
+	if len(uids) == 0 {
+		close(out)
+		close(errCh)
+		return out, errCh
+	}
+	go func() {
+		defer close(out)
+		defer close(errCh)
+		var seq imap.UIDSet
+		for _, u := range uids {
+			seq.AddNum(imap.UID(u))
+		}
+		opts := &imap.FetchOptions{
+			Flags:        true,
+			InternalDate: true,
+			UID:          true,
+			BodySection: []*imap.FetchItemBodySection{
+				{Specifier: imap.PartSpecifierNone, Peek: true},
+			},
+		}
+		cmd := c.c.Fetch(seq, opts)
+		defer cmd.Close()
+		for {
+			select {
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			default:
+			}
+			msg := cmd.Next()
+			if msg == nil {
+				break
+			}
+			data, err := msg.Collect()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			fm := FetchedMessage{UID: int64(data.UID), Internal: data.InternalDate.Unix()}
+			for _, f := range data.Flags {
+				fm.Flags = append(fm.Flags, string(f))
+			}
+			for _, sec := range data.BodySection {
+				if len(sec.Bytes) > 0 {
+					fm.Raw = sec.Bytes
+					break
+				}
+			}
+			select {
+			case out <- fm:
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			}
+		}
+		if err := cmd.Close(); err != nil {
+			errCh <- err
+		}
+	}()
+	return out, errCh
 }
 
 // FlagDelta is one row of a CHANGEDSINCE flag-delta sweep: the UID of

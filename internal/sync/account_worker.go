@@ -295,36 +295,46 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 	// Batch fetch in chunks of fetchBatchSize UIDs. A single open-ended
 	// "UID FETCH N:*" works for small mailboxes but breaks on huge ones
 	// (>~3000 messages we observed Yandex closing the connection mid-stream).
-	// Persisting maxUID after each batch makes partial sync survive crashes.
+	// Drive new-message fetch from a UID SEARCH against the actual
+	// max UID we have in the local DB — NOT from the server-reported
+	// UIDNEXT. Two reasons:
 	//
-	// Termination is driven by the actual UIDs the server reports via
-	// UID SEARCH UID prev+1:*. We don't trust UIDNEXT alone: Yandex
-	// pushes EXISTS for every state change (incl. expunges and
-	// internal index bumps) without necessarily having a new live UID
-	// in the range, so a naive UID FETCH (prev+1):UIDNEXT range can
-	// return zero results and we'd advance the cursor past nothing
-	// useful. Searching first gives us the live UIDs to fetch.
+	//   * UIDNEXT-trust is fragile against Yandex: the server pushes
+	//     EXISTS for every state change (expunge, internal index bumps,
+	//     reserved-but-unindexed UIDs, …) without necessarily having
+	//     a live message at UIDNEXT-1, and a naive
+	//     `UID FETCH prev:UIDNEXT` returns zero rows on those.
 	//
-	// On a server that has nothing new (UIDNEXT == prev+1, no new
-	// mail), SEARCH returns an empty set and we skip the fetch loop
-	// entirely — saves the wasted UID FETCH round-trip too.
+	//   * SEARCH returns the live UIDs the server actually has in the
+	//     range, which we can then FETCH explicitly. No range-collapse
+	//     quirks (RFC 3501 9.6: `start:*` with start > max becomes
+	//     `max:start`), no eventual-consistency surprises.
+	//
+	// dbMaxUID is the source of truth for "what we have"; UIDNext on
+	// the folder row is just a conservative checkpoint that may run
+	// ahead of dbMaxUID by one (when an earlier sync advanced the
+	// cursor past a dead UID). Always anchor the SEARCH on dbMaxUID
+	// so we re-check those edge UIDs.
 	rolePtr := prev.Role
 	serverUIDNext := int64(state.UIDNext)
-	cursor := prev.UIDNext
-	maxUID := cursor
-	liveUIDs, searchErr := c.UIDsAbove(ctx, prev.UIDNext)
+	if dbMaxUID > prev.UIDNext {
+		// (This recovery existed before; preserved for downstream
+		// callers that read prev.UIDNext.)
+		prev.UIDNext = dbMaxUID
+	}
+	liveUIDs, searchErr := c.UIDsAbove(ctx, dbMaxUID)
 	if searchErr != nil {
 		slog.Warn("syncFolder UIDSearch failed; falling back to UIDNEXT range",
 			"account_id", w.accountID, "folder", name, "err", searchErr)
-		liveUIDs = nil // sentinel: fall through to legacy range loop
 	}
+	slog.Info("syncFolder live UIDs",
+		"account_id", w.accountID, "folder", name, "count", len(liveUIDs), "uids", liveUIDs)
+
 	if searchErr == nil {
-		slog.Info("syncFolder live UIDs",
-			"account_id", w.accountID, "folder", name, "count", len(liveUIDs))
-		// Fast path: SEARCH said nothing new. Still checkpoint to
-		// serverUIDNext so future bounces don't re-search the same
-		// empty range, and run syncFlagDeltas at the end of the
-		// function.
+		// Fast path: SEARCH said nothing new. Checkpoint to
+		// serverUIDNext, emit SyncProgress, run flag-delta sync,
+		// return. Skips the wasted FETCH round-trip the old code paid
+		// every EXISTS push.
 		if len(liveUIDs) == 0 {
 			now := time.Now().Unix()
 			if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
@@ -347,15 +357,103 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			}
 			return nil
 		}
-		// Replace the legacy UIDNEXT-cursor with one bounded by the
-		// last live UID we actually need to fetch — the loop below
-		// then operates on a real upper bound.
-		serverUIDNext = liveUIDs[len(liveUIDs)-1] + 1
-		cursor = liveUIDs[0] - 1
-		if cursor < prev.UIDNext {
-			cursor = prev.UIDNext
+
+		// SEARCH-driven path: fetch the explicit UIDs in batches.
+		maxUID := dbMaxUID
+		for i := 0; i < len(liveUIDs); i += int(fetchBatchSize) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			end := i + int(fetchBatchSize)
+			if end > len(liveUIDs) {
+				end = len(liveUIDs)
+			}
+			chunk := liveUIDs[i:end]
+			err := func() error {
+				w.syncMu.Lock()
+				defer w.syncMu.Unlock()
+				slog.Info("syncFolder batch fetch (search-driven)",
+					"account_id", w.accountID, "folder", name, "uids", chunk)
+				msgCh, errCh := c.FetchByUIDs(ctx, chunk)
+				var batchAck stdsync.WaitGroup
+				fetchedCount := 0
+				for msg := range msgCh {
+					fetchedCount++
+					slog.Info("syncFolder fetched msg",
+						"account_id", w.accountID, "folder", name,
+						"uid", msg.UID, "flags", msg.Flags, "size", len(msg.Raw))
+					if msg.UID > maxUID {
+						maxUID = msg.UID
+					}
+					batchAck.Add(1)
+					if err := w.writer.Submit(ctx, IncomingMessage{
+						AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
+						Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
+						IsResync: !notify,
+						Ack:      batchAck.Done,
+					}); err != nil {
+						batchAck.Done()
+						return err
+					}
+				}
+				if err := <-errCh; err != nil {
+					slog.Warn("syncFolder fetch errCh", "account_id", w.accountID, "folder", name, "err", err)
+					return err
+				}
+				slog.Info("syncFolder batch waiting for writer",
+					"account_id", w.accountID, "folder", name, "fetched", fetchedCount)
+				drained := make(chan struct{})
+				go func() { batchAck.Wait(); close(drained) }()
+				select {
+				case <-drained:
+					slog.Info("syncFolder batch persisted",
+						"account_id", w.accountID, "folder", name, "fetched", fetchedCount, "max_uid", maxUID)
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				now := time.Now().Unix()
+				// Checkpoint to max(maxUID+1, serverUIDNext): record
+				// the highest UID we actually saw so a subsequent
+				// EXISTS doesn't replay these, but never regress the
+				// stored cursor below what the server already
+				// announced.
+				ckpt := maxUID + 1
+				if ckpt < serverUIDNext {
+					ckpt = serverUIDNext
+				}
+				if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+					AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
+					UIDValidity: state.UIDValidity, UIDNext: ckpt, LastSyncedAt: &now,
+				}); err != nil {
+					return err
+				}
+				if w.em != nil {
+					w.em.Emit(api.Event{Type: "SyncProgress", Payload: map[string]any{
+						"account_id": w.accountID,
+						"folder_id":  folderID,
+						"folder":     name,
+						"done":       int64(end),
+						"total":      int64(len(liveUIDs)),
+					}})
+				}
+				return nil
+			}()
+			if err != nil {
+				return err
+			}
 		}
+		if _, err := w.syncFlagDeltas(ctx, c, folderID, state.HighestModSeq); err != nil {
+			slog.Warn("flag delta sync failed", "account_id", w.accountID, "folder", name, "err", err)
+		}
+		return nil
 	}
+
+	// Legacy fallback: UIDSearch failed, drive fetch from the
+	// UIDNEXT range like the pre-SEARCH-rewrite code did.
+	cursor := prev.UIDNext
+	maxUID := cursor
 	for cursor < serverUIDNext {
 		select {
 		case <-ctx.Done():
