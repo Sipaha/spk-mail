@@ -20,19 +20,56 @@ function BellIcon({ slashed, className = '' }: { slashed: boolean; className?: s
   )
 }
 
+type Menu = { profileId: number; x: number; y: number }
+
 export default function ProfileSwitcher() {
   const profiles = useStore(s => s.profiles)
   const setProfiles = useStore(s => s.setProfiles)
   const activeProfileId = useStore(s => s.activeProfileId)
   const setActiveProfile = useStore(s => s.setActiveProfile)
   const [creating, setCreating] = useState(false)
+  const [menu, setMenu] = useState<Menu | null>(null)
 
   useEffect(() => { client.listProfiles().then(setProfiles) }, [setProfiles])
+
+  useEffect(() => {
+    if (!menu) return
+    const onDown = () => setMenu(null)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
 
   const tabClass = (active: boolean) =>
     `px-2 py-1 text-xs rounded-t border-b-2 ${active
       ? 'border-zinc-200 text-zinc-100'
       : 'border-transparent text-zinc-500 hover:text-zinc-300'}`
+
+  const onDelete = async (id: number) => {
+    setMenu(null)
+    const target = profiles.find(p => p.id === id)
+    if (!target) return
+    if (!window.confirm(`Delete profile "${target.name}"?`)) return
+    try {
+      await client.deleteProfile(id)
+      const fresh = await client.listProfiles()
+      setProfiles(fresh)
+      if (activeProfileId === id) setActiveProfile(fresh[0]?.id ?? null)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      // ErrProfileInUse from the backend includes "profile has attached
+      // accounts" — surface a friendlier hint instead of the raw error.
+      if (/attached accounts/i.test(msg)) {
+        window.alert('This profile still has accounts attached. Move or remove them first.')
+      } else {
+        window.alert(`Delete failed: ${msg}`)
+      }
+    }
+  }
 
   return (
     <>
@@ -42,7 +79,11 @@ export default function ProfileSwitcher() {
             <button
               data-muted={p.muted ? 'true' : undefined}
               className={tabClass(activeProfileId === p.id) + (p.muted ? ' opacity-50' : '')}
-              onClick={() => setActiveProfile(p.id)}>
+              onClick={() => setActiveProfile(p.id)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                setMenu({ profileId: p.id, x: e.clientX, y: e.clientY })
+              }}>
               <span className="inline-block size-2 rounded-full mr-1.5 align-middle" style={{ background: p.color }} />
               {p.name}
             </button>
@@ -68,6 +109,23 @@ export default function ProfileSwitcher() {
         <button className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200" title="New profile" onClick={() => setCreating(true)}>+</button>
       </div>
       {creating && <NewProfileDialog onDone={async () => { setCreating(false); setProfiles(await client.listProfiles()) }} onCancel={() => setCreating(false)} />}
+      {menu && (
+        <div
+          role="menu"
+          // Stop the document-level mousedown handler from running when clicks
+          // land INSIDE the menu — otherwise the menu closes before the
+          // <button> below registers its own click.
+          onMouseDown={(e) => e.stopPropagation()}
+          className="fixed z-50 min-w-[160px] rounded border border-zinc-800 bg-zinc-900 shadow-lg py-1 text-xs"
+          style={{ left: menu.x, top: menu.y }}>
+          <button
+            type="button"
+            onClick={() => onDelete(menu.profileId)}
+            className="block w-full text-left px-3 py-1.5 text-rose-400 hover:bg-zinc-800">
+            Delete profile…
+          </button>
+        </div>
+      )}
     </>
   )
 }

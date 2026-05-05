@@ -9,6 +9,7 @@ interface State {
   threads: ThreadDTO[]
   folders: Record<number, FolderDTO[]>
   filter: { accountId?: number; folderId?: number; unreadOnly: boolean; hasFlagged: boolean }
+  search: string
   openThreadId?: number
   openThread?: MessageDTO[]
   syncProgress: Record<number, { folder: string; folderId?: number; done: number; total: number }>
@@ -22,6 +23,7 @@ interface State {
   markThreadRead: (id: number) => void
   setOpenThread: (id: number | undefined, msgs?: MessageDTO[]) => void
   setFilter: (f: Partial<State['filter']>) => void
+  setSearch: (q: string) => void
   setSyncProgress: (accId: number, folder: string, done: number, total: number, folderId?: number) => void
 }
 
@@ -34,6 +36,7 @@ export const useStore = create<State>()(
       threads: [],
       folders: {},
       filter: { unreadOnly: false, hasFlagged: false },
+      search: '',
       syncProgress: {},
 
       setAccounts: (a) => set({ accounts: a }),
@@ -55,11 +58,16 @@ export const useStore = create<State>()(
       markThreadRead: (id) => set((s) => ({ threads: s.threads.map(t => t.id === id ? { ...t, unread_count: 0 } : t) })),
       setOpenThread: (id, msgs) => set({ openThreadId: id, openThread: msgs }),
       setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
+      setSearch: (q) => set({ search: q }),
       setSyncProgress: (accId, folder, done, total, folderId) => set((s) => ({ syncProgress: { ...s.syncProgress, [accId]: { folder, folderId, done, total } } })),
     }),
     {
       name: 'spk-mail.activeProfile',
-      partialize: (s) => ({ activeProfileId: s.activeProfileId }),
+      // Folders are cached so the sidebar paints from localStorage on open
+      // instead of a flash of empty rows while listFolders() round-trips.
+      // SQLite is still the source of truth — FolderTree refetches on mount
+      // and the cache is overwritten with fresh counts.
+      partialize: (s) => ({ activeProfileId: s.activeProfileId, folders: s.folders }),
       onRehydrateStorage: () => (_state, error) => {
         if (error) {
           console.warn('persist rehydrate failed (localStorage disabled?)', error)

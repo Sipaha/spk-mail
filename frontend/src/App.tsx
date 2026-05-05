@@ -5,16 +5,16 @@ import { useStore } from './store'
 import Layout from './components/Layout'
 import AccountSidebar from './components/AccountSidebar'
 import ProfileSwitcher from './components/ProfileSwitcher'
-import SearchBar from './components/SearchBar'
-import ThreadList from './components/ThreadList'
+import MailListPane from './components/MailListPane'
 import ThreadView from './components/ThreadView'
 import Settings from './pages/Settings'
-import SearchResults from './pages/SearchResults'
+import AddAccount from './pages/AddAccount'
 
 export default function App() {
   const [route, setRoute] = useState<string>(window.location.hash || '#/')
   const setAccounts = useStore(s => s.setAccounts)
   const setOpenThread = useStore(s => s.setOpenThread)
+  const setSearch = useStore(s => s.setSearch)
   useEffect(() => {
     const onHash = () => setRoute(window.location.hash || '#/')
     window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash)
@@ -25,6 +25,16 @@ export default function App() {
       .catch(err => console.warn('listAccounts failed', err))
   }, [setAccounts])
   useEventStream()
+
+  // Legacy deep link: #/search?q=foo predates the in-pane search input. Seed
+  // the store search field from the URL, then redirect to "#/" so the search
+  // UX is the only visible affordance going forward.
+  useEffect(() => {
+    const m = route.match(/^#\/search\?q=(.*)$/)
+    if (!m) return
+    setSearch(decodeURIComponent(m[1]))
+    window.location.hash = '#/'
+  }, [route, setSearch])
 
   // Deep-link route: the desktop entry point used by the system-tray
   // notification click. The Go side calls SetURL("/#/thread/<id>") on
@@ -50,22 +60,25 @@ export default function App() {
       .catch(err => console.warn('deep-link getThread failed', err))
   }, [route, setOpenThread])
 
+  if (route.startsWith('#/add-account')) {
+    return (
+      <div className="bg-zinc-950 text-zinc-100 min-h-screen">
+        <a href="#/" className="absolute top-3 left-3 text-xs text-zinc-500">← back</a>
+        <AddAccount onDone={() => { window.location.hash = '#/' }} />
+      </div>
+    )
+  }
+
   if (route.startsWith('#/settings')) {
     return <div className="bg-zinc-950 text-zinc-100 min-h-screen"><a href="#/" className="absolute top-3 left-3 text-xs text-zinc-500">← back</a><Settings /></div>
   }
 
-  const sidebar = <><ProfileSwitcher /><SearchBar /><AccountSidebar /></>
-
-  const m = route.match(/^#\/search\?q=(.*)$/)
-  if (m) {
-    const q = decodeURIComponent(m[1])
-    return <Layout sidebar={sidebar} list={<SearchResults query={q} />} detail={<ThreadView />} />
-  }
+  const sidebar = <><ProfileSwitcher /><AccountSidebar /></>
 
   return (
     <Layout
       sidebar={sidebar}
-      list={<ThreadList />}
+      list={<MailListPane />}
       detail={<ThreadView />}
     />
   )

@@ -55,7 +55,7 @@ export default function AccountSidebar() {
           </div>
         )
       })}
-      <a href="#/settings/accounts" className="block w-full text-center rounded border border-dashed border-zinc-700 px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 mt-2">+ Add account</a>
+      <a href="#/add-account" className="block w-full text-center rounded border border-dashed border-zinc-700 px-2 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 mt-2">+ Add account</a>
     </div>
   )
 }
