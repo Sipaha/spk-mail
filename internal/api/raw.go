@@ -125,6 +125,11 @@ func (s *Stub) tryCached(ctx context.Context, msgID int64) ([]byte, bool, error)
 	if err == nil {
 		return data, true, nil
 	}
+	if !errors.Is(err, os.ErrNotExist) {
+		// Real I/O error (permission denied, EIO, etc.) — don't destroy
+		// the cache link, surface the error so the caller knows.
+		return nil, false, err
+	}
 	if prev, cErr := s.Store.ClearMessageRawBlob(ctx, msgID); cErr == nil && prev != nil {
 		if _, dErr := s.Store.DecBlobRef(ctx, *prev); dErr != nil {
 			slog.Warn("raw: DecBlobRef after missing file", "err", dErr)
