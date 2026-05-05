@@ -403,3 +403,100 @@ func scanSeenCandidates(ctx context.Context, tx *sql.Tx, q string, args ...any) 
 	}
 	return cands, rows.Err()
 }
+
+// SetRawResult discriminates the three outcomes of SetMessageRawBlob
+// so the caller can balance refcounts when a parallel lazy-fetch raced
+// (each fetch's InsertOrIncBlob bumped the blob's refcount; only one
+// of them actually plants a new reference in the messages row).
+type SetRawResult int
+
+const (
+	// SetFresh: the slot was NULL and now points at blobID. Caller
+	// must NOT decrement — the row newly references the blob.
+	SetFresh SetRawResult = iota
+	// SetReplaced: the slot pointed at a different blob. Caller MUST
+	// DecBlobRef the returned prevBlobID.
+	SetReplaced
+	// SetNoop: the slot already pointed at THIS exact blobID. Caller
+	// MUST DecBlobRef blobID — their InsertOrIncBlob bumped refcount,
+	// but the row is not gaining a new reference.
+	SetNoop
+)
+
+// SetMessageRawBlob atomically links a blob to a message's raw slot.
+// See SetRawResult for the three cases. raw_captured_at is refreshed
+// on every call (including SetNoop) so a re-click on an existing
+// capture slides the retention window — the user's view counts as
+// fresh activity.
+func (s *Store) SetMessageRawBlob(ctx context.Context, msgID, blobID, capturedAtUnix int64) (SetRawResult, int64, error) {
+	var result SetRawResult
+	var prev int64
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		var existing *int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT raw_blob_id FROM messages WHERE id = ?`, msgID).Scan(&existing); err != nil {
+			return err
+		}
+		switch {
+		case existing == nil:
+			result = SetFresh
+			_, err := tx.ExecContext(ctx,
+				`UPDATE messages SET raw_blob_id = ?, raw_captured_at = ? WHERE id = ?`,
+				blobID, capturedAtUnix, msgID)
+			return err
+		case *existing == blobID:
+			result = SetNoop
+			_, err := tx.ExecContext(ctx,
+				`UPDATE messages SET raw_captured_at = ? WHERE id = ?`,
+				capturedAtUnix, msgID)
+			return err
+		default:
+			result = SetReplaced
+			prev = *existing
+			_, err := tx.ExecContext(ctx,
+				`UPDATE messages SET raw_blob_id = ?, raw_captured_at = ? WHERE id = ?`,
+				blobID, capturedAtUnix, msgID)
+			return err
+		}
+	})
+	return result, prev, err
+}
+
+// GetMessageRawBlob returns the blob id + sha for a message's raw
+// slot, or found=false when raw_blob_id IS NULL.
+func (s *Store) GetMessageRawBlob(ctx context.Context, msgID int64) (int64, string, bool, error) {
+	var bid *int64
+	var sha *string
+	err := s.readDB.QueryRowContext(ctx,
+		`SELECT m.raw_blob_id, b.sha256
+		 FROM messages m
+		 LEFT JOIN blobs b ON b.id = m.raw_blob_id
+		 WHERE m.id = ?`, msgID).Scan(&bid, &sha)
+	if err != nil {
+		return 0, "", false, err
+	}
+	if bid == nil || sha == nil {
+		return 0, "", false, nil
+	}
+	return *bid, *sha, true, nil
+}
+
+// ClearMessageRawBlob nulls raw_blob_id + raw_captured_at and returns
+// the blob id that was set (so caller can DecBlobRef), or nil if the
+// slot was already empty.
+func (s *Store) ClearMessageRawBlob(ctx context.Context, msgID int64) (*int64, error) {
+	var prev *int64
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT raw_blob_id FROM messages WHERE id = ?`, msgID).Scan(&prev); err != nil {
+			return err
+		}
+		if prev == nil {
+			return nil
+		}
+		_, err := tx.ExecContext(ctx,
+			`UPDATE messages SET raw_blob_id = NULL, raw_captured_at = NULL WHERE id = ?`, msgID)
+		return err
+	})
+	return prev, err
+}

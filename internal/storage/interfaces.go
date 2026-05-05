@@ -40,6 +40,8 @@ type Reader interface {
 
 	GetBlob(ctx context.Context, id int64) (BlobRow, error)
 	ListZeroRefBlobs(ctx context.Context) ([]BlobRow, error)
+
+	GetMessageRawBlob(ctx context.Context, msgID int64) (blobID int64, sha256 string, found bool, err error)
 }
 
 // Writer adds mutating methods on top of Reader. A Writer can also read —
@@ -84,6 +86,9 @@ type Writer interface {
 	DeleteBlobIfZero(ctx context.Context, blobID int64) (bool, error)
 	SweepBlobs(ctx context.Context, dataDir string) (deletedRows, deletedBytes int64, err error)
 	BackfillLegacyAttachments(ctx context.Context, dataDir string) (migrated int, err error)
+
+	SetMessageRawBlob(ctx context.Context, msgID, blobID, capturedAtUnix int64) (SetRawResult, int64, error)
+	ClearMessageRawBlob(ctx context.Context, msgID int64) (*int64, error)
 }
 
 // Compile-time assertion: *Store must implement both interfaces. If you add a
