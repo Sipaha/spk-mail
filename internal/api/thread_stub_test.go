@@ -79,6 +79,64 @@ func TestGetThread_BatchAttachments(t *testing.T) {
 		"GetThread must batch attachments into ONE storage call regardless of thread size")
 }
 
+// TestGetThread_DownloadedReflectsBlobID is the regression sentry for the
+// content-addressed-blob bug: AttachmentDownloader clears local_path and
+// writes blob_id when bytes land, so the DTO mapper must treat either
+// column as proof-of-download. Without the `|| a.BlobID != nil` clause
+// in thread_stub.go the chip in the UI stuck on "Downloading…" forever.
+func TestGetThread_DownloadedReflectsBlobID(t *testing.T) {
+	stub, _, raw, _ := newSpyStub(t)
+	ctx := context.Background()
+
+	accID, err := raw.InsertAccount(ctx, storage.AccountRow{
+		Name: "a", Email: "a@b.c", IMAPHost: "h", IMAPPort: 993,
+		IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0,
+	})
+	require.NoError(t, err)
+	folderID, err := raw.UpsertFolder(ctx, storage.FolderRow{
+		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
+	})
+	require.NoError(t, err)
+	threadID, err := raw.InsertThread(ctx, storage.ThreadRow{SubjectNorm: "t", LastDate: 100})
+	require.NoError(t, err)
+	tid := threadID
+	msgID, err := raw.InsertMessage(ctx, storage.MessageRow{
+		AccountID: accID, FolderID: folderID, UID: 1, Date: 1,
+		ThreadID: &tid, Flags: "[]",
+	})
+	require.NoError(t, err)
+	pendingID, err := raw.InsertAttachment(ctx, storage.AttachmentRow{
+		MessageID: msgID, PartID: "1", Filename: "pending.bin",
+		ContentType: "application/octet-stream", SizeBytes: 1,
+	})
+	require.NoError(t, err)
+	doneID, err := raw.InsertAttachment(ctx, storage.AttachmentRow{
+		MessageID: msgID, PartID: "2", Filename: "done.bin",
+		ContentType: "application/octet-stream", SizeBytes: 1,
+	})
+	require.NoError(t, err)
+
+	// Simulate the downloader landing bytes for `done.bin`: blob row, then
+	// UpdateAttachmentDownloaded — which intentionally clears local_path
+	// and points blob_id at the blob.
+	blobID, _, err := raw.InsertOrIncBlob(ctx, "sha-done", 1, 0)
+	require.NoError(t, err)
+	require.NoError(t, raw.UpdateAttachmentDownloaded(ctx, doneID, blobID, "sha-done", 1))
+
+	dtos, err := stub.GetThread(ctx, threadID)
+	require.NoError(t, err)
+	require.Len(t, dtos, 1)
+	require.Len(t, dtos[0].Attachments, 2)
+
+	got := map[int64]bool{}
+	for _, a := range dtos[0].Attachments {
+		got[a.ID] = a.Downloaded
+	}
+	require.False(t, got[pendingID], "pending attachment must report Downloaded=false")
+	require.True(t, got[doneID],
+		"attachment with blob_id set must report Downloaded=true even though local_path is NULL")
+}
+
 // TestMarkRead_BatchTx proves Stub.MarkRead delegates to a single
 // MarkMessagesRead call (not a per-id loop), emits one MessageUpdated SSE
 // event per changed message, and submits one IMAP STORE op per change.
