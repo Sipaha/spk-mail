@@ -7,7 +7,11 @@ export default function SearchBar() {
     <div className="px-3 py-2 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
       <div className="relative">
         <input
-          type="search"
+          // type="text" rather than "search": the native search-input
+          // decoration paints a webkit ✕ that duplicates our custom
+          // clear button, and there's no portable way to suppress it
+          // without per-engine CSS.
+          type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search… (try: from:bob has:attachment unread)"
