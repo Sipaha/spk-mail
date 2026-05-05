@@ -116,8 +116,15 @@ export default function ProfileSwitcher() {
           // land INSIDE the menu — otherwise the menu closes before the
           // <button> below registers its own click.
           onMouseDown={(e) => e.stopPropagation()}
+          // Clamp x/y so a right-click near the right or bottom viewport
+          // edge can't push the menu offscreen. menu width/height are
+          // approximate (160×40); a tighter clamp would need a post-mount
+          // measure pass via ref, which isn't worth the extra render here.
           className="fixed z-50 min-w-[160px] rounded border border-zinc-800 bg-zinc-900 shadow-lg py-1 text-xs"
-          style={{ left: menu.x, top: menu.y }}>
+          style={{
+            left: Math.min(menu.x, window.innerWidth - 168),
+            top: Math.min(menu.y, window.innerHeight - 48),
+          }}>
           <button
             type="button"
             onClick={() => onDelete(menu.profileId)}
