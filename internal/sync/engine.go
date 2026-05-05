@@ -71,7 +71,7 @@ func (e *Engine) Run(ctx context.Context) {
 	// startup) can never observe e.writer == nil under the same lock.
 	e.mu.Lock()
 	e.rootCtx = ctx
-	e.writer = NewStoreWriter(e.store, e.em)
+	e.writer = NewStoreWriter(e.store, e.em, e.attachDir)
 	e.mu.Unlock()
 
 	e.wg.Add(1)

@@ -15,13 +15,14 @@ import (
 )
 
 type StoreWriter struct {
-	store storage.Writer
-	em    *api.Emitter
-	in    chan IncomingMessage
+	store   storage.Writer
+	em      *api.Emitter
+	in      chan IncomingMessage
+	dataDir string // root of the on-disk blob store; "" disables raw capture
 }
 
-func NewStoreWriter(s storage.Writer, em *api.Emitter) *StoreWriter {
-	return &StoreWriter{store: s, em: em, in: make(chan IncomingMessage, 256)}
+func NewStoreWriter(s storage.Writer, em *api.Emitter, dataDir string) *StoreWriter {
+	return &StoreWriter{store: s, em: em, in: make(chan IncomingMessage, 256), dataDir: dataDir}
 }
 
 // Submit queues a parsed message for writing. Returns ctx.Err() if the

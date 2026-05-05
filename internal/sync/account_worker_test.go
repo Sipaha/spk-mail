@@ -53,7 +53,7 @@ func TestAccountWorker_InitialSync(t *testing.T) {
 	t.Cleanup(cancel)
 
 	em := api.NewEmitter()
-	writer := NewStoreWriter(st, em)
+	writer := NewStoreWriter(st, em, "")
 	go writer.Run(runCtx)
 
 	w := NewAccountWorker(accID, st, sec, writer, em)

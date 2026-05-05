@@ -24,7 +24,7 @@ func TestStoreWriter_InsertsAndCreatesThread(t *testing.T) {
 	t.Cleanup(cancel)
 
 	em := api.NewEmitter()
-	w := NewStoreWriter(st, em)
+	w := NewStoreWriter(st, em, "")
 	go w.Run(runCtx)
 
 	raw := strings.Join([]string{
@@ -66,7 +66,7 @@ func TestStoreWriter_DuplicateInsert(t *testing.T) {
 	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
 
 	em := api.NewEmitter()
-	w := NewStoreWriter(st, em)
+	w := NewStoreWriter(st, em, "")
 	go w.Run(ctx)
 
 	mkRaw := func(msgID, subject string) []byte {
@@ -136,7 +136,7 @@ func TestStoreWriter_IsResyncGatesArrived(t *testing.T) {
 	events, unsub := em.Subscribe()
 	t.Cleanup(unsub)
 
-	w := NewStoreWriter(st, em)
+	w := NewStoreWriter(st, em, "")
 	go w.Run(ctx)
 
 	mkRaw := func(msgID, subject string) []byte {
