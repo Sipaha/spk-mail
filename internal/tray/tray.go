@@ -28,6 +28,7 @@ type Controller struct {
 
 	tray     *application.SystemTray
 	notifier *Notifier
+	pending  *pendingActions
 
 	unread atomic.Int64
 
@@ -56,6 +57,7 @@ func NewController(
 		baseIcon:   icon,
 		unreadIcon: unreadIcon,
 		wnd:        wnd,
+		pending:    newPendingActions(0),
 	}
 
 	notifier, err := NewNotifier()
@@ -63,6 +65,16 @@ func NewController(
 		log.Printf("tray: notifier unavailable: %v", err)
 	} else {
 		c.notifier = notifier
+		// Wire click-to-open: when the daemon reports the user clicked
+		// the notification body (or a registered action), look up the
+		// thread we stashed against this notification id and route the
+		// window to it. SetCloseHandler keeps the pending map bounded
+		// even when daemons emit only NotificationClosed (no
+		// ActionInvoked) on dismissal.
+		notifier.SetActionHandler(c.onNotificationAction)
+		notifier.SetCloseHandler(func(id uint32, _ uint32) {
+			c.pending.Delete(id)
+		})
 	}
 
 	c.tray = app.SystemTray.New()
@@ -170,15 +182,10 @@ func (c *Controller) handleMessageArrived(ev api.Event) {
 		log.Printf("tray: MessageArrived received but notifier is nil (dbus init failed at startup)")
 		return
 	}
-	// account_id may arrive as int64 (in-process Emitter) or float64
-	// (JSON round-trip via Wails event bus); accept both.
-	var accID int64
-	switch v := ev.Payload["account_id"].(type) {
-	case int64:
-		accID = v
-	case float64:
-		accID = int64(v)
-	}
+	accID := payloadInt64(ev.Payload, "account_id")
+	threadID := payloadInt64(ev.Payload, "thread_id")
+	msgID := payloadInt64(ev.Payload, "id")
+
 	muted := false
 	if accID > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -195,9 +202,54 @@ func (c *Controller) handleMessageArrived(ev api.Event) {
 	}
 	from, _ := ev.Payload["from"].(string)
 	subject, _ := ev.Payload["subject"].(string)
-	if _, err := c.notifier.Notify("New mail · "+from, subject); err != nil {
+
+	// "default" is the org.freedesktop.Notifications convention for
+	// the body click. The "Open" label is shown by daemons that render
+	// actions as buttons (KDE Plasma); on dunst/GNOME Shell the label
+	// is unused but the body click still routes here.
+	actions := []string{"default", "Open"}
+	id, err := c.notifier.Notify("New mail · "+from, subject, actions)
+	if err != nil {
 		log.Printf("tray: notify failed: %v (account_id=%d from=%q)", err, accID, from)
+		return
 	}
+	if threadID > 0 {
+		c.pending.Put(id, ActionContext{
+			AccountID: accID,
+			ThreadID:  threadID,
+			MessageID: msgID,
+		})
+	}
+}
+
+// onNotificationAction is the callback registered with the Notifier:
+// when the daemon emits ActionInvoked for a notification id we posted,
+// look up the originating thread and route the window to it. Runs on
+// the Notifier's signal-consumer goroutine, so the wails calls go
+// through InvokeSync (raiseToFront / SetURL both already do this for
+// us).
+func (c *Controller) onNotificationAction(id uint32, _ string) {
+	ctx, ok := c.pending.Take(id)
+	if !ok {
+		return
+	}
+	c.raiseToFront()
+	if c.wnd != nil && ctx.ThreadID > 0 {
+		c.wnd.SetURL(fmt.Sprintf("/#/thread/%d", ctx.ThreadID))
+	}
+}
+
+// payloadInt64 accepts both int64 (in-process Emitter) and float64
+// (JSON round-trip via the Wails event bus) — same dual-shape coercion
+// the tray already does for account_id.
+func payloadInt64(p map[string]any, key string) int64 {
+	switch v := p[key].(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	}
+	return 0
 }
 
 func (c *Controller) refreshUnread() {
