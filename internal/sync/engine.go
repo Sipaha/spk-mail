@@ -113,6 +113,14 @@ func (e *Engine) Run(ctx context.Context) {
 	// initial bulk sync is started from StartAccount above and runs
 	// concurrently — the delay is for the IDLE / poll loops that
 	// kick in once initial sync per folder completes.)
+	if e.attachDir != "" {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			NewRawSweeper(e.store, rawRetention).Run(ctx)
+		}()
+	}
+
 	if e.attachDir != "" && os.Getenv("SPK_DISABLE_MAINTENANCE") != "1" {
 		e.wg.Add(1)
 		go func() {
