@@ -117,7 +117,7 @@ func (e *Engine) Run(ctx context.Context) {
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
-			NewRawSweeper(e.store, rawRetention).Run(ctx)
+			NewRawSweeper(e.store, rawRetention, e.attachDir).Run(ctx)
 		}()
 	}
 

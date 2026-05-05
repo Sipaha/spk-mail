@@ -28,14 +28,14 @@ func TestRawSweeper_Once(t *testing.T) {
 	_, _, err = st.SetMessageRawBlob(ctx, mID, blobID, 100)
 	require.NoError(t, err)
 
-	sweeper := NewRawSweeper(st, 1*time.Hour)
+	sweeper := NewRawSweeper(st, 1*time.Hour, t.TempDir())
 	cleared := sweeper.sweepOnceAt(ctx, time.Unix(100+3600+1, 0))
 	require.Equal(t, 1, cleared)
 
 	_, _, found, _ := st.GetMessageRawBlob(ctx, mID)
 	require.False(t, found)
 
-	br, err := st.GetBlob(ctx, blobID)
-	require.NoError(t, err)
-	require.EqualValues(t, 0, br.Refcount)
+	// After SweepBlobs runs as part of sweepOnceAt, the blob row is also gone.
+	_, err = st.GetBlob(ctx, blobID)
+	require.ErrorIs(t, err, storage.ErrNotFound)
 }

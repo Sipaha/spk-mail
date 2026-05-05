@@ -10,17 +10,19 @@ import (
 )
 
 // RawSweeper periodically clears raw_blob_id captures older than the
-// retention window and decrements the blob refcounts so the existing
-// SweepBlobs reclaims disk on the next pass.
+// retention window and decrements the blob refcounts, then calls
+// SweepBlobs to reclaim disk space inline (rather than waiting for the
+// next process restart).
 type RawSweeper struct {
 	store     storage.Writer
 	retention time.Duration
 	interval  time.Duration
+	dataDir   string
 }
 
 // NewRawSweeper wires a sweeper. interval is fixed at 6h.
-func NewRawSweeper(s storage.Writer, retention time.Duration) *RawSweeper {
-	return &RawSweeper{store: s, retention: retention, interval: 6 * time.Hour}
+func NewRawSweeper(s storage.Writer, retention time.Duration, dataDir string) *RawSweeper {
+	return &RawSweeper{store: s, retention: retention, interval: 6 * time.Hour, dataDir: dataDir}
 }
 
 // Run sweeps once on entry and then every r.interval until ctx
@@ -60,6 +62,14 @@ func (r *RawSweeper) sweepOnceAt(ctx context.Context, now time.Time) int {
 	}
 	if len(cleared) > 0 {
 		slog.Info("raw sweep complete", "cleared", len(cleared), "errors", failures)
+		// Reclaim on-disk blobs whose refcount hit zero. Doing this here
+		// (instead of waiting for the next process startup) keeps disk usage
+		// bounded across long sessions.
+		if rows, bytes, err := r.store.SweepBlobs(ctx, r.dataDir); err != nil {
+			slog.Warn("raw sweep: SweepBlobs failed", "err", err)
+		} else if rows > 0 {
+			slog.Info("raw sweep reclaimed disk", "rows", rows, "bytes", bytes)
+		}
 	}
 	return len(cleared)
 }
