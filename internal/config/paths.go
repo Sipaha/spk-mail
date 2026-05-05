@@ -14,16 +14,21 @@ type AppPaths struct {
 	DataDir        string // root the content-addressed blob store lives under (<DataDir>/blobs/...)
 }
 
+// Paths returns on-disk locations for spk-mail state. By default everything
+// lives under ~/.spk/spk-mail/ so it sits alongside other SPK products
+// (editor, cockpit). XDG_DATA_HOME still overrides the root for test isolation
+// — when set, paths resolve to $XDG_DATA_HOME/spk-mail/.
 func Paths() (AppPaths, error) {
-	dataHome := os.Getenv("XDG_DATA_HOME")
-	if dataHome == "" {
+	var dataDir string
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+		dataDir = filepath.Join(dataHome, appName)
+	} else {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return AppPaths{}, err
 		}
-		dataHome = filepath.Join(home, ".local", "share")
+		dataDir = filepath.Join(home, ".spk", appName)
 	}
-	dataDir := filepath.Join(dataHome, appName)
 	return AppPaths{
 		DBFile:         filepath.Join(dataDir, "db.sqlite"),
 		SecretsFile:    filepath.Join(dataDir, "secrets.bin"),

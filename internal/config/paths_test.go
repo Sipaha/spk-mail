@@ -21,5 +21,8 @@ func TestPaths_DefaultsWhenUnset(t *testing.T) {
 	t.Setenv("HOME", "/home/test")
 	p, err := Paths()
 	require.NoError(t, err)
-	require.Equal(t, "/home/test/.local/share/spk-mail/db.sqlite", p.DBFile)
+	require.Equal(t, "/home/test/.spk/spk-mail", p.DataDir)
+	require.Equal(t, "/home/test/.spk/spk-mail/db.sqlite", p.DBFile)
+	require.Equal(t, "/home/test/.spk/spk-mail/secrets.bin", p.SecretsFile)
+	require.Equal(t, "/home/test/.spk/spk-mail/attachments", p.AttachmentsDir)
 }

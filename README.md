@@ -59,14 +59,16 @@ System tray uses the StatusNotifierItem / AppIndicator protocol.
 
 Notifications use `org.freedesktop.Notifications` (D-Bus) and work on all major DEs.
 
-## Storage layout (XDG)
+## Storage layout
+
+All on-disk state lives under `~/.spk/spk-mail/` so it sits alongside other SPK products (editor, cockpit). `XDG_DATA_HOME`, when set, overrides the root to `$XDG_DATA_HOME/spk-mail/` — used by the e2e and Playwright suites for test isolation.
 
 | Path | Content |
 |---|---|
-| `~/.config/spk-mail/config.yml` | Account host/port/user/email/colour, UI prefs |
-| `~/.local/share/spk-mail/db.sqlite` | Messages, threads, attachments metadata, FTS5 index |
-| `~/.local/share/spk-mail/attachments/...` | Downloaded attachment files |
-| `~/.local/share/spk-mail/secrets.bin` | AES-256-GCM blob of per-account IMAP passwords |
+| `~/.spk/spk-mail/db.sqlite` | Messages, threads, attachments metadata, FTS5 index |
+| `~/.spk/spk-mail/secrets.bin` | AES-256-GCM blob of per-account IMAP passwords |
+| `~/.spk/spk-mail/blobs/...` | Content-addressed attachment blob store |
+| `~/.spk/spk-mail/attachments/...` | Legacy per-message attachment tree (pre-v8 migration) |
 
 ## License
 
