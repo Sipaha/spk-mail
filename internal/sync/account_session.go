@@ -29,9 +29,13 @@ func DialAccount(ctx context.Context, store AccountReader, sec *secrets.Store, a
 	if err != nil {
 		return nil, fmt.Errorf("dial account %d: secrets: %w", accountID, err)
 	}
-	return imap.Dial(ctx, imap.DialOpts{
+	c, err := imap.Dial(ctx, imap.DialOpts{
 		Host: acc.IMAPHost, Port: acc.IMAPPort,
 		Username: acc.IMAPUsername, Password: string(pw),
 		UseTLS: acc.UseTLS,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("dial account %d: %w", accountID, err)
+	}
+	return c, nil
 }
