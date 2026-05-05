@@ -39,7 +39,20 @@ export const useStore = create<State>()(
       search: '',
       syncProgress: {},
 
-      setAccounts: (a) => set({ accounts: a }),
+      // setAccounts also prunes folder-cache entries whose accountId is no
+      // longer in the live list. Without this, deleting an account leaves
+      // its persisted folders dangling in localStorage forever (account
+      // ids never get reused, so the leak is only bytes — but the rehydrate
+      // path would still re-load and forward stale entries to the UI).
+      setAccounts: (a) => set((s) => {
+        const liveIDs = new Set(a.map(x => x.id))
+        const next: Record<number, FolderDTO[]> = {}
+        for (const [k, v] of Object.entries(s.folders)) {
+          const id = Number(k)
+          if (liveIDs.has(id)) next[id] = v
+        }
+        return { accounts: a, folders: next }
+      }),
       upsertAccount: (a) => set((s) => ({ accounts: [...s.accounts.filter(x => x.id !== a.id), a].sort((x,y)=>x.id-y.id) })),
       setProfiles: (p) => set((s) => {
         let next = s.activeProfileId
