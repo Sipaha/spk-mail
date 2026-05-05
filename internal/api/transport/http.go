@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -234,6 +235,12 @@ func httpHandle[Req any](fn func(context.Context, *Req) (any, error)) http.Handl
 		}
 		out, err := fn(r.Context(), &req)
 		if err != nil {
+			// Some errors are sentinels that the frontend wants to see —
+			// distinguish them from internal failures and pass through.
+			if errors.Is(err, api.ErrRawUnavailable) {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
 			// Don't echo err.Error() into the response body. Go errors here
 			// often carry IMAP hostnames, filesystem paths, sql driver text,
 			// and other internals that aren't useful to the user but ARE
