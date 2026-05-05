@@ -58,11 +58,15 @@ func dbDumpHandler(s *storage.Store) http.HandlerFunc {
 		out["folders"] = folders
 
 		type msgDump struct {
-			ID, AccountID, FolderID int64
-			UID                     int64
-			Subject, From, Flags    string
-			Date                    int64
-			HasAttachments          bool
+			ID             int64  `json:"id"`
+			AccountID      int64  `json:"account_id"`
+			FolderID       int64  `json:"folder_id"`
+			UID            int64  `json:"uid"`
+			Subject        string `json:"subject"`
+			From           string `json:"from"`
+			Flags          string `json:"flags"`
+			Date           int64  `json:"date"`
+			HasAttachments bool   `json:"has_attachments"`
 		}
 		var msgs []msgDump
 		rows, err := s.DB().QueryContext(ctx, `SELECT id,account_id,folder_id,uid,COALESCE(subject,''),COALESCE(from_addr,''),flags,date,has_attachments FROM messages ORDER BY date DESC LIMIT 1000`)
