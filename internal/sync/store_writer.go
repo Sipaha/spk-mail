@@ -1,18 +1,27 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/fsutil"
 	mimep "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/storage"
 	"github.com/spk/spk-mail/internal/thread"
 )
+
+// rawRetention is the sliding window after which captured raw RFC822
+// bytes get dropped by the periodic sweep. Sync-time capture skips
+// messages older than this; lazy-fetch always captures (the message
+// gets ~rawRetention from the click, regardless of date).
+const rawRetention = 30 * 24 * time.Hour
 
 type StoreWriter struct {
 	store   storage.Writer
@@ -168,6 +177,9 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 			"subject": parsed.Subject, "from": parsed.From,
 		}})
 	}
+	if w.dataDir != "" && parsed.Date.After(time.Now().Add(-rawRetention)) {
+		w.captureRaw(ctx, msgID, m.Raw)
+	}
 	return nil
 }
 
@@ -176,4 +188,35 @@ func nilIfEmpty(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// captureRaw mirrors raw RFC822 bytes into the blob store and links
+// them via messages.raw_blob_id. Best-effort: failures are logged via
+// slog.Warn and otherwise swallowed, since the parsed-message tx is
+// already committed and the lazy-fetch path covers any gap.
+func (w *StoreWriter) captureRaw(ctx context.Context, msgID int64, raw []byte) {
+	sha, size, err := fsutil.WriteContentAddressed(bytes.NewReader(raw), func(hex string) string {
+		return storage.BlobPath(w.dataDir, hex)
+	})
+	if err != nil {
+		slog.Warn("raw capture: write blob", "msg_id", msgID, "err", err)
+		return
+	}
+	blobID, _, err := w.store.InsertOrIncBlob(ctx, sha, size, time.Now().Unix())
+	if err != nil {
+		slog.Warn("raw capture: InsertOrIncBlob", "msg_id", msgID, "err", err)
+		return
+	}
+	res, prev, err := w.store.SetMessageRawBlob(ctx, msgID, blobID, time.Now().Unix())
+	if err != nil {
+		slog.Warn("raw capture: SetMessageRawBlob", "msg_id", msgID, "err", err)
+		_, _ = w.store.DecBlobRef(ctx, blobID)
+		return
+	}
+	switch res {
+	case storage.SetReplaced:
+		_, _ = w.store.DecBlobRef(ctx, prev)
+	case storage.SetNoop:
+		_, _ = w.store.DecBlobRef(ctx, blobID)
+	}
 }

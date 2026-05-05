@@ -116,6 +116,82 @@ func TestStoreWriter_DuplicateInsert(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "writer is stuck after duplicate-uid attempt")
 }
 
+// TestStoreWriter_CapturesRawForFreshMessage: a message whose Date
+// header is recent gets its raw bytes mirrored into the blob store
+// and linked via raw_blob_id.
+func TestStoreWriter_CapturesRawForFreshMessage(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	st, _ := storage.Open(ctx, filepath.Join(dir, "db.sqlite"))
+	defer st.Close()
+	accID, _ := st.InsertAccount(ctx, storage.AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff"})
+	role := "inbox"
+	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
+
+	em := api.NewEmitter()
+	w := NewStoreWriter(st, em, dir)
+	go w.Run(ctx)
+
+	now := time.Now().UTC().Format(time.RFC1123Z)
+	raw := strings.Join([]string{
+		"From: B <b@x>", "Subject: fresh", "Date: " + now,
+		"Message-ID: <fresh@x>", "Content-Type: text/plain", "", "hi",
+	}, "\r\n")
+	require.NoError(t, w.Submit(ctx, IncomingMessage{
+		AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 1,
+		Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw),
+	}))
+
+	require.Eventually(t, func() bool {
+		var blobID *int64
+		_ = st.DB().QueryRowContext(ctx,
+			`SELECT raw_blob_id FROM messages WHERE folder_id = ? AND uid = ?`,
+			fID, 1).Scan(&blobID)
+		return blobID != nil
+	}, 2*time.Second, 20*time.Millisecond, "raw_blob_id should be set after capture")
+}
+
+// TestStoreWriter_SkipsRawForOldMessage: a message older than the
+// retention window leaves raw_blob_id NULL.
+func TestStoreWriter_SkipsRawForOldMessage(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	st, _ := storage.Open(ctx, filepath.Join(dir, "db.sqlite"))
+	defer st.Close()
+	accID, _ := st.InsertAccount(ctx, storage.AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff"})
+	role := "inbox"
+	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
+
+	em := api.NewEmitter()
+	w := NewStoreWriter(st, em, dir)
+	go w.Run(ctx)
+
+	old := time.Now().Add(-60 * 24 * time.Hour).UTC().Format(time.RFC1123Z)
+	raw := strings.Join([]string{
+		"From: B <b@x>", "Subject: old", "Date: " + old,
+		"Message-ID: <old@x>", "Content-Type: text/plain", "", "hi",
+	}, "\r\n")
+	require.NoError(t, w.Submit(ctx, IncomingMessage{
+		AccountID: accID, FolderID: fID, FolderRole: "inbox", UID: 1,
+		Flags: []string{}, InternalAt: time.Now(), Raw: []byte(raw),
+	}))
+
+	require.Eventually(t, func() bool {
+		var n int
+		_ = st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM messages`).Scan(&n)
+		return n == 1
+	}, 2*time.Second, 20*time.Millisecond)
+
+	var blobID *int64
+	require.NoError(t, st.DB().QueryRowContext(ctx,
+		`SELECT raw_blob_id FROM messages WHERE folder_id = ? AND uid = ?`, fID, 1).Scan(&blobID))
+	require.Nil(t, blobID, "old message must not have raw captured")
+}
+
 // TestStoreWriter_IsResyncGatesArrived locks in the rule that MessageArrived
 // only fires for live arrivals (notify=true → IsResync=false), not for the
 // initial bulk catch-up. Without this gate, every cold-start would flood the
