@@ -425,9 +425,12 @@ const (
 
 // SetMessageRawBlob atomically links a blob to a message's raw slot.
 // See SetRawResult for the three cases. raw_captured_at is refreshed
-// on every call (including SetNoop) so a re-click on an existing
-// capture slides the retention window — the user's view counts as
-// fresh activity. Missing message id surfaces as sql.ErrNoRows.
+// on every call (including SetNoop). The retention sweep keys on this
+// column, so re-linking the same blob slides the window. Note: a
+// "view" via the cache-hit path (api/raw.go::tryCached) does NOT call
+// this function and does NOT slide the window — only the sync-time
+// capture and lazy-fetch paths do. Missing message id surfaces as
+// sql.ErrNoRows.
 func (s *Store) SetMessageRawBlob(ctx context.Context, msgID, blobID, capturedAtUnix int64) (SetRawResult, int64, error) {
 	var result SetRawResult
 	var prev int64
