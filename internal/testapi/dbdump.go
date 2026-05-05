@@ -12,8 +12,25 @@ func dbDumpHandler(s *storage.Store) http.HandlerFunc {
 		ctx := r.Context()
 		out := map[string]any{}
 
+		// Project AccountRow into a stable JSON shape with explicit lowercase
+		// tags. Without this, the marshaller emits Go-default PascalCase
+		// field names ("Email", "Name") and Playwright assertions like
+		// `dump.accounts[].email` silently see undefined.
+		type accountDump struct {
+			ID        int64  `json:"id"`
+			Name      string `json:"name"`
+			Email     string `json:"email"`
+			Color     string `json:"color"`
+			ProfileID *int64 `json:"profile_id,omitempty"`
+		}
 		accs, _ := s.ListAccounts(ctx)
-		out["accounts"] = accs
+		accountList := make([]accountDump, 0, len(accs))
+		for _, a := range accs {
+			accountList = append(accountList, accountDump{
+				ID: a.ID, Name: a.Name, Email: a.Email, Color: a.Color, ProfileID: a.ProfileID,
+			})
+		}
+		out["accounts"] = accountList
 
 		type profileDump struct {
 			ID        int64  `json:"id"`
