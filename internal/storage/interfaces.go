@@ -89,6 +89,7 @@ type Writer interface {
 
 	SetMessageRawBlob(ctx context.Context, msgID, blobID, capturedAtUnix int64) (SetRawResult, int64, error)
 	ClearMessageRawBlob(ctx context.Context, msgID int64) (*int64, error)
+	SweepExpiredRaw(ctx context.Context, cutoffUnix int64) ([]int64, error)
 }
 
 // Compile-time assertion: *Store must implement both interfaces. If you add a

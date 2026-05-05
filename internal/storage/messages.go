@@ -501,3 +501,46 @@ func (s *Store) ClearMessageRawBlob(ctx context.Context, msgID int64) (*int64, e
 	})
 	return prev, err
 }
+
+// SweepExpiredRaw clears raw_blob_id + raw_captured_at on every row
+// whose capture is older than cutoffUnix. Returns the prev blob ids
+// so the caller can DecBlobRef each (existing SweepBlobs reclaims
+// refcount=0 on the next pass). Single writer tx.
+//
+// The query reads the partial index idx_messages_raw_capture so the
+// cost scales with expiring-captures, not with total messages.
+func (s *Store) SweepExpiredRaw(ctx context.Context, cutoffUnix int64) ([]int64, error) {
+	var cleared []int64
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT id, raw_blob_id FROM messages
+			 WHERE raw_blob_id IS NOT NULL
+			   AND raw_captured_at IS NOT NULL
+			   AND raw_captured_at < ?`, cutoffUnix)
+		if err != nil {
+			return err
+		}
+		type row struct{ msgID, blobID int64 }
+		var batch []row
+		for rows.Next() {
+			var r row
+			if err := rows.Scan(&r.msgID, &r.blobID); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, r)
+		}
+		rows.Close()
+
+		for _, r := range batch {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE messages SET raw_blob_id = NULL, raw_captured_at = NULL WHERE id = ?`,
+				r.msgID); err != nil {
+				return err
+			}
+			cleared = append(cleared, r.blobID)
+		}
+		return nil
+	})
+	return cleared, err
+}
