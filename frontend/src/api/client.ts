@@ -1,5 +1,5 @@
 import { Call, Events } from '@wailsio/runtime'
-import type { AccountDTO, AddAccountRequest, AddProfileRequest, ApiEvent, EventType, FolderDTO, MessageDTO, ProfileDTO, SearchHitDTO, ThreadDTO, ThreadFilter, UpdateProfileRequest } from './types'
+import type { AccountDTO, AddAccountRequest, AddProfileRequest, ApiEvent, EventType, FolderDTO, MessageDTO, ProfileDTO, RawMessageDTO, SearchHitDTO, ThreadDTO, ThreadFilter, UpdateProfileRequest } from './types'
 
 export interface Client {
   listAccounts(): Promise<AccountDTO[]>
@@ -8,6 +8,7 @@ export interface Client {
   listThreads(filter: ThreadFilter): Promise<ThreadDTO[]>
   listFolders(accountId: number): Promise<FolderDTO[]>
   getThread(id: number): Promise<MessageDTO[]>
+  getRawMessage(id: number): Promise<RawMessageDTO>
   markRead(ids: number[]): Promise<void>
   markFolderRead(folderId: number): Promise<number>
   toggleThreadFlagged(threadId: number): Promise<{ action: string; count: number }>
@@ -39,6 +40,7 @@ const httpClient: Client = {
   listThreads:   (f) => post('/api/ListThreads', f),
   listFolders:   (accountId) => post('/api/ListFolders', { account_id: accountId }),
   getThread:     (id) => post('/api/GetThread', { id }),
+  getRawMessage: (id) => post('/api/GetRawMessage', { id }),
   markRead:      (ids) => post('/api/MarkRead', { ids }),
   markFolderRead: (folderId) => post<{count: number}>('/api/MarkFolderRead', { folder_id: folderId }).then(r => r.count),
   toggleThreadFlagged: (threadId) =>
@@ -87,6 +89,7 @@ const wailsClient: Client = {
   listThreads:   (f) => Call.ByName(m('ListThreads'), f) as Promise<ThreadDTO[]>,
   listFolders:   (accountId) => Call.ByName(m('ListFolders'), accountId) as Promise<FolderDTO[]>,
   getThread:     (id) => Call.ByName(m('GetThread'), id) as Promise<MessageDTO[]>,
+  getRawMessage: (id) => Call.ByName(m('GetRawMessage'), id) as Promise<RawMessageDTO>,
   markRead:      (ids) => Call.ByName(m('MarkRead'), ids).then(() => undefined),
   markFolderRead: (folderId) => Call.ByName(m('MarkFolderRead'), folderId) as Promise<number>,
   toggleThreadFlagged: (threadId) =>

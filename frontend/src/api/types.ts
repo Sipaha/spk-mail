@@ -40,3 +40,8 @@ export interface SearchHitDTO {
 export interface ProfileDTO { id: number; name: string; color: string; sort_order: number; muted: boolean }
 export interface AddProfileRequest { name: string; color: string }
 export interface UpdateProfileRequest { id: number; name: string; color: string }
+export interface RawMessageDTO {
+  filename: string
+  size_bytes: number
+  raw_b64: string
+}

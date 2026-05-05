@@ -53,6 +53,9 @@ func (w *API) AllowRemoteForMessage(id int64) (string, error) {
 func (w *API) Search(q string, limit, offset int) ([]api.SearchHitDTO, error) {
 	return w.a.Search(context.Background(), q, limit, offset)
 }
+func (w *API) GetRawMessage(id int64) (api.RawMessageDTO, error) {
+	return w.a.GetRawMessage(context.Background(), id)
+}
 func (w *API) OpenAttachment(id int64) error {
 	return w.a.OpenAttachment(context.Background(), id)
 }

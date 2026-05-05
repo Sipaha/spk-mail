@@ -184,6 +184,11 @@ func (h *HTTP) routes() {
 	}) (any, error) {
 		return h.api.Search(ctx, req.Query, req.Limit, req.Offset)
 	}))
+	h.mux.HandleFunc("POST /api/GetRawMessage", httpHandle(func(ctx context.Context, req *struct {
+		ID int64 `json:"id"`
+	}) (any, error) {
+		return h.api.GetRawMessage(ctx, req.ID)
+	}))
 	h.mux.HandleFunc("POST /api/OpenAttachment", httpHandle(func(ctx context.Context, req *struct {
 		ID int64 `json:"id"`
 	}) (any, error) {

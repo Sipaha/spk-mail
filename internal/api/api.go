@@ -13,6 +13,7 @@ type API interface {
 	ListFolders(ctx context.Context, accountID int64) ([]FolderDTO, error)
 	ListThreads(ctx context.Context, filter ThreadFilter) ([]ThreadDTO, error)
 	GetThread(ctx context.Context, id int64) ([]MessageDTO, error)
+	GetRawMessage(ctx context.Context, id int64) (RawMessageDTO, error)
 
 	MarkRead(ctx context.Context, messageIDs []int64) error
 	MarkFolderRead(ctx context.Context, folderID int64) (int64, error)
