@@ -23,6 +23,14 @@ export default defineConfig({
   // video file only when the test failed (not for passing retries).
   use: {
     baseURL: 'http://127.0.0.1:5174',
+    // OriginGuard (internal/api/transport/http.go) rejects state-changing
+    // requests without Origin/Referer. Playwright's `request` fixture does
+    // not attach Origin by default, so every request.post('/api/...') gates
+    // 403 unless we set one here. Same-origin value matches baseURL so the
+    // CSRF check accepts it.
+    extraHTTPHeaders: {
+      Origin: 'http://127.0.0.1:5174',
+    },
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
