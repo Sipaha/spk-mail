@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestMigrate_FreshDBAppliesAllVersions(t *testing.T) {
 
 	var v int
 	require.NoError(t, s.DB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&v))
-	require.Equal(t, 8, v)
+	require.Equal(t, 9, v)
 
 	// profiles table exists
 	var name string
@@ -103,4 +104,50 @@ func TestMigrate_PreV2DBGetsBackfillDefaultProfile(t *testing.T) {
 	var apid *int64
 	require.NoError(t, s2.DB().QueryRow(`SELECT profile_id FROM accounts WHERE email='old@x'`).Scan(&apid))
 	require.NotNil(t, apid, "existing account must be backfilled to Default profile")
+}
+
+// TestMigrationV9_AddsRawCaptureColumns verifies that v9 adds
+// raw_blob_id and raw_captured_at to messages along with the partial
+// index that backs SweepExpiredRaw. Existing rows must keep working —
+// raw_blob_id NULL is the lazy-fetch territory.
+func TestMigrationV9_AddsRawCaptureColumns(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(context.Background(), filepath.Join(dir, "db.sqlite"))
+	require.NoError(t, err)
+	defer st.Close()
+
+	cols := tableColumns(t, st.DB(), "messages")
+	require.Contains(t, cols, "raw_blob_id")
+	require.Contains(t, cols, "raw_captured_at")
+
+	var sqlText string
+	err = st.DB().QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_raw_capture'`,
+	).Scan(&sqlText)
+	require.NoError(t, err)
+	require.Contains(t, sqlText, "raw_captured_at")
+	require.Contains(t, sqlText, "WHERE raw_blob_id IS NOT NULL")
+
+	var v int
+	require.NoError(t, st.DB().QueryRow(
+		`SELECT version FROM schema_migrations WHERE version = 9`).Scan(&v))
+	require.Equal(t, 9, v)
+}
+
+// tableColumns returns the column names of the given table via PRAGMA.
+func tableColumns(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		require.NoError(t, rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk))
+		cols = append(cols, name)
+	}
+	return cols
 }

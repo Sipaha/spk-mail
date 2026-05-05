@@ -20,6 +20,7 @@ var migrationSteps = []migrationStep{
 	{version: 6, apply: applyMigrationV6},
 	{version: 7, apply: applyMigrationV7},
 	{version: 8, apply: applyMigrationV8},
+	{version: 9, apply: applyMigrationV9},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -294,6 +295,43 @@ func applyMigrationV8(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations(version, applied_at) VALUES (8, strftime('%s','now'))`); err != nil {
 		return fmt.Errorf("v8 record version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// applyMigrationV9 introduces the raw RFC822 capture window. Each
+// message can optionally reference a `blobs` row holding its raw
+// bytes; raw_captured_at records when that link was established so
+// the periodic sweep can drop links older than the retention window.
+// Existing rows have NULL on both columns and are picked up by the
+// lazy-fetch path on first click.
+func applyMigrationV9(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`ALTER TABLE messages ADD COLUMN raw_blob_id INTEGER REFERENCES blobs(id) ON DELETE SET NULL`); err != nil {
+		if !isDuplicateColumnErr(err) {
+			return fmt.Errorf("v9 add raw_blob_id: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`ALTER TABLE messages ADD COLUMN raw_captured_at INTEGER`); err != nil {
+		if !isDuplicateColumnErr(err) {
+			return fmt.Errorf("v9 add raw_captured_at: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_messages_raw_capture
+		   ON messages(raw_captured_at)
+		   WHERE raw_blob_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("v9 partial index: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (9, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v9 record version: %w", err)
 	}
 	return tx.Commit()
 }
