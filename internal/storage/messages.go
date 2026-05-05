@@ -531,6 +531,9 @@ func (s *Store) SweepExpiredRaw(ctx context.Context, cutoffUnix int64) ([]int64,
 			batch = append(batch, r)
 		}
 		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
 
 		for _, r := range batch {
 			if _, err := tx.ExecContext(ctx,
