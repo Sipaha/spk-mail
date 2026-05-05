@@ -411,15 +411,15 @@ func scanSeenCandidates(ctx context.Context, tx *sql.Tx, q string, args ...any) 
 type SetRawResult int
 
 const (
-	// SetFresh: the slot was NULL and now points at blobID. Caller
-	// must NOT decrement — the row newly references the blob.
+	// SetFresh means the slot was NULL and now points at blobID.
+	// Caller must NOT decrement — the row newly references the blob.
 	SetFresh SetRawResult = iota
-	// SetReplaced: the slot pointed at a different blob. Caller MUST
-	// DecBlobRef the returned prevBlobID.
+	// SetReplaced means the slot pointed at a different blob. Caller
+	// MUST DecBlobRef the returned prevBlobID.
 	SetReplaced
-	// SetNoop: the slot already pointed at THIS exact blobID. Caller
-	// MUST DecBlobRef blobID — their InsertOrIncBlob bumped refcount,
-	// but the row is not gaining a new reference.
+	// SetNoop means the slot already pointed at THIS exact blobID.
+	// Caller MUST DecBlobRef blobID — their InsertOrIncBlob bumped
+	// refcount, but the row is not gaining a new reference.
 	SetNoop
 )
 
