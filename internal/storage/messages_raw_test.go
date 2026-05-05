@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,9 +9,7 @@ import (
 
 func newStoreWithMessage(t *testing.T) (*Store, int64) {
 	t.Helper()
-	st, err := Open(context.Background(), filepath.Join(t.TempDir(), "db.sqlite"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
+	st := openTestStore(t)
 	ctx := context.Background()
 	accID, err := st.InsertAccount(ctx, AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff"})
 	require.NoError(t, err)
@@ -110,6 +107,11 @@ func TestClearMessageRawBlob_OnSet(t *testing.T) {
 
 	_, _, found, _ := st.GetMessageRawBlob(context.Background(), mID)
 	require.False(t, found)
+
+	var captured *int64
+	require.NoError(t, st.DB().QueryRow(
+		`SELECT raw_captured_at FROM messages WHERE id = ?`, mID).Scan(&captured))
+	require.Nil(t, captured, "raw_captured_at must be NULL after ClearMessageRawBlob")
 }
 
 // TestClearMessageRawBlob_OnNull: clearing an empty slot is a no-op

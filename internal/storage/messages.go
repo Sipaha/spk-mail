@@ -427,7 +427,7 @@ const (
 // See SetRawResult for the three cases. raw_captured_at is refreshed
 // on every call (including SetNoop) so a re-click on an existing
 // capture slides the retention window — the user's view counts as
-// fresh activity.
+// fresh activity. Missing message id surfaces as sql.ErrNoRows.
 func (s *Store) SetMessageRawBlob(ctx context.Context, msgID, blobID, capturedAtUnix int64) (SetRawResult, int64, error) {
 	var result SetRawResult
 	var prev int64
@@ -463,7 +463,8 @@ func (s *Store) SetMessageRawBlob(ctx context.Context, msgID, blobID, capturedAt
 }
 
 // GetMessageRawBlob returns the blob id + sha for a message's raw
-// slot, or found=false when raw_blob_id IS NULL.
+// slot, or found=false when raw_blob_id IS NULL. Missing message id
+// surfaces as sql.ErrNoRows.
 func (s *Store) GetMessageRawBlob(ctx context.Context, msgID int64) (int64, string, bool, error) {
 	var bid *int64
 	var sha *string
@@ -483,7 +484,7 @@ func (s *Store) GetMessageRawBlob(ctx context.Context, msgID int64) (int64, stri
 
 // ClearMessageRawBlob nulls raw_blob_id + raw_captured_at and returns
 // the blob id that was set (so caller can DecBlobRef), or nil if the
-// slot was already empty.
+// slot was already empty. Missing message id surfaces as sql.ErrNoRows.
 func (s *Store) ClearMessageRawBlob(ctx context.Context, msgID int64) (*int64, error) {
 	var prev *int64
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
