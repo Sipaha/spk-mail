@@ -220,9 +220,14 @@ func (s *Stub) GetThread(ctx context.Context, id int64) ([]MessageDTO, error) {
 		atts := attsByMsg[r.ID] // nil-slice-friendly: missing key → nil
 		dtoAtts := make([]AttachmentDTO, 0, len(atts))
 		for _, a := range atts {
+			// "Downloaded" must reflect either the legacy local_path column
+			// OR the new content-addressed blob_id. AttachmentDownloader
+			// intentionally clears local_path when it points the row at a
+			// blob (see UpdateAttachmentDownloaded), so checking only
+			// local_path leaves new downloads stuck reporting downloaded=false.
 			dtoAtts = append(dtoAtts, AttachmentDTO{
 				ID: a.ID, Filename: a.Filename, ContentType: a.ContentType,
-				SizeBytes: a.SizeBytes, Downloaded: a.LocalPath != nil,
+				SizeBytes: a.SizeBytes, Downloaded: a.LocalPath != nil || a.BlobID != nil,
 			})
 		}
 		bodyHTML := strFrom(r.BodyHTML)
