@@ -112,3 +112,12 @@ type FlagToggleResult struct {
 	Action string `json:"action"`
 	Count  int64  `json:"count"`
 }
+
+// RawMessageDTO carries the bytes + metadata returned by GetRawMessage.
+// Bytes are base64-encoded so a single JSON path covers both Wails and
+// HTTP transports without a separate streaming endpoint.
+type RawMessageDTO struct {
+	Filename  string `json:"filename"`
+	SizeBytes int64  `json:"size_bytes"`
+	RawB64    string `json:"raw_b64"`
+}
