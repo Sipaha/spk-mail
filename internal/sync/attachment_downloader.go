@@ -3,13 +3,11 @@ package sync
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/spk/spk-mail/internal/api"
 	"github.com/spk/spk-mail/internal/fsutil"
-	"github.com/spk/spk-mail/internal/imap"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 )
@@ -59,19 +57,7 @@ func (d *AttachmentDownloader) runOnce(ctx context.Context) {
 		return
 	}
 
-	acc, err := d.store.GetAccount(ctx, d.accountID)
-	if err != nil {
-		return
-	}
-	pw, err := d.secrets.Get(fmt.Sprintf("account:%d", d.accountID))
-	if err != nil {
-		return
-	}
-
-	c, err := imap.Dial(ctx, imap.DialOpts{
-		Host: acc.IMAPHost, Port: acc.IMAPPort,
-		Username: acc.IMAPUsername, Password: string(pw), UseTLS: acc.UseTLS,
-	})
+	c, err := DialAccount(ctx, d.store, d.secrets, d.accountID)
 	if err != nil {
 		slog.Warn("downloader dial", "err", err)
 		return
