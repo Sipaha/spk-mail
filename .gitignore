@@ -22,6 +22,10 @@ cmd/spk-mail/dist/*
 coverage.html
 coverage/
 
+# Go workspace (developer-machine-specific)
+go.work
+go.work.sum
+
 # Vendoring (we don't vendor; if anyone runs `go mod vendor`, keep it local)
 vendor/
 
