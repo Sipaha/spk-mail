@@ -89,8 +89,8 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 	var out []SearchHit
 	for rows.Next() {
 		var h SearchHit
-		var subj, from *string
-		if err := rows.Scan(&h.MessageID, &h.ThreadID, &subj, &from, &h.Date, &h.Snippet); err != nil {
+		var subj, from, snip *string
+		if err := rows.Scan(&h.MessageID, &h.ThreadID, &subj, &from, &h.Date, &snip); err != nil {
 			return nil, err
 		}
 		if subj != nil {
@@ -98,6 +98,9 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 		}
 		if from != nil {
 			h.FromAddr = *from
+		}
+		if snip != nil {
+			h.Snippet = *snip
 		}
 		out = append(out, h)
 	}

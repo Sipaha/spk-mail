@@ -75,6 +75,27 @@ func TestSearch_FreeTextPlusOperator(t *testing.T) {
 	require.Len(t, hits, 1)
 }
 
+// TestSearch_NullSnippet pins the regression where a match on subject/from
+// with a NULL body_text caused snippet(messages_fts, 3, …) to return NULL,
+// which then failed Scan into a non-nullable string.
+func TestSearch_NullSnippet(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	accID, _ := s.InsertAccount(ctx, AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
+	role := "inbox"
+	fID, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
+	_, err := s.InsertMessage(ctx, MessageRow{
+		AccountID: accID, FolderID: fID, UID: 1, Date: 1,
+		Subject: stringPtr("Coffee chat"), FromAddr: stringPtr("co@x.y"),
+		BodyText: nil, Flags: "[]",
+	})
+	require.NoError(t, err)
+	hits, err := s.Search(ctx, "co", 50, 0)
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	require.Equal(t, "", hits[0].Snippet)
+}
+
 // TestSearch_HostileInput pins behaviour for queries that contain raw FTS5
 // metacharacters: ParseSearchQuery should quote tokens so a malformed input
 // surfaces as zero results, not as an FTS5 syntax error bubbling up to the
