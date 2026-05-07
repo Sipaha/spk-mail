@@ -191,4 +191,24 @@ export function useEventStream() {
       }
     })
   }, [])
+
+  // While the window was unfocused, the SSE handler above kept openThread
+  // in sync but skipped mark-read for any newly arrived messages (intentional:
+  // we don't auto-clear the unread badge for emails the user hasn't seen).
+  // When focus returns, the user IS now looking at the open thread, so flush
+  // any unread it accumulated.
+  useEffect(() => {
+    const onFocus = () => {
+      const s = useStore.getState()
+      const id = s.openThreadId
+      if (id === undefined || !s.openThread) return
+      const unread = s.openThread.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
+      if (unread.length === 0) return
+      client.markRead(unread)
+        .then(() => useStore.getState().markThreadRead(id))
+        .catch(err => console.warn('focus markRead failed', err))
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
 }
