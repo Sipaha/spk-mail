@@ -71,6 +71,19 @@ export function useEventStream() {
             const final = useStore.getState()
             if (final.openThreadId === id) {
               final.setOpenThread(id, msgs)
+              // Auto-mark-read for messages that landed in an already-open
+              // thread (ThreadList.onOpen only marks the snapshot at click
+              // time). Gated on document.hasFocus(): when the window is not
+              // in focus we leave the new message unread so the unread
+              // counter surfaces it when the user returns.
+              if (typeof document !== 'undefined' && document.hasFocus()) {
+                const unread = msgs.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
+                if (unread.length) {
+                  client.markRead(unread)
+                    .then(() => useStore.getState().markThreadRead(id))
+                    .catch(err => console.warn('auto markRead failed', err))
+                }
+              }
             }
           }
           break
