@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,13 @@ import (
 
 	"github.com/spk/spk-mail/internal/api"
 )
+
+// refreshInterval is the backstop cadence for refreshUnread. Events are
+// the primary update path; this ticker exists so a single dropped /
+// panicked / silently-failed SetIcon doesn't wedge the badge until the
+// next process restart. 30s keeps the load trivial (one COUNT(*) query)
+// while still recovering from an overnight stall in under a minute.
+const refreshInterval = 30 * time.Second
 
 // Controller wires the system tray (icon + menu + tooltip) to api.Emitter
 // events: it shows desktop notifications for newly arrived mail and refreshes
@@ -34,6 +42,7 @@ type Controller struct {
 
 	once  sync.Once
 	unsub func()
+	stop  chan struct{}
 }
 
 // NewController constructs the tray, registers the menu, subscribes to events
@@ -58,6 +67,7 @@ func NewController(
 		unreadIcon: unreadIcon,
 		wnd:        wnd,
 		pending:    newPendingActions(0),
+		stop:       make(chan struct{}),
 	}
 
 	notifier, err := NewNotifier()
@@ -101,6 +111,7 @@ func NewController(
 	ch, unsub := emitter.Subscribe()
 	c.unsub = unsub
 	go c.consume(ch)
+	go c.tickRefresh()
 
 	// Prime the badge with the current unread total.
 	go c.refreshUnread()
@@ -108,11 +119,12 @@ func NewController(
 	return c, nil
 }
 
-// Close stops the event subscription. Safe to call multiple times.
-// `consume` exits when the subscription channel closes (driven by `unsub`),
-// so there is no separate stop signal to manage.
+// Close stops the event subscription and the periodic refresh ticker.
+// Safe to call multiple times. `consume` exits when the subscription
+// channel closes (driven by `unsub`); `tickRefresh` exits on `stop`.
 func (c *Controller) Close() {
 	c.once.Do(func() {
+		close(c.stop)
 		if c.unsub != nil {
 			c.unsub()
 		}
@@ -155,20 +167,56 @@ func (c *Controller) showWindow() {
 
 func (c *Controller) consume(ch <-chan api.Event) {
 	for ev := range ch {
-		switch ev.Type {
-		case "MessageArrived":
-			// Hand off to a goroutine: AccountIsMuted is a SQLite read
-			// and Notify is a dbus call with a 5s timeout. Running them
-			// inline here would block the consume loop, which is the
-			// only drainer of a bounded (cap=64) subscriber channel.
-			// Two MessageArrived events landing while the dbus call is
-			// in flight would otherwise overflow into the channel-drop
-			// path and the user would silently miss notifications.
-			ev := ev
-			go c.handleMessageArrived(ev)
+		c.dispatchEvent(ev)
+	}
+}
+
+// dispatchEvent isolates a single event behind a recover so a panic in
+// SetIcon / RenderBadge / dbus does not kill the consume goroutine and
+// permanently wedge the badge. The next event still gets a fair shot.
+func (c *Controller) dispatchEvent(ev api.Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("tray: dispatch panic: %v (event=%s)", r, ev.Type)
+		}
+	}()
+	switch ev.Type {
+	case "MessageArrived":
+		// Hand off to a goroutine: AccountIsMuted is a SQLite read
+		// and Notify is a dbus call with a 5s timeout. Running them
+		// inline here would block the consume loop, which is the
+		// only drainer of a bounded (cap=64) subscriber channel.
+		// Two MessageArrived events landing while the dbus call is
+		// in flight would otherwise overflow into the channel-drop
+		// path and the user would silently miss notifications.
+		go c.handleMessageArrived(ev)
+		c.refreshUnread()
+	case "MessageInserted", "MessageUpdated", "AccountStatus", "FolderMarkedRead":
+		c.refreshUnread()
+	}
+}
+
+// tickRefresh is a backstop for refreshUnread: the badge update is
+// otherwise wholly event-driven, and any single failure mode in that
+// path (subscriber-channel overflow, panic in SetIcon, dbus hiccup
+// after suspend/resume) leaves the count stuck until process restart.
+// Periodic refresh papers over all of those without trying to
+// distinguish them.
+func (c *Controller) tickRefresh() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("tray: tickRefresh panic: %v", r)
+		}
+	}()
+	t := time.NewTicker(refreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-t.C:
 			c.refreshUnread()
-		case "MessageInserted", "MessageUpdated", "AccountStatus", "FolderMarkedRead":
-			c.refreshUnread()
+			slog.Debug("tray: periodic refresh", "unread", c.unread.Load())
 		}
 	}
 }
