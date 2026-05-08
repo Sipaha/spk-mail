@@ -44,6 +44,12 @@ export default function App() {
   // load the thread asynchronously. The post-resolve openThreadId
   // check mirrors events.ts: if the user navigated away during the
   // fetch, don't clobber their state.
+  //
+  // Mark-read mirrors ThreadList.onOpen — clicking a notification is an
+  // explicit user action, so we don't gate on document.hasFocus() the
+  // way the SSE auto-mark-read does (the webview may not have flagged
+  // focus yet by the time getThread resolves, and the user's intent is
+  // unambiguous).
   useEffect(() => {
     const m = route.match(/^#\/thread\/(\d+)/)
     if (!m) return
@@ -53,8 +59,13 @@ export default function App() {
     window.location.hash = '#/'
     client.getThread(id)
       .then(msgs => {
-        if (useStore.getState().openThreadId === id) {
-          setOpenThread(id, msgs)
+        if (useStore.getState().openThreadId !== id) return
+        setOpenThread(id, msgs)
+        const unread = msgs.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
+        if (unread.length) {
+          client.markRead(unread)
+            .then(() => useStore.getState().markThreadRead(id))
+            .catch(err => console.warn('deep-link markRead failed', err))
         }
       })
       .catch(err => console.warn('deep-link getThread failed', err))
