@@ -13,7 +13,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@wailsio/runtime": "3.0.0-alpha.78",
+    "@wailsio/runtime": "^3.0.0-alpha.94",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "zustand": "^5.0.12"
