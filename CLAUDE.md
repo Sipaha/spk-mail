@@ -10,8 +10,8 @@ Single Wails v3 process. `internal/sync` runs one `AccountWorker` goroutine per 
 
 ## Things that bite
 
-- **Wails v3 alpha bindings** are exposed under their full Go FQN. The frontend uses `Call.ByName('github.com/spk/spk-mail/internal/api/transport.API.<Method>', ...)` — there is no `window.wails` global on alpha.78.
-- **`@wailsio/runtime`** package version must match the Wails Go module (`v3.0.0-alpha.78`).
+- **Wails v3 alpha bindings** are exposed under their full Go FQN. The frontend uses `Call.ByName('github.com/spk/spk-mail/internal/api/transport.API.<Method>', ...)` — there is no `window.wails` global on alpha.95.
+- **`@wailsio/runtime`** package version must match the Wails Go module (`v3.0.0-alpha.95`).
 - **`window.location.protocol === 'wails:'`** is the desktop-vs-browser discriminator.
 - **Filter switches in `ThreadList`** clear `threads` in the Zustand store synchronously before refetching; otherwise the previous scope's threads briefly leak into the new view.
 - **Attachment filenames** are synthesized (`att-<part>.<ext>`) when the email omits Content-Disposition filename and Content-Type name — see `internal/mime/parser.go::SynthFilename`.
