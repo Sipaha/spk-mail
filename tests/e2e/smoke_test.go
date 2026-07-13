@@ -37,20 +37,23 @@ func TestSmoke_BrowserMode(t *testing.T) {
 
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	waitURL(t, base+"/")
+	token := apiTokenFromIndex(t, base)
 
 	fixture := []byte(`{"accounts":[{"name":"X","email":"alice@example.com","color":"#fff","use_mock":true,"folders":[{"name":"INBOX"}]}]}`)
-	r := postJSON(t, base, "/api/_test/seed", fixture)
+	r := postJSON(t, base, "/api/_test/seed", fixture, token)
 	require.Equal(t, http.StatusNoContent, r.StatusCode)
 	readBody(r)
 
-	r = postJSON(t, base, "/api/ListAccounts", []byte("{}"))
+	r = postJSON(t, base, "/api/ListAccounts", []byte("{}"), token)
 	var list []map[string]any
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&list))
 	require.Len(t, list, 1)
 	require.Equal(t, "X", list[0]["name"])
 
-	// db-dump round-trip (GET — no Origin needed)
-	r, _ = http.Get(base + "/api/_test/db-dump")
+	// db-dump round-trip
+	req, _ := http.NewRequest("GET", base+"/api/_test/db-dump", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r, _ = http.DefaultClient.Do(req)
 	var dump map[string]any
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&dump))
 	require.NotEmpty(t, dump["accounts"])

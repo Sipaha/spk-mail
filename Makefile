@@ -50,7 +50,7 @@ test-go:
 	go test -race -timeout 120s ./...
 
 test-front:
-	cd frontend && npm test --silent || true
+	cd frontend && npm test --silent
 
 # test-e2e gates the chromium download on a marker file so re-runs skip
 # the ~150MB pull. CI caches the playwright browser dir in

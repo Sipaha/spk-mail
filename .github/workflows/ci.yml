@@ -60,3 +60,28 @@ jobs:
       - name: vitest
         working-directory: frontend
         run: npm test
+
+  e2e:
+    name: e2e (playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: tests/playwright/package-lock.json
+      # Installs once here (with --with-deps so system libs land too); touch
+      # the same marker file `make test-e2e` checks so it doesn't redo the
+      # ~150MB chromium download on every CI run.
+      - name: playwright browsers
+        run: |
+          cd tests/playwright && npm ci
+          npx playwright install --with-deps chromium
+          touch node_modules/.playwright-browsers
+      - name: make test-e2e
+        run: make test-e2e

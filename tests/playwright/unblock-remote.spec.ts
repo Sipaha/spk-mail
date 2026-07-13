@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './helpers'
 
 test('blocked remote image becomes visible after unblock', async ({ page, request }) => {
   // Add a fixture with a remote image at runtime. Use a per-test unique

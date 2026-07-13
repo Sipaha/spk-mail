@@ -1,18 +1,22 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, waitForAppReady, waitForSseListThreads } from './helpers'
 
 test('reply lands in the same thread', async ({ page, request }) => {
   await page.goto('/')
-  await expect(page.getByText('Test Personal')).toBeVisible({ timeout: 10_000 })
+  await waitForAppReady(page)
 
-  // Inject root + reply (subject normalization buckets them via the SAME normalized subject)
+  const ssePost1 = waitForSseListThreads(page)
   const r1 = await request.post('/api/_test/inject-message', {
     data: { email: 'alice@example.com', from: 'Bob <b@x>', subject: 'Topic A', body_text: 'first' }
   })
   expect(r1.ok(), `inject root failed: ${r1.status()}`).toBeTruthy()
+  await ssePost1
+
+  const ssePost2 = waitForSseListThreads(page)
   const r2 = await request.post('/api/_test/inject-message', {
     data: { email: 'alice@example.com', from: 'Bob <b@x>', subject: 'Re: Topic A', body_text: 'second' }
   })
   expect(r2.ok(), `inject reply failed: ${r2.status()}`).toBeTruthy()
+  await ssePost2
 
   // Both subjects normalize to "topic a" so they share a thread. The
   // inbox row shows "topic a" lowercased because the thread row uses

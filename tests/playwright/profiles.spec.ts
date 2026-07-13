@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './helpers'
 
 test('user can create a profile, switch to it, and see only its accounts', async ({ page, request }) => {
   await page.goto('/')

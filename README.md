@@ -33,8 +33,9 @@ That's it. There is no other network activity. No data is collected, transmitted
 
     make build           # frontend + Go binary at build/bin/spk-mail
     make build-desktop   # native Wails desktop binary (build/bin/spk-mail-desktop)
+    make release         # production desktop binary (build/bin/spk-mail-release; DevTools off)
 
-Requirements: Go 1.26.2, Node 20+, a C toolchain (CGO is enabled for SQLite).
+Requirements: Go 1.26.5, Node 20+, a C toolchain (CGO is enabled for SQLite). For the Wails desktop binary (`make build-desktop`, `make run`) you also need `libgtk-3-dev` and `libwebkit2gtk-4.1-dev` (see `.github/workflows/ci.yml`).
 
 ## Run
 
@@ -68,7 +69,7 @@ All on-disk state lives under `~/.spk/spk-mail/` so it sits alongside other SPK 
 | `~/.spk/spk-mail/db.sqlite` | Messages, threads, attachments metadata, FTS5 index |
 | `~/.spk/spk-mail/secrets.bin` | AES-256-GCM blob of per-account IMAP passwords |
 | `~/.spk/spk-mail/blobs/...` | Content-addressed attachment blob store |
-| `~/.spk/spk-mail/attachments/...` | Legacy per-message attachment tree (pre-v8 migration) |
+| `~/.spk/spk-mail/attachments/...` | Legacy per-message attachment tree (pre-v7; migrated by schema v8) |
 
 ## License
 

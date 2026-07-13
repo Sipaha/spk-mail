@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './helpers'
 
 test('attachment chip becomes enabled after download', async ({ page }) => {
   await page.goto('/')

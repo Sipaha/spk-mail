@@ -7,7 +7,7 @@ packages bundled into the frontend.
 ## 1. Go modules
 
 This section lists Go modules linked into the spk-mail binary (union of
-`go build ./cmd/spk-mail` and `go build -tags=wails ./cmd/spk-mail`),
+`go build ./cmd/spk-mail` and `go build -tags "wails desktop_only" ./cmd/spk-mail`),
 their detected licenses, and links to upstream LICENSE files.
 
 The list was generated with [`go-licenses`](https://github.com/google/go-licenses).
@@ -15,7 +15,7 @@ To regenerate:
 
     go install github.com/google/go-licenses@latest
     go-licenses csv ./cmd/spk-mail > /tmp/default.csv
-    GOFLAGS='-tags=wails' go-licenses csv ./cmd/spk-mail > /tmp/wails.csv
+    GOFLAGS='-tags="wails desktop_only"' go-licenses csv ./cmd/spk-mail > /tmp/wails.csv
     sort -u /tmp/default.csv /tmp/wails.csv
 
 The `sort -u` output is raw CSV (`module,LICENSE-url,license`); paste each
@@ -87,7 +87,7 @@ root.
 | `github.com/mattn/go-isatty` | MIT | https://github.com/mattn/go-isatty/blob/v0.0.20/LICENSE |
 | `github.com/samber/lo` | MIT | https://github.com/samber/lo/blob/v1.52.0/LICENSE |
 | `github.com/sergi/go-diff/diffmatchpatch` | MIT | https://github.com/sergi/go-diff/blob/v1.4.0/LICENSE |
-| `github.com/wailsapp/wails/v3` | MIT | https://github.com/wailsapp/wails/blob/v3.0.0-alpha.78/v3/LICENSE |
+| `github.com/wailsapp/wails/v3` | MIT | https://github.com/wailsapp/wails/blob/v3.0.0-alpha.95/v3/LICENSE |
 | `github.com/zalando/go-keyring` | MIT | https://github.com/zalando/go-keyring/blob/v0.2.8/LICENSE |
 | `gopkg.in/yaml.v3` | MIT | https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE |
 | `modernc.org/libc` | MIT | https://gitlab.com/cznic/libc/blob/v1.72.0/LICENSE-3RD-PARTY.md |
@@ -128,7 +128,7 @@ Generated with [`license-checker`](https://www.npmjs.com/package/license-checker
 
 | Package | License | Repository |
 |---|---|---|
-| `@wailsio/runtime@3.0.0-alpha.78` | MIT | https://github.com/wailsapp/wails |
+| `@wailsio/runtime@3.0.0-alpha.95` | MIT | https://github.com/wailsapp/wails |
 | `csstype@3.2.3` | MIT | https://github.com/frenic/csstype |
 | `react@19.2.5` | MIT | https://github.com/facebook/react |
 | `react-dom@19.2.5` | MIT | https://github.com/facebook/react |

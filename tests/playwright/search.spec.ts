@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './helpers'
 
 test('search by free text shows snippets', async ({ page }) => {
   await page.goto('/')

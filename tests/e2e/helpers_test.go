@@ -5,12 +5,27 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+var apiTokenRE = regexp.MustCompile(`name="spk-mail-api-token" content="([^"]+)"`)
+
+func apiTokenFromIndex(t *testing.T, base string) string {
+	t.Helper()
+	r, err := http.Get(base + "/")
+	require.NoError(t, err)
+	body, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
+	require.NoError(t, err)
+	m := apiTokenRE.FindSubmatch(body)
+	require.NotEmpty(t, m, "api token meta tag missing from index.html")
+	return string(m[1])
+}
 
 // freePort returns a local TCP port the OS just confirmed was free, by
 // briefly binding to :0 and closing the listener. There is a small race
@@ -32,7 +47,7 @@ func freePort(t *testing.T) (port int, addr string) {
 // expected by transport.OriginGuard. The guard requires every state-changing
 // request to carry Origin (or Referer) matching the server's Host — without
 // this helper, raw http.Post would 403.
-func postJSON(t *testing.T, base, path string, body []byte) *http.Response {
+func postJSON(t *testing.T, base, path string, body []byte, token string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest("POST", base+path, bytes.NewReader(body))
 	if err != nil {
@@ -40,6 +55,9 @@ func postJSON(t *testing.T, base, path string, body []byte) *http.Response {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", base)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("post %s: %v", path, err)

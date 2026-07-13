@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestSmoke_InjectTriggersThread(t *testing.T) {
 	bin := os.Getenv("SPKMAIL_BIN")
 	if bin == "" {
@@ -37,16 +36,17 @@ func TestSmoke_InjectTriggersThread(t *testing.T) {
 
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 	waitURL(t, base+"/")
+	token := apiTokenFromIndex(t, base)
 
 	body, _ := json.Marshal(map[string]any{
 		"email": "alice@example.com", "from": "Bob <b@x>", "subject": "injected", "body_text": "hello",
 	})
-	resp := postJSON(t, base, "/api/_test/inject-message", body)
+	resp := postJSON(t, base, "/api/_test/inject-message", body, token)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 	readBody(resp)
 
 	require.Eventually(t, func() bool {
-		r := postJSON(t, base, "/api/ListThreads", []byte("{}"))
+		r := postJSON(t, base, "/api/ListThreads", []byte("{}"), token)
 		defer r.Body.Close()
 		var threads []map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&threads); err != nil {

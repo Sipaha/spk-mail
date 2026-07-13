@@ -8,6 +8,11 @@ import { join } from 'node:path'
 // and no stale mock-IMAP port references).
 const dataHome = mkdtempSync(join(tmpdir(), 'spk-mail-pw-'))
 
+// Per-test DB isolation: helpers.ts exports a custom `test` fixture with an
+// auto `_seedReset` hook that POSTs /api/_test/reset (re-applies basic.yaml)
+// before every spec except 01-visual-regression.spec.ts. Import { test, expect }
+// from './helpers' in new specs — not from '@playwright/test' directly.
+
 export default defineConfig({
   testDir: '.',
   // Single worker: every spec mutates shared backend state (mock IMAP server,

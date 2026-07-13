@@ -34,12 +34,13 @@ When you're done:
 | Endpoint | Body | Purpose |
 |---|---|---|
 | `POST /api/_test/seed` | a `Fixture` JSON (same shape as the YAML fixtures) | Add accounts + messages at runtime |
+| `POST /api/_test/reset` | optional `Fixture` JSON body, or empty body + `?fixture=name.yaml` | Wipe DB + mock IMAP, then re-apply a fixture (default: startup `--seed` file) |
 | `POST /api/_test/inject-message` | `{email, from, subject, body_text, folder?}` | Trigger the IDLE → notification flow |
 | `POST /api/_test/clock` | `{now: "RFC3339"}` or `{reset: true}` | Freeze "now" for deterministic screenshots |
 | `GET  /api/_test/db-dump` | — | JSON snapshot of accounts/folders/messages/threads |
 | `GET  /api/_test/logs` | — | Recent slog entries (in-memory ring buffer) |
 
-These routes are only mounted when the binary is started with `--test-api`; they also return 404 in a `-tags desktop_only` build (the production desktop binary built via `make build-desktop`).
+These routes are only mounted when the binary is started with `--test-api` in browser mode (`make build` / `make run-browser`). Without `--test-api` they return 404. A `desktop_only` build (`make build-desktop`) rejects `--browser` entirely — browser mode is disabled, not a 404 on the test routes.
 
 ## Recipe — verify the new-message notification flow
 
@@ -49,12 +50,17 @@ These routes are only mounted when the binary is started with `--test-api`; they
 
 # 2. Wait for boot (Playwright will do this automatically via webServer config)
 
-# 3. Inject a message via the test API
+# 3. Extract the per-run API bearer token from index.html
+TOKEN=$(curl -s http://127.0.0.1:5174/ | sed -n 's/.*name="spk-mail-api-token" content="\([^"]*\)".*/\1/p')
+
+# 4. Inject a message via the test API (Origin + Authorization required)
 curl -s -X POST http://127.0.0.1:5174/api/_test/inject-message \
     -H 'Content-Type: application/json' \
+    -H 'Origin: http://127.0.0.1:5174' \
+    -H "Authorization: Bearer $TOKEN" \
     -d '{"email":"alice@example.com","from":"Bob <b@x>","subject":"Hello","body_text":"hi"}'
 
-# 4. Open the browser via Playwright MCP and assert the message shows up
+# 5. Open the browser via Playwright MCP and assert the message shows up
 ```
 
 In Playwright MCP form:
@@ -66,7 +72,7 @@ In Playwright MCP form:
 ## Recipe — visual regression run
 
 1. `POST /api/_test/clock { now: "2026-04-27T12:00:00Z" }` — freezes relative-time strings.
-2. Navigate every interesting URL: `/`, `/#/settings/accounts`, `/#/search?q=update`.
+2. Navigate every interesting view: `/`, `/#/settings/accounts`, and search via the in-pane **SearchBar** (type `update` in the search input on `/` — do not use the legacy `/#/search?q=…` hash; it only seeds the store and redirects to `#/`).
 3. `browser_take_screenshot` on each; pass to `toHaveScreenshot()` in tests.
 4. `POST /api/_test/clock { reset: true }` to release the freeze.
 
@@ -74,7 +80,7 @@ The committed Playwright spec `tests/playwright/01-visual-regression.spec.ts` al
 
 ## Recipe — debug an event-handling bug
 
-1. Open `/api/_test/logs` to see recent slog entries.
+1. Open `/api/_test/logs?token=$TOKEN` (or send `Authorization: Bearer $TOKEN`) to see recent slog entries.
 2. `browser_console_messages` to read frontend errors.
 3. `browser_network_requests` to see which `/api/*` calls fired and their responses.
 4. `GET /api/_test/db-dump` to confirm what made it into SQLite.
