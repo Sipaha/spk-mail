@@ -1,8 +1,6 @@
 package fsutil
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -49,9 +47,7 @@ func WriteContentAddressed(r io.Reader, finalPath func(sha string) string) (sha 
 	// (the tmp file no longer exists at that path).
 	defer func() { _ = os.Remove(tmpName) }()
 
-	h := sha256.New()
-	tee := io.TeeReader(r, h)
-	n, err := io.Copy(tmp, tee)
+	sha, n, err := sha256Copy(tmp, r)
 	if err != nil {
 		_ = tmp.Close()
 		return "", 0, err
@@ -64,7 +60,6 @@ func WriteContentAddressed(r io.Reader, finalPath func(sha string) string) (sha 
 		return "", 0, err
 	}
 
-	sha = hex.EncodeToString(h.Sum(nil))
 	dest := finalPath(sha)
 
 	if _, statErr := os.Stat(dest); statErr == nil {

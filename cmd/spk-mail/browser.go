@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -45,8 +46,19 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, t
 	}
 
 	masterKey, err := secrets.LoadOrCreateMasterKey()
-	if err != nil {
-		return fmt.Errorf("master key: %w (run desktop mode for password prompt)", err)
+	if errors.Is(err, secrets.ErrKeyringUnavailable) {
+		pw := os.Getenv("SPK_MAIL_PASSWORD")
+		if pw == "" {
+			return fmt.Errorf("master key: %w (set SPK_MAIL_PASSWORD when keyring is unavailable)", err)
+		}
+		saltPath := filepath.Join(filepath.Dir(paths.SecretsFile), "master.salt")
+		salt, serr := secrets.LoadOrCreateSalt(saltPath)
+		if serr != nil {
+			return fmt.Errorf("master key salt: %w", serr)
+		}
+		masterKey = secrets.DeriveKeyFromPassword(pw, salt)
+	} else if err != nil {
+		return fmt.Errorf("master key: %w", err)
 	}
 	sec, err := secrets.Open(paths.SecretsFile, masterKey)
 	if err != nil {
@@ -65,6 +77,7 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, t
 	mux := http.NewServeMux()
 	httpAPI := transport.NewHTTP(stub, em)
 	mux.Handle("/api/", httpAPI)
+	apiToken := httpAPI.AuthToken()
 
 	var mock *mockimap.Server
 	if mockIMAP {
@@ -88,14 +101,22 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, t
 	// /api/_test/seed or inject-message cross-origin while --test-api is on.
 	if testAPI {
 		testMux := http.NewServeMux()
-		mount := &testapi.Mount{API: stub, Store: st, Mock: mock, Logs: logBuf, Clock: testClock}
+		var fixturesDir, defaultFixture string
+		if seedPath != "" {
+			fixturesDir = filepath.Dir(seedPath)
+			defaultFixture = filepath.Base(seedPath)
+		}
+		mount := &testapi.Mount{
+			API: stub, Store: st, Mock: mock, Logs: logBuf, Clock: testClock,
+			FixturesDir: fixturesDir, DefaultFixture: defaultFixture,
+		}
 		mount.Register(testMux)
-		mux.Handle("/api/_test/", transport.OriginGuard(testMux))
+		mux.Handle("/api/_test/", transport.AuthGuard(apiToken, transport.OriginGuard(testMux)))
 		slog.Warn("test-api routes enabled at /api/_test/* — do not expose this server publicly")
 	}
 
-	// Serve embedded frontend at /
-	mux.Handle("/", http.FileServerFS(frontendFS()))
+	// Serve embedded frontend at / (index.html carries the API bearer token).
+	mux.Handle("/", frontendHandler(apiToken, frontendFS()))
 
 	if seedPath != "" {
 		fixture, err := mockimap.LoadFixture(seedPath)

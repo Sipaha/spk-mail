@@ -31,14 +31,18 @@ func (f *failingAPI) GetThread(_ context.Context, _ int64) ([]api.MessageDTO, er
 // the raw Go error string. A regression that re-introduces err.Error() into
 // the body would leak IMAP hostnames, sql driver text, and filesystem paths
 // to anyone who pastes a screenshot into a public bug report.
+func authHeader(h *HTTP) string { return "Bearer " + h.AuthToken() }
+
 func TestHTTP_SanitizesInternalErrors(t *testing.T) {
 	stub := testapi.NewStub(t)
-	srv := httptest.NewServer(NewHTTP(&failingAPI{API: stub}, nil))
+	h := NewHTTP(&failingAPI{API: stub}, nil)
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
 	req, _ := http.NewRequest("POST", srv.URL+"/api/GetThread", bytes.NewReader([]byte(`{"id":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", srv.URL)
+	req.Header.Set("Authorization", authHeader(h))
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	body, _ := io.ReadAll(resp.Body)
@@ -60,7 +64,8 @@ func TestHTTP_SanitizesInternalErrors(t *testing.T) {
 // A regression here would silently expose the raw DB on a production deploy.
 func TestHTTP_TestAPIRoutesNotMountedByDefault(t *testing.T) {
 	stub := testapi.NewStub(t)
-	srv := httptest.NewServer(NewHTTP(stub, nil))
+	h := NewHTTP(stub, nil)
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
 	for _, path := range []string{
@@ -70,6 +75,7 @@ func TestHTTP_TestAPIRoutesNotMountedByDefault(t *testing.T) {
 	} {
 		req, _ := http.NewRequest("GET", srv.URL+path, nil)
 		req.Header.Set("Origin", srv.URL)
+		req.Header.Set("Authorization", authHeader(h))
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
 		_ = resp.Body.Close()
@@ -80,7 +86,8 @@ func TestHTTP_TestAPIRoutesNotMountedByDefault(t *testing.T) {
 
 func TestHTTP_AddAccountThenList(t *testing.T) {
 	stub := testapi.NewStub(t)
-	srv := httptest.NewServer(NewHTTP(stub, nil))
+	h := NewHTTP(stub, nil)
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
 	// Helper: POST with a same-origin Origin header so OriginGuard accepts.
@@ -88,6 +95,7 @@ func TestHTTP_AddAccountThenList(t *testing.T) {
 		req, _ := http.NewRequest("POST", srv.URL+path, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", srv.URL)
+		req.Header.Set("Authorization", authHeader(h))
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
 		return resp

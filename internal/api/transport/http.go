@@ -17,18 +17,23 @@ import (
 )
 
 type HTTP struct {
-	api    api.API
-	events *api.Emitter
-	mux    *http.ServeMux
+	api       api.API
+	events    *api.Emitter
+	mux       *http.ServeMux
+	authToken string
 }
 
 func NewHTTP(a api.API, em *api.Emitter) *HTTP {
-	h := &HTTP{api: a, events: em, mux: http.NewServeMux()}
+	h := &HTTP{api: a, events: em, mux: http.NewServeMux(), authToken: newAuthToken()}
 	h.routes()
 	return h
 }
 
 func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if apiPath(r.URL.Path) && !h.authorized(r, r.URL.Path) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	// Delegate the CSRF check to OriginGuard so the API mux and the
 	// `/api/_test/*` testapi mux apply identical rules.
 	OriginGuard(h.mux).ServeHTTP(w, r)
@@ -264,15 +269,17 @@ func httpHandle[Req any](fn func(context.Context, *Req) (any, error)) http.Handl
 // grepped against the logs. 4 random bytes (8 hex chars) is wide enough to
 // disambiguate within a single log buffer; collisions across runs do not
 // matter because logs are rotated.
-func newErrorID() string {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failure on Linux is a kernel-level emergency; fall
-		// back to a fixed id so we don't return an empty string and lose
-		// the visible signal in the response.
-		return "00000000"
+func newErrorID() string { return randomHex(4) }
+
+// randomHex returns n cryptographically random bytes as hex. A crypto/rand
+// failure is a kernel-level emergency and must not degrade into a predictable
+// value — an auth token built from one would be guessable — so it panics.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
 	}
-	return hex.EncodeToString(b[:])
+	return hex.EncodeToString(b)
 }
 
 // ssePingInterval bounds how long the connection can stay idle before we
