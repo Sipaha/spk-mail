@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 )
@@ -19,7 +19,7 @@ import (
 type Engine struct {
 	store   storage.Writer
 	secrets *secrets.Store
-	em      *api.Emitter
+	em      *events.Emitter
 
 	mu              sync.Mutex
 	workers         map[int64]*AccountWorker
@@ -50,7 +50,7 @@ type Engine struct {
 }
 
 // NewEngine constructs an Engine. It performs no I/O.
-func NewEngine(s storage.Writer, sec *secrets.Store, em *api.Emitter) *Engine {
+func NewEngine(s storage.Writer, sec *secrets.Store, em *events.Emitter) *Engine {
 	return &Engine{
 		store:           s,
 		secrets:         sec,
@@ -66,7 +66,7 @@ func NewEngine(s storage.Writer, sec *secrets.Store, em *api.Emitter) *Engine {
 // NewEngineWithDir constructs an Engine that will additionally start an
 // AttachmentDownloader per account, writing blobs under attachDir. If
 // attachDir is empty no downloaders are spawned (matching NewEngine).
-func NewEngineWithDir(s storage.Writer, sec *secrets.Store, em *api.Emitter, attachDir string) *Engine {
+func NewEngineWithDir(s storage.Writer, sec *secrets.Store, em *events.Emitter, attachDir string) *Engine {
 	e := NewEngine(s, sec, em)
 	e.attachDir = attachDir
 	return e
@@ -98,7 +98,7 @@ func (e *Engine) Run(ctx context.Context) {
 		// to, and the frontend's AccountStatus handler keys on account_id
 		// (Number(undefined) → NaN matches nothing), so it would swallow this
 		// silently. WriteError renders a banner via setWriteError.
-		api.Emit(e.em, "WriteError", map[string]any{
+		events.Emit(e.em, "WriteError", map[string]any{
 			"err": "failed to load accounts: " + err.Error(),
 		})
 	} else {

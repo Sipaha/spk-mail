@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2"
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +51,7 @@ func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	writer := NewStoreWriter(st, em, "")
 	go writer.Run(runCtx)
 
@@ -121,7 +121,7 @@ func TestAttachmentDownloader_DedupesIdenticalContent(t *testing.T) {
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	writer := NewStoreWriter(st, em, "")
 	go writer.Run(runCtx)
 	w := NewAccountWorker(accID, st, sec, writer, em)

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/fsutil"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -24,14 +24,14 @@ type AttachmentDownloader struct {
 	accountID int64
 	store     storage.Writer
 	secrets   *secrets.Store
-	em        *api.Emitter
+	em        *events.Emitter
 	dataDir   string // root of the on-disk blob tree (BlobPath joins under it)
 }
 
 // NewAttachmentDownloader constructs the worker. It performs no I/O.
 // dataDir is the root the blob store lives under (BlobPath composes
 // <dataDir>/blobs/<aa>/<bb>/<sha256>).
-func NewAttachmentDownloader(accountID int64, s storage.Writer, sec *secrets.Store, em *api.Emitter, dataDir string) *AttachmentDownloader {
+func NewAttachmentDownloader(accountID int64, s storage.Writer, sec *secrets.Store, em *events.Emitter, dataDir string) *AttachmentDownloader {
 	return &AttachmentDownloader{accountID: accountID, store: s, secrets: sec, em: em, dataDir: dataDir}
 }
 
@@ -117,7 +117,7 @@ func (d *AttachmentDownloader) runOnce(ctx context.Context) {
 			slog.Warn("downloader update", "att", p.AttachmentID, "err", err)
 			continue
 		}
-		d.em.Emit(api.Event{Type: "AttachmentReady", Payload: map[string]any{
+		d.em.Emit(events.Event{Type: "AttachmentReady", Payload: map[string]any{
 			"attachment_id": p.AttachmentID,
 			"message_id":    p.MessageID,
 		}})

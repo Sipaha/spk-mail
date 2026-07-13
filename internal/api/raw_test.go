@@ -16,6 +16,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/mockimap"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -146,7 +147,7 @@ func stubWithRawSetup(t *testing.T) (*Stub, int64, int64, *imapmemserver.User, *
 	})
 	require.NoError(t, err)
 
-	stub := NewStub(st, sec, NewEmitter(), nil)
+	stub := NewStub(st, sec, events.NewEmitter(), nil)
 	stub.DataDir = dir
 
 	u := mock.User("alice@example.com")

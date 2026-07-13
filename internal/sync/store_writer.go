@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/fsutil"
 	mimep "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/storage"
@@ -25,12 +25,12 @@ const rawRetention = 30 * 24 * time.Hour
 
 type StoreWriter struct {
 	store   storage.Writer
-	em      *api.Emitter
+	em      *events.Emitter
 	in      chan IncomingMessage
 	dataDir string // root of the on-disk blob store; "" disables raw capture
 }
 
-func NewStoreWriter(s storage.Writer, em *api.Emitter, dataDir string) *StoreWriter {
+func NewStoreWriter(s storage.Writer, em *events.Emitter, dataDir string) *StoreWriter {
 	return &StoreWriter{store: s, em: em, in: make(chan IncomingMessage, 256), dataDir: dataDir}
 }
 
@@ -56,7 +56,7 @@ func (w *StoreWriter) Run(ctx context.Context) {
 		if r := recover(); r != nil {
 			// Don't take the whole engine down on a writer panic — log it
 			// and let the worker error path surface as a WriteError.
-			api.Emit(w.em, "WriteError", map[string]any{"err": fmt.Sprintf("writer panic: %v", r)})
+			events.Emit(w.em, "WriteError", map[string]any{"err": fmt.Sprintf("writer panic: %v", r)})
 		}
 	}()
 	for {
@@ -78,7 +78,7 @@ func (w *StoreWriter) Run(ctx context.Context) {
 				return
 			}
 			if err := w.process(ctx, m); err != nil {
-				api.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": m.UID, "folder_id": m.FolderID})
+				events.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": m.UID, "folder_id": m.FolderID})
 			}
 		}
 	}
@@ -97,7 +97,7 @@ func (w *StoreWriter) drainOnShutdown(pending *IncomingMessage) {
 	deadline := time.After(writerDrainGrace)
 	if pending != nil {
 		if err := w.process(drainCtx, *pending); err != nil {
-			api.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": pending.UID, "folder_id": pending.FolderID})
+			events.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": pending.UID, "folder_id": pending.FolderID})
 		}
 	}
 	for {
@@ -107,7 +107,7 @@ func (w *StoreWriter) drainOnShutdown(pending *IncomingMessage) {
 				return
 			}
 			if err := w.process(drainCtx, m); err != nil {
-				api.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": m.UID, "folder_id": m.FolderID})
+				events.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": m.UID, "folder_id": m.FolderID})
 			}
 		case <-deadline:
 			if n := len(w.in); n > 0 {
@@ -218,11 +218,11 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 		return err
 	}
 
-	w.em.Emit(api.Event{Type: "MessageInserted", Payload: map[string]any{
+	w.em.Emit(events.Event{Type: "MessageInserted", Payload: map[string]any{
 		"id": msgID, "thread_id": threadID, "account_id": m.AccountID, "folder_id": m.FolderID,
 	}})
 	if !m.IsResync && m.FolderRole == "inbox" && !slices.Contains(m.Flags, `\Seen`) {
-		w.em.Emit(api.Event{Type: "MessageArrived", Payload: map[string]any{
+		w.em.Emit(events.Event{Type: "MessageArrived", Payload: map[string]any{
 			"id": msgID, "thread_id": threadID, "account_id": m.AccountID,
 			"subject": parsed.Subject, "from": parsed.From,
 		}})

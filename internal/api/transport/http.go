@@ -14,16 +14,17 @@ import (
 	"time"
 
 	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 )
 
 type HTTP struct {
 	api       api.API
-	events    *api.Emitter
+	events    *events.Emitter
 	mux       *http.ServeMux
 	authToken string
 }
 
-func NewHTTP(a api.API, em *api.Emitter) *HTTP {
+func NewHTTP(a api.API, em *events.Emitter) *HTTP {
 	h := &HTTP{api: a, events: em, mux: http.NewServeMux(), authToken: newAuthToken()}
 	h.routes()
 	return h
@@ -233,7 +234,10 @@ func httpHandle[Req any](fn func(context.Context, *Req) (any, error)) http.Handl
 			r.Body = http.MaxBytesReader(w, r.Body, maxAPIRequestBytes)
 			if r.ContentLength != 0 {
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+					// Don't echo err.Error(): a decode error can quote request
+					// bytes back, and MaxBytesReader's message leaks the limit.
+					// The client controls the body, so a bare 400 is enough.
+					http.Error(w, "bad request body", http.StatusBadRequest)
 					return
 				}
 			}

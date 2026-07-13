@@ -16,7 +16,7 @@ type AccountState struct {
 //
 // The worker writes here on the same lines where it emits an AccountStatus
 // event, rather than the engine subscribing to the event bus and learning the
-// state from it: Emit is deliberately drop-on-full (see api.Emitter), so a busy
+// state from it: Emit is deliberately drop-on-full (see events.Emitter), so a busy
 // subscriber could miss the "error" event and leave ListAccounts insisting the
 // account is fine. The tracker is the source of truth; the event is the
 // notification.

@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/storage"
 )
 
@@ -23,7 +23,7 @@ func TestStoreWriter_InsertsAndCreatesThread(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	w := NewStoreWriter(st, em, "")
 	go w.Run(runCtx)
 
@@ -65,7 +65,7 @@ func TestStoreWriter_DuplicateInsert(t *testing.T) {
 	role := "inbox"
 	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	w := NewStoreWriter(st, em, "")
 	go w.Run(ctx)
 
@@ -130,7 +130,7 @@ func TestStoreWriter_CapturesRawForFreshMessage(t *testing.T) {
 	role := "inbox"
 	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	w := NewStoreWriter(st, em, dir)
 	go w.Run(ctx)
 
@@ -166,7 +166,7 @@ func TestStoreWriter_SkipsRawForOldMessage(t *testing.T) {
 	role := "inbox"
 	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	w := NewStoreWriter(st, em, dir)
 	go w.Run(ctx)
 
@@ -208,7 +208,7 @@ func TestStoreWriter_IsResyncGatesArrived(t *testing.T) {
 	role := "inbox"
 	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	events, unsub := em.Subscribe()
 	t.Cleanup(unsub)
 
@@ -320,7 +320,7 @@ func TestStoreWriter_DrainOnShutdownPersistsQueuedMessages(t *testing.T) {
 	fID, _ := st.UpsertFolder(ctx, storage.FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", Role: &role, UIDValidity: 1, UIDNext: 1})
 
 	runCtx, cancel := context.WithCancel(ctx)
-	w := NewStoreWriter(st, api.NewEmitter(), "")
+	w := NewStoreWriter(st, events.NewEmitter(), "")
 
 	// Queue every message BEFORE Run starts consuming, then cancel: Run's
 	// first iteration finds the ctx already done and the channel already
@@ -364,7 +364,7 @@ func TestStoreWriter_ShutdownIsImmediateWhenQueueEmpty(t *testing.T) {
 	defer st.Close()
 
 	runCtx, cancel := context.WithCancel(ctx)
-	w := NewStoreWriter(st, api.NewEmitter(), "")
+	w := NewStoreWriter(st, events.NewEmitter(), "")
 
 	done := make(chan struct{})
 	go func() {

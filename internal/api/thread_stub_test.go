@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/storage"
 	"github.com/spk/spk-mail/internal/teststore"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,7 @@ func newSpyStub(t *testing.T) (*Stub, *countingStore, *storage.Store, *spyEngine
 
 	cs := &countingStore{Writer: s}
 	eng := &spyEngine{worker: &spyWorker{}}
-	return NewStub(cs, sec, NewEmitter(), eng), cs, s, eng
+	return NewStub(cs, sec, events.NewEmitter(), eng), cs, s, eng
 }
 
 // TestGetThread_BatchAttachments proves Stub.GetThread issues exactly one
@@ -172,18 +173,18 @@ func TestMarkRead_BatchTx(t *testing.T) {
 
 	// Drain emitted events. Subscribe is bounded (cap 64); MarkRead emits
 	// synchronously before returning, so all events are already in the channel.
-	var events []Event
+	var evs []events.Event
 	for {
 		select {
 		case ev := <-evCh:
-			events = append(events, ev)
+			evs = append(evs, ev)
 		default:
 			goto done
 		}
 	}
 done:
-	gotIDs := make([]int64, 0, len(events))
-	for _, ev := range events {
+	gotIDs := make([]int64, 0, len(evs))
+	for _, ev := range evs {
 		require.Equal(t, "MessageUpdated", ev.Type)
 		id, ok := ev.Payload["id"].(int64)
 		require.True(t, ok, "payload.id must be int64; got %T", ev.Payload["id"])
@@ -260,21 +261,21 @@ func TestMarkFolderRead_BatchTx(t *testing.T) {
 	require.Len(t, op.UIDs, 5, "bulk Op carries every flipped UID in one slice")
 	require.ElementsMatch(t, []int64{1, 2, 3, 4, 5}, op.UIDs)
 
-	var events []Event
+	var evs []events.Event
 	for {
 		select {
 		case ev := <-evCh:
-			events = append(events, ev)
+			evs = append(evs, ev)
 		default:
 			goto done
 		}
 	}
 done:
-	require.Len(t, events, 1, "MarkFolderRead must emit exactly ONE FolderMarkedRead event")
-	require.Equal(t, "FolderMarkedRead", events[0].Type)
-	require.Equal(t, accID, events[0].Payload["account_id"])
-	require.Equal(t, folderID, events[0].Payload["folder_id"])
-	require.Equal(t, int64(5), events[0].Payload["count"])
+	require.Len(t, evs, 1, "MarkFolderRead must emit exactly ONE FolderMarkedRead event")
+	require.Equal(t, "FolderMarkedRead", evs[0].Type)
+	require.Equal(t, accID, evs[0].Payload["account_id"])
+	require.Equal(t, folderID, evs[0].Payload["folder_id"])
+	require.Equal(t, int64(5), evs[0].Payload["count"])
 }
 
 // TestMarkFolderRead_NothingToFlip — folder with all-seen messages: storage
@@ -368,19 +369,19 @@ func TestToggleThreadFlagged_Add(t *testing.T) {
 	require.Equal(t, []string{`\Flagged`}, op.Flags)
 	require.Equal(t, []int64{3}, op.UIDs)
 
-	var events []Event
+	var evs []events.Event
 	for {
 		select {
 		case ev := <-evCh:
-			events = append(events, ev)
+			evs = append(evs, ev)
 		default:
 			goto done
 		}
 	}
 done:
-	require.Len(t, events, 1)
-	require.Equal(t, "MessageUpdated", events[0].Type)
-	require.Equal(t, m3, events[0].Payload["id"])
+	require.Len(t, evs, 1)
+	require.Equal(t, "MessageUpdated", evs[0].Type)
+	require.Equal(t, m3, evs[0].Payload["id"])
 }
 
 // TestToggleThreadFlagged_Remove — thread with 2 flagged + 1 unflagged.
@@ -428,19 +429,19 @@ func TestToggleThreadFlagged_Remove(t *testing.T) {
 	require.ElementsMatch(t, []int64{1, 3}, op.UIDs,
 		"both flagged UIDs in one bulk Op; the un-flagged UID 2 must be absent")
 
-	var events []Event
+	var evs []events.Event
 	for {
 		select {
 		case ev := <-evCh:
-			events = append(events, ev)
+			evs = append(evs, ev)
 		default:
 			goto done
 		}
 	}
 done:
-	require.Len(t, events, 2, "one MessageUpdated per flipped message")
-	gotIDs := make([]int64, 0, len(events))
-	for _, ev := range events {
+	require.Len(t, evs, 2, "one MessageUpdated per flipped message")
+	gotIDs := make([]int64, 0, len(evs))
+	for _, ev := range evs {
 		require.Equal(t, "MessageUpdated", ev.Type)
 		id, ok := ev.Payload["id"].(int64)
 		require.True(t, ok, "payload.id must be int64; got %T", ev.Payload["id"])
@@ -478,7 +479,7 @@ func TestToggleThreadFlagged_Noop(t *testing.T) {
 func TestToggleThreadFlagged_NoEngine(t *testing.T) {
 	s, sec := teststore.Open(t)
 	cs := &countingStore{Writer: s}
-	stub := NewStub(cs, sec, NewEmitter(), nil) // nil engine
+	stub := NewStub(cs, sec, events.NewEmitter(), nil) // nil engine
 
 	ctx := context.Background()
 	accID, _ := s.InsertAccount(ctx, storage.AccountRow{
@@ -565,7 +566,7 @@ func TestToggleThreadFlagged_MultiFolder(t *testing.T) {
 func TestMarkFolderRead_NoEngine(t *testing.T) {
 	s, sec := teststore.Open(t)
 	cs := &countingStore{Writer: s}
-	stub := NewStub(cs, sec, NewEmitter(), nil) // nil engine
+	stub := NewStub(cs, sec, events.NewEmitter(), nil) // nil engine
 
 	ctx := context.Background()
 	accID, _ := s.InsertAccount(ctx, storage.AccountRow{

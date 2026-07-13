@@ -1,7 +1,7 @@
 //go:build wails
 
 // Package desktop launches the Wails application: a single window loading the
-// embedded React UI and an event bus that mirrors api.Emitter into the
+// embedded React UI and an event bus that mirrors events.Emitter into the
 // frontend's CallByName/Events.On surface.
 package desktop
 
@@ -22,7 +22,7 @@ import (
 type Options struct {
 	FrontendFS    fs.FS
 	API           api.API
-	Emitter       *api.Emitter
+	Emitter       *events.Emitter
 	IconPNG       []byte
 	UnreadIconPNG []byte // optional accent variant; tray uses it when unread > 0
 }
@@ -44,7 +44,7 @@ func Run(ctx context.Context, opts Options) error {
 		},
 	})
 
-	// Bridge api.Emitter -> Wails custom events so the frontend can listen
+	// Bridge events.Emitter -> Wails custom events so the frontend can listen
 	// via the runtime's Events.On(name, ...) API.
 	go func() {
 		ch, unsub := opts.Emitter.Subscribe()

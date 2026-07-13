@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2"
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/mockimap"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -53,7 +53,7 @@ func TestEngine_TwoAccountsSyncInParallel(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	eng := NewEngine(st, sec, em)
 	go eng.Run(runCtx)
 
@@ -80,7 +80,7 @@ func TestEngine_AttachmentDownloaderWiring(t *testing.T) {
 	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), make([]byte, 32))
 	require.NoError(t, err)
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	attachDir := filepath.Join(dir, "attach")
 	e := NewEngineWithDir(st, sec, em, attachDir)
 	require.NotNil(t, e.downloaders)

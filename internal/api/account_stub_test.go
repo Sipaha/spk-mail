@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/teststore"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +31,7 @@ func TestListAccounts_StatusComesFromEngine(t *testing.T) {
 	t.Run("worker reported an error: status and reason are surfaced", func(t *testing.T) {
 		st, sec := teststore.Open(t)
 		eng := &spyEngine{worker: &spyWorker{}, status: "error", detail: "dial tcp: connection refused", known: true}
-		s := NewStub(st, sec, NewEmitter(), eng)
+		s := NewStub(st, sec, events.NewEmitter(), eng)
 		addAccountTo(t, s)
 
 		list, err := s.ListAccounts(ctx)
@@ -43,7 +44,7 @@ func TestListAccounts_StatusComesFromEngine(t *testing.T) {
 	t.Run("no worker has reported yet: connecting, never ok", func(t *testing.T) {
 		st, sec := teststore.Open(t)
 		eng := &spyEngine{worker: &spyWorker{}, known: false}
-		s := NewStub(st, sec, NewEmitter(), eng)
+		s := NewStub(st, sec, events.NewEmitter(), eng)
 		addAccountTo(t, s)
 
 		list, err := s.ListAccounts(ctx)
@@ -55,7 +56,7 @@ func TestListAccounts_StatusComesFromEngine(t *testing.T) {
 	t.Run("worker is healthy", func(t *testing.T) {
 		st, sec := teststore.Open(t)
 		eng := &spyEngine{worker: &spyWorker{}, status: "ok", known: true}
-		s := NewStub(st, sec, NewEmitter(), eng)
+		s := NewStub(st, sec, events.NewEmitter(), eng)
 		addAccountTo(t, s)
 
 		list, err := s.ListAccounts(ctx)

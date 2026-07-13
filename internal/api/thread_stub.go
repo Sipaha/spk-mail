@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/flagop"
 	mimep "github.com/spk/spk-mail/internal/mime"
 	"github.com/spk/spk-mail/internal/storage"
@@ -265,7 +266,7 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 		s.submitFlagOp(ctx, "MarkRead", k, uids, true, `\Seen`)
 	}
 	for _, ch := range out.Changed {
-		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{
+		s.Emitter.Emit(events.Event{Type: "MessageUpdated", Payload: map[string]any{
 			"id":         ch.MessageID,
 			"account_id": ch.AccountID,
 			"folder_id":  ch.FolderID,
@@ -328,7 +329,7 @@ func (s *Stub) MarkFolderRead(ctx context.Context, folderID int64) (int64, error
 		uids[i] = ch.UID
 	}
 	s.submitFlagOp(ctx, "MarkFolderRead", folderKey{accountID, folderID}, uids, true, `\Seen`)
-	s.Emitter.Emit(Event{
+	s.Emitter.Emit(events.Event{
 		Type: "FolderMarkedRead",
 		Payload: map[string]any{
 			"account_id": accountID,
@@ -365,7 +366,7 @@ func (s *Stub) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTog
 	}
 
 	for _, ch := range out.Changed {
-		s.Emitter.Emit(Event{
+		s.Emitter.Emit(events.Event{
 			Type: "MessageUpdated",
 			Payload: map[string]any{
 				"id":         ch.MessageID,
@@ -399,7 +400,7 @@ func (s *Stub) AllowRemoteForMessage(ctx context.Context, id int64) (string, err
 	if err := s.Store.UpdateBodyHTML(ctx, id, updated); err != nil {
 		return "", err
 	}
-	s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{
+	s.Emitter.Emit(events.Event{Type: "MessageUpdated", Payload: map[string]any{
 		"id":         id,
 		"account_id": m.AccountID,
 		"folder_id":  m.FolderID,

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2"
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/flagop"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +27,7 @@ func TestAccountWorker_InitialSync(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	writer := NewStoreWriter(fx.Store, em, "")
 	go writer.Run(runCtx)
 

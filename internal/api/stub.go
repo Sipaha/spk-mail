@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/flagop"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -56,7 +57,7 @@ type Engine interface {
 type Stub struct {
 	Store   storage.Writer
 	Secrets *secrets.Store
-	Emitter *Emitter
+	Emitter *events.Emitter
 	Engine  Engine
 	// DataDir is the on-disk root the content-addressed blob store
 	// lives under (composed via storage.BlobPath). Production wires
@@ -66,6 +67,6 @@ type Stub struct {
 	DataDir string
 }
 
-func NewStub(s storage.Writer, sec *secrets.Store, em *Emitter, eng Engine) *Stub {
+func NewStub(s storage.Writer, sec *secrets.Store, em *events.Emitter, eng Engine) *Stub {
 	return &Stub{Store: s, Secrets: sec, Emitter: em, Engine: eng}
 }

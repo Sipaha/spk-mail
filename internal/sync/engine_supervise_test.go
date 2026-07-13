@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,7 +16,7 @@ func TestEngine_SuperviseBackoff(t *testing.T) {
 	var runs atomic.Int32
 
 	fx := setupMockAccount(t, "alice@example.com", "secret")
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	e := NewEngine(fx.Store, fx.Secrets, em)
 	e.runWorker = func(_ *AccountWorker, _ context.Context) {
 		runs.Add(1)

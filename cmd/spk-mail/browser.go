@@ -18,6 +18,7 @@ import (
 	"github.com/spk/spk-mail/internal/api/transport"
 	"github.com/spk/spk-mail/internal/clock"
 	"github.com/spk/spk-mail/internal/config"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/mockimap"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -65,10 +66,9 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, t
 		return err
 	}
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	// Engine writes attachments into the content-addressed blob store
-	// rooted at paths.DataDir; the legacy AttachmentsDir is retained
-	// only for migration v8 backfill of pre-v7 rows.
+	// rooted at paths.DataDir.
 	eng := mailsync.NewEngineWithDir(st, sec, em, paths.DataDir)
 	go eng.Run(ctx)
 	stub := api.NewStub(st, sec, em, engineAdapter{eng: eng})

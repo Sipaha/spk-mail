@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/spk/spk-mail/internal/api"
 	"github.com/spk/spk-mail/internal/api/testapi"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +58,7 @@ func TestHTTP_ServeHTTP_RequiresBearerToken(t *testing.T) {
 // a bare query token and demand the Authorization header instead.
 func TestHTTP_ServeHTTP_QueryTokenOnlyOnEventsRoute(t *testing.T) {
 	stub := testapi.NewStub(t)
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	h := NewHTTP(stub, em)
 	srv := httptest.NewServer(h)
 	defer srv.Close()

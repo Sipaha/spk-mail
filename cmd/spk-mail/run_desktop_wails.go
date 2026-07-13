@@ -10,6 +10,7 @@ import (
 	"github.com/spk/spk-mail/internal/appfiles"
 	"github.com/spk/spk-mail/internal/config"
 	"github.com/spk/spk-mail/internal/desktop"
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 	mailsync "github.com/spk/spk-mail/internal/sync"
@@ -40,7 +41,7 @@ func runDesktop(ctx context.Context) error {
 		return err
 	}
 
-	em := api.NewEmitter()
+	em := events.NewEmitter()
 	eng := mailsync.NewEngineWithDir(st, sec, em, paths.DataDir)
 	go eng.Run(ctx)
 

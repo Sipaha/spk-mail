@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/events"
 )
 
 // refreshInterval is the backstop cadence for refreshUnread. Events are
@@ -23,13 +24,13 @@ import (
 // while still recovering from an overnight stall in under a minute.
 const refreshInterval = 30 * time.Second
 
-// Controller wires the system tray (icon + menu + tooltip) to api.Emitter
+// Controller wires the system tray (icon + menu + tooltip) to events.Emitter
 // events: it shows desktop notifications for newly arrived mail and refreshes
 // the unread badge whenever account state changes.
 type Controller struct {
 	app        *application.App
 	api        api.API
-	emitter    *api.Emitter
+	emitter    *events.Emitter
 	baseIcon   []byte // neutral state (no unread)
 	unreadIcon []byte // accent state (unread > 0); falls back to baseIcon if nil
 	wnd        *application.WebviewWindow
@@ -54,7 +55,7 @@ type Controller struct {
 func NewController(
 	app *application.App,
 	a api.API,
-	emitter *api.Emitter,
+	emitter *events.Emitter,
 	icon []byte,
 	unreadIcon []byte,
 	wnd *application.WebviewWindow,
@@ -165,7 +166,7 @@ func (c *Controller) showWindow() {
 	c.raiseToFront()
 }
 
-func (c *Controller) consume(ch <-chan api.Event) {
+func (c *Controller) consume(ch <-chan events.Event) {
 	for ev := range ch {
 		c.dispatchEvent(ev)
 	}
@@ -174,7 +175,7 @@ func (c *Controller) consume(ch <-chan api.Event) {
 // dispatchEvent isolates a single event behind a recover so a panic in
 // SetIcon / RenderBadge / dbus does not kill the consume goroutine and
 // permanently wedge the badge. The next event still gets a fair shot.
-func (c *Controller) dispatchEvent(ev api.Event) {
+func (c *Controller) dispatchEvent(ev events.Event) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("tray: dispatch panic: %v (event=%s)", r, ev.Type)
@@ -225,7 +226,7 @@ func (c *Controller) tickRefresh() {
 // goroutine — see the comment in consume() for why decoupling matters.
 // Logs at INFO so missing notifications can be diagnosed from the
 // in-memory log buffer / journalctl: every fired path leaves a trail.
-func (c *Controller) handleMessageArrived(ev api.Event) {
+func (c *Controller) handleMessageArrived(ev events.Event) {
 	if c.notifier == nil {
 		log.Printf("tray: MessageArrived received but notifier is nil (dbus init failed at startup)")
 		return

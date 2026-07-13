@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/teststore"
 	"github.com/stretchr/testify/require"
 )
@@ -13,7 +14,7 @@ import (
 func testStub(t *testing.T) *Stub {
 	t.Helper()
 	st, sec := teststore.Open(t)
-	return NewStub(st, sec, NewEmitter(), nil)
+	return NewStub(st, sec, events.NewEmitter(), nil)
 }
 
 func TestStub_AddListRemoveAccount(t *testing.T) {
