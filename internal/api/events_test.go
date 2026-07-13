@@ -46,13 +46,14 @@ func TestEmitter_UnsubscribeClosesChannel(t *testing.T) {
 	require.NotPanics(t, unsub)
 }
 
-// TestEmitter_FullBufferDropsWithoutStallingHealthySubscribers fills a
-// subscriber's 64-slot buffer and then emits one more event. Emit runs on the
-// single StoreWriter goroutine serving every account, so it must drop that
-// event immediately rather than wait on the wedged subscriber — a wait would
-// throttle the whole write pipeline. The dropped event must never land in the
-// full subscriber's buffer, and a second, actively-draining subscriber must
-// still receive every event promptly.
+// TestEmitter_FullBufferDropsWithoutStallingHealthySubscribers wedges one
+// subscriber (never drained, buffer fills at 64) and keeps a second one healthy.
+// Emit runs on the single StoreWriter goroutine serving every account, so it
+// must drop for the wedged subscriber instead of waiting on it — a wait would
+// throttle the whole write pipeline. The healthy subscriber is drained after
+// every Emit, so it can never back up: with drop-on-full semantics that is the
+// only way to assert "a wedged peer costs a healthy one nothing" without racing
+// the scheduler.
 func TestEmitter_FullBufferDropsWithoutStallingHealthySubscribers(t *testing.T) {
 	e := NewEmitter()
 
@@ -61,41 +62,41 @@ func TestEmitter_FullBufferDropsWithoutStallingHealthySubscribers(t *testing.T) 
 	healthyCh, unsubHealthy := e.Subscribe()
 	defer unsubHealthy()
 
-	received := make(chan Event, 200)
-	go func() {
-		for ev := range healthyCh {
-			received <- ev
+	healthy := 0
+	emit := func(kind string) {
+		e.Emit(Event{Type: kind})
+		select {
+		case <-healthyCh:
+			healthy++
+		default:
 		}
-	}()
-
-	// Fill the slow subscriber's buffer (cap 64) without ever draining it.
-	// The healthy subscriber drains concurrently so it never fills.
-	for i := 0; i < 64; i++ {
-		e.Emit(Event{Type: "filler"})
 	}
 
-	// Emit a burst against the wedged subscriber. A per-event wait (the old
-	// 25ms blocking fallback) would make this take overflow×25ms ≈ 1.25s; a
-	// non-blocking drop finishes in microseconds. The bound is generous enough
-	// not to flake on a loaded machine while still an order of magnitude below
-	// what any per-event wait would cost.
+	// Fill the wedged subscriber's buffer (cap 64).
+	for i := 0; i < 64; i++ {
+		emit("filler")
+	}
+
+	// Burst against the now-full subscriber. The old blocking fallback waited
+	// 25ms per event, so this would take overflow×25ms ≈ 1.25s; dropping takes
+	// microseconds. The bound is generous enough not to flake on a loaded
+	// machine and still an order of magnitude below any per-event wait.
 	const overflow = 50
 	start := time.Now()
 	for i := 0; i < overflow; i++ {
-		e.Emit(Event{Type: "overflow"})
+		emit("overflow")
 	}
 	elapsed := time.Since(start)
 
 	require.Lessf(t, elapsed, 300*time.Millisecond,
-		"Emit blocked on a full subscriber — it runs on the shared writer goroutine and would throttle the whole write pipeline: %d emits took %s", overflow, elapsed)
+		"Emit blocked on a wedged subscriber — it runs on the shared writer goroutine and would throttle the whole write pipeline: %d emits took %s", overflow, elapsed)
 
-	// The healthy subscriber must have received every event.
-	require.Eventually(t, func() bool {
-		return len(received) == 64+overflow
-	}, 2*time.Second, 5*time.Millisecond, "healthy subscriber did not receive all events")
+	// The healthy subscriber saw every event: it never backed up, so nothing of
+	// its own was dropped, and the wedged peer did not starve it.
+	require.Equal(t, 64+overflow, healthy, "healthy subscriber missed events")
 
-	// The slow subscriber's buffer must hold exactly the 64 filler events —
-	// every "overflow" event was dropped, not enqueued.
+	// The wedged subscriber's buffer holds exactly the 64 fillers — every
+	// "overflow" event was dropped, not enqueued.
 	count := 0
 drain:
 	for {
@@ -109,7 +110,7 @@ drain:
 			break drain
 		}
 	}
-	require.Equal(t, 64, count, "slow subscriber's buffer should hold only the filler events")
+	require.Equal(t, 64, count, "wedged subscriber's buffer should hold only the filler events")
 }
 
 // TestEmitter_ConcurrentSubscribeEmitUnsubscribe is a race regression guard
