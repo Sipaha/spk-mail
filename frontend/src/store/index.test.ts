@@ -52,6 +52,19 @@ describe('useStore', () => {
     expect(s.openThread).toBeUndefined()
   })
 
+  it('setActiveProfile resets account/folder scope but keeps view toggles', () => {
+    useStore.setState({
+      activeProfileId: 1,
+      filter: { accountId: 7, folderId: 70, unreadOnly: true, hasFlagged: true },
+    })
+    useStore.getState().setActiveProfile(2)
+    const s = useStore.getState()
+    expect(s.activeProfileId).toBe(2)
+    expect(s.filter).toEqual({ unreadOnly: true, hasFlagged: true })
+    expect(s.filter.accountId).toBeUndefined()
+    expect(s.filter.folderId).toBeUndefined()
+  })
+
   it('setProfiles resets activeProfileId when current profile is gone', () => {
     const profiles: ProfileDTO[] = [
       { id: 5, name: 'Work', color: '#000', sort_order: 0, muted: false },
@@ -69,5 +82,22 @@ describe('useStore', () => {
     useStore.setState({ activeProfileId: 5 })
     useStore.getState().setProfiles(profiles)
     expect(useStore.getState().activeProfileId).toBe(5)
+  })
+
+  it('setThreadFlagged flips has_flagged on the matching thread only', () => {
+    useStore.setState({
+      threads: [
+        { id: 1, subject: 'a', last_date: 1, msg_count: 1, unread_count: 0, has_flagged: false, has_attach: false, account_id: 1, last_from: 'a@b', snippet: '' },
+        { id: 2, subject: 'b', last_date: 2, msg_count: 1, unread_count: 0, has_flagged: false, has_attach: false, account_id: 1, last_from: 'a@b', snippet: '' },
+      ],
+    })
+    useStore.getState().setThreadFlagged(1, true)
+    let s = useStore.getState()
+    expect(s.threads.find(t => t.id === 1)?.has_flagged).toBe(true)
+    expect(s.threads.find(t => t.id === 2)?.has_flagged).toBe(false)
+
+    useStore.getState().setThreadFlagged(1, false)
+    s = useStore.getState()
+    expect(s.threads.find(t => t.id === 1)?.has_flagged).toBe(false)
   })
 })

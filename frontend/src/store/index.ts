@@ -27,6 +27,7 @@ interface State {
   setThreads: (t: ThreadDTO[]) => void
   setFolders: (accountId: number, fs: FolderDTO[]) => void
   markThreadRead: (id: number) => void
+  setThreadFlagged: (id: number, flagged: boolean) => void
   setOpenThread: (id: number | undefined, msgs?: MessageDTO[]) => void
   setFilter: (f: Partial<State['filter']>) => void
   setSearch: (q: string) => void
@@ -77,10 +78,24 @@ export const useStore = create<State>()(
       // previous profile — otherwise events.ts keeps re-fetching it on every
       // MessageInserted and the previous profile's thread leaks across the
       // boundary into ThreadView under the new (potentially empty) profile.
-      setActiveProfile: (id) => set({ activeProfileId: id, openThreadId: undefined, openThread: undefined }),
+      // It must also reset the account/folder scope: those point at rows
+      // (an account, a folder) that belong to the OLD profile and may not
+      // even exist in the new one, which left the thread list scoped to
+      // nothing (or the wrong thing) after a switch. unreadOnly/hasFlagged
+      // are view toggles rather than a scope, so they survive the switch.
+      setActiveProfile: (id) => set((s) => ({
+        activeProfileId: id,
+        openThreadId: undefined,
+        openThread: undefined,
+        filter: { unreadOnly: s.filter.unreadOnly, hasFlagged: s.filter.hasFlagged },
+      })),
       setThreads: (t) => set({ threads: t }),
       setFolders: (accountId, fs) => set((s) => ({ folders: { ...s.folders, [accountId]: fs } })),
       markThreadRead: (id) => set((s) => ({ threads: s.threads.map(t => t.id === id ? { ...t, unread_count: 0 } : t) })),
+      // Local flip of a thread's flagged state — used to render the star
+      // optimistically before the toggleThreadFlagged round-trip resolves,
+      // and to roll it back on failure. Mirrors markThreadRead's shape.
+      setThreadFlagged: (id, flagged) => set((s) => ({ threads: s.threads.map(t => t.id === id ? { ...t, has_flagged: flagged } : t) })),
       setOpenThread: (id, msgs) => set({ openThreadId: id, openThread: msgs }),
       setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
       setSearch: (q) => set({ search: q }),

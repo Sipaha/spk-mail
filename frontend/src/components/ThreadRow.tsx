@@ -92,7 +92,18 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
             type="button"
             onClick={(e) => {
               e.stopPropagation()
-              client.toggleThreadFlagged(t.id).catch(err => console.warn('toggleThreadFlagged failed', err))
+              // Optimistic: flip the star immediately so it doesn't lag behind
+              // the round-trip + SSE refetch. Roll back on failure. By the
+              // time any SSE-driven wholesale refetch lands, the server write
+              // below has already completed (the event fires after the DB
+              // write), so the refetched data carries the new state forward
+              // rather than clobbering this flip back to stale.
+              const prev = t.has_flagged
+              useStore.getState().setThreadFlagged(t.id, !prev)
+              client.toggleThreadFlagged(t.id).catch(err => {
+                console.warn('toggleThreadFlagged failed', err)
+                useStore.getState().setThreadFlagged(t.id, prev)
+              })
             }}
             title={t.has_flagged ? 'Unflag thread' : 'Flag thread'}
             aria-label={t.has_flagged ? `Unflag thread "${t.subject || '(no subject)'}"` : `Flag thread "${t.subject || '(no subject)'}"`}

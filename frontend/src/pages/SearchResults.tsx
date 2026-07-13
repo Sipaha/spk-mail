@@ -63,6 +63,16 @@ export default function SearchResults({ query }: { query: string }) {
               // never sees a one-frame "Select a thread." placeholder.
               setOpenThread(h.thread_id, msgs)
               window.location.hash = '#/'
+              // Mark-read mirrors ThreadList.onOpen / the deep-link path in
+              // App.tsx — opening a thread (here, from a search result) is an
+              // explicit user action, so unread messages in it clear.
+              const unread = msgs.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
+              if (unread.length) {
+                const threadId = h.thread_id
+                client.markRead(unread)
+                  .then(() => useStore.getState().markThreadRead(threadId))
+                  .catch(err => console.warn('markRead failed', err))
+              }
             } catch (err) {
               setOpenError(err instanceof Error ? err.message : String(err))
             }
