@@ -98,13 +98,9 @@ func walk(e *gomsg.Entity, partID string, p *ParsedMessage, depth int) error {
 				}
 			}
 		}
-		// RFC 2047 encoded names ("=?utf-8?B?...?=") happen for non-ASCII
-		// filenames; ParseMediaType doesn't decode them on its own.
-		fname = decodeHeader(fname)
-		// Strip dangerous and bidi-override Unicode at parse time so the DB
-		// stores the safe form. The downloader applies the same filter again
-		// (belt-and-braces in case an old row predates this code).
-		fname = SanitizeFilename(fname)
+		// safeFilename decodes RFC 2047 names, strips path traversal, and
+		// caps byte length so the DB stores the safe form.
+		fname = safeFilename(fname)
 		// Fallback: many emails carry an inline image or attachment with no
 		// filename at all (just Content-Type). Synthesize "att-<partID><ext>"
 		// so the downloader has something safe to write — without this the
@@ -288,7 +284,7 @@ func isDangerousFilenameRune(r rune) bool {
 	return false
 }
 
-// SafeFilename returns a filesystem-safe form of a (possibly attacker- or
+// safeFilename returns a filesystem-safe form of a (possibly attacker- or
 // legacy-produced) filename. Pipeline:
 //
 //  1. decodeHeader — RFC 2047 encoded-words ("=?UTF-8?B?…?="). Necessary
@@ -310,7 +306,7 @@ func isDangerousFilenameRune(r rune) bool {
 // Returns "" only if the input collapses to empty or a degenerate path
 // component (".", "..", "/"); the caller should fall back to SynthFilename.
 // Idempotent: passing in an already-safe ASCII filename returns it unchanged.
-func SafeFilename(raw string) string {
+func safeFilename(raw string) string {
 	decoded := decodeHeader(raw)
 	cleaned := filepath.Base(decoded)
 	cleaned = SanitizeFilename(cleaned)

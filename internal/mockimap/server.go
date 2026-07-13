@@ -42,7 +42,10 @@ func Start(_ context.Context, email, password string) (*Server, error) {
 
 	opts := &imapserver.Options{
 		NewSession: func(_ *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
-			return mem.NewSession(), &imapserver.GreetingData{}, nil
+			s.mu.Lock()
+			active := s.mem
+			s.mu.Unlock()
+			return active.NewSession(), &imapserver.GreetingData{}, nil
 		},
 		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}},
 		InsecureAuth: true,
@@ -73,6 +76,17 @@ func (s *Server) Addr() string {
 // Close shuts down the server and releases all resources.
 func (s *Server) Close() error {
 	return s.srv.Close()
+}
+
+// Reset drops all in-memory users and mailboxes. New IMAP sessions created
+// after Reset see the fresh state; existing sessions may still hold the old
+// memserver until they reconnect. Playwright's per-test reset runs between
+// tests with no long-lived IMAP clients, so this is sufficient.
+func (s *Server) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mem = imapmemserver.New()
+	s.users = make(map[string]*imapmemserver.User)
 }
 
 // AddUser adds a new user with INBOX pre-created. If the user already exists

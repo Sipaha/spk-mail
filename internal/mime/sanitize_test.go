@@ -126,9 +126,9 @@ func TestSanitize_StripsDangerousStyleValues(t *testing.T) {
 		mustNotHave string
 	}{
 		{"expression()", `<p style="color:red; width:expression(alert(1))">x</p>`, "expression"},
-		{"behavior",     `<p style="color:red; behavior:url(#default#VML)">x</p>`, "behavior"},
-		{"@import",      `<p style="color:red; background:@import url(https://x/y.css)">x</p>`, "@import"},
-		{"javascript:",  `<p style="color:red; background:javascript:alert(1)">x</p>`, "javascript:"},
+		{"behavior", `<p style="color:red; behavior:url(#default#VML)">x</p>`, "behavior"},
+		{"@import", `<p style="color:red; background:@import url(https://x/y.css)">x</p>`, "@import"},
+		{"javascript:", `<p style="color:red; background:javascript:alert(1)">x</p>`, "javascript:"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,7 +167,7 @@ func TestSafeFilename_DecodesLegacyRFC2047(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, SafeFilename(tc.raw))
+			require.Equal(t, tc.want, safeFilename(tc.raw))
 		})
 	}
 }
@@ -179,7 +179,7 @@ func TestSafeFilename_TruncatesPreservingExtension(t *testing.T) {
 	// Build a 250-byte Cyrillic base + ".docx" = ~260 bytes raw.
 	base := strings.Repeat("П", 125) // 250 bytes (П = 2 bytes in UTF-8)
 	in := base + ".docx"
-	got := SafeFilename(in)
+	got := safeFilename(in)
 	require.LessOrEqual(t, len(got), MaxFilenameBytes)
 	require.True(t, strings.HasSuffix(got, ".docx"), "extension must survive truncation")
 	require.True(t, len(got) > len(".docx"), "truncated name must keep some of the base")
@@ -191,17 +191,16 @@ func TestSafeFilename_TruncatesPreservingExtension(t *testing.T) {
 // "../etc/passwd" attempt confined to "passwd" — defence-in-depth even
 // though SanitizeFilename strips '/' itself.
 func TestSafeFilename_StripsPathTraversal(t *testing.T) {
-	require.Equal(t, "passwd", SafeFilename(`/etc/passwd`))
-	require.Equal(t, "passwd", SafeFilename(`../../etc/../passwd`))
+	require.Equal(t, "passwd", safeFilename(`/etc/passwd`))
+	require.Equal(t, "passwd", safeFilename(`../../etc/../passwd`))
 }
 
 // TestSafeFilename_ReturnsEmptyForDegenerate covers the "caller should fall
 // back to SynthFilename" contract.
 func TestSafeFilename_ReturnsEmptyForDegenerate(t *testing.T) {
-	require.Equal(t, "", SafeFilename(""))
-	require.Equal(t, "", SafeFilename("."))
-	require.Equal(t, "", SafeFilename(".."))
-	require.Equal(t, "", SafeFilename("/"))
-	require.Equal(t, "", SafeFilename(".....")) // trim-leading-dot collapses to empty
+	require.Equal(t, "", safeFilename(""))
+	require.Equal(t, "", safeFilename("."))
+	require.Equal(t, "", safeFilename(".."))
+	require.Equal(t, "", safeFilename("/"))
+	require.Equal(t, "", safeFilename(".....")) // trim-leading-dot collapses to empty
 }
-

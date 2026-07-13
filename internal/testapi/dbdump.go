@@ -47,7 +47,24 @@ func dbDumpHandler(s *storage.Store) http.HandlerFunc {
 		}
 		out["profiles"] = profiles
 
-		threads, _ := s.ListThreadsRecent(ctx, 1000, 0)
+		type threadDump struct {
+			ID          int64  `json:"id"`
+			SubjectNorm string `json:"subject_norm"`
+			LastDate    int64  `json:"last_date"`
+			MsgCount    int64  `json:"msg_count"`
+			UnreadCount int64  `json:"unread_count"`
+			HasFlagged  bool   `json:"has_flagged"`
+			HasAttach   bool   `json:"has_attach"`
+		}
+		rawThreads, _ := s.ListThreadsRecent(ctx, 1000, 0)
+		threads := make([]threadDump, 0, len(rawThreads))
+		for _, t := range rawThreads {
+			threads = append(threads, threadDump{
+				ID: t.ID, SubjectNorm: t.SubjectNorm, LastDate: t.LastDate,
+				MsgCount: t.MsgCount, UnreadCount: t.UnreadCount,
+				HasFlagged: t.HasFlagged, HasAttach: t.HasAttach,
+			})
+		}
 		out["threads"] = threads
 
 		var folders []storage.FolderRow

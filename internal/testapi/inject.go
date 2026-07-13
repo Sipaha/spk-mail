@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -26,6 +27,7 @@ func (h *injectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mock IMAP not running", http.StatusBadRequest)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxTestAPIBodyBytes)
 	var req injectReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -42,11 +44,17 @@ func (h *injectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	raw := []byte(fmt.Sprintf("From: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%d@spk-mail.test>\r\nContent-Type: text/plain\r\n\r\n%s",
-		req.From, req.Subject, now.Format(time.RFC1123Z), now.UnixNano(), req.BodyText))
+		sanitizeRFC822Field(req.From), sanitizeRFC822Field(req.Subject), now.Format(time.RFC1123Z), now.UnixNano(), req.BodyText))
 
 	if _, err := u.Append(req.Folder, bytes.NewReader(raw), &imap.AppendOptions{Time: now}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func sanitizeRFC822Field(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
 }
