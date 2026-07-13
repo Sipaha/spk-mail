@@ -13,6 +13,8 @@ interface State {
   openThreadId?: number
   openThread?: MessageDTO[]
   syncProgress: Record<number, { folder: string; folderId?: number; done: number; total: number }>
+  writeError: string | null
+  bootstrapError: string | null
 
   setAccounts: (a: AccountDTO[]) => void
   upsertAccount: (a: AccountDTO) => void
@@ -25,6 +27,8 @@ interface State {
   setFilter: (f: Partial<State['filter']>) => void
   setSearch: (q: string) => void
   setSyncProgress: (accId: number, folder: string, done: number, total: number, folderId?: number) => void
+  setWriteError: (msg: string | null) => void
+  setBootstrapError: (msg: string | null) => void
 }
 
 export const useStore = create<State>()(
@@ -38,6 +42,8 @@ export const useStore = create<State>()(
       filter: { unreadOnly: false, hasFlagged: false },
       search: '',
       syncProgress: {},
+      writeError: null,
+      bootstrapError: null,
 
       // setAccounts also prunes folder-cache entries whose accountId is no
       // longer in the live list. Without this, deleting an account leaves
@@ -73,6 +79,8 @@ export const useStore = create<State>()(
       setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
       setSearch: (q) => set({ search: q }),
       setSyncProgress: (accId, folder, done, total, folderId) => set((s) => ({ syncProgress: { ...s.syncProgress, [accId]: { folder, folderId, done, total } } })),
+      setWriteError: (msg) => set({ writeError: msg }),
+      setBootstrapError: (msg) => set({ bootstrapError: msg }),
     }),
     {
       name: 'spk-mail.activeProfile',

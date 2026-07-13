@@ -1,6 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-beforeEach(() => { vi.resetModules() })
+const callByName = vi.fn(async (_name: string, _arg?: unknown) => [] as unknown[])
+
+vi.mock('@wailsio/runtime', () => ({
+  Call: { ByName: (name: string, arg?: unknown) => callByName(name, arg) },
+  Events: { On: vi.fn(() => () => {}) },
+}))
+
+beforeEach(() => {
+  vi.resetModules()
+  callByName.mockClear()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('client', () => {
   it('uses HTTP when location.protocol is not wails:', async () => {
@@ -12,5 +26,16 @@ describe('client', () => {
     const { client } = await import('./client')
     await client.listAccounts()
     expect(fetchMock).toHaveBeenCalledWith('/api/ListAccounts', expect.objectContaining({ method: 'POST' }))
+    expect(callByName).not.toHaveBeenCalled()
+  })
+
+  it('uses Wails Call.ByName when location.protocol is wails:', async () => {
+    vi.stubGlobal('location', { ...window.location, protocol: 'wails:' })
+    const { client } = await import('./client')
+    await client.listAccounts()
+    expect(callByName).toHaveBeenCalledWith(
+      'github.com/spk/spk-mail/internal/api/transport.API.ListAccounts',
+      undefined,
+    )
   })
 })

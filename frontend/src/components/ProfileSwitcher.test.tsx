@@ -23,18 +23,21 @@ describe('ProfileSwitcher', () => {
       { id: 1, name: 'Work', color: '#10b981', sort_order: 0, muted: false },
       { id: 2, name: 'Personal', color: '#3b82f6', sort_order: 1, muted: false },
     ]
+    // ProfileSwitcher renders from the store; App's bootstrap is what fills it
+    // (the component no longer fetches profiles itself), so seed it here the
+    // way the bootstrap would.
     useStore.setState({ profiles: [], activeProfileId: null })
+    useStore.getState().setProfiles(mockProfiles)
   })
 
-  it('renders per-profile tabs after load', async () => {
+  it('renders per-profile tabs', async () => {
     render(<ProfileSwitcher />)
     expect(await screen.findByRole('button', { name: /Work/ })).toBeTruthy()
   })
 
-  it('auto-selects first profile when none is active', async () => {
-    render(<ProfileSwitcher />)
-    await screen.findByRole('button', { name: /Work/ })
-    // After listProfiles resolves, store should have activeProfileId = 1
+  it('auto-selects first profile when none is active', () => {
+    // setProfiles (the store action the bootstrap calls) is what picks the
+    // active profile when none is set — assert that contract holds.
     expect(useStore.getState().activeProfileId).toBe(1)
   })
 

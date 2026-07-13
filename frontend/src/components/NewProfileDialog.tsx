@@ -52,7 +52,7 @@ export default function NewProfileDialog({ onDone, onCancel }: { onDone: () => v
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
-      className="absolute inset-0 z-50 flex items-center justify-center bg-black/40">
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <form
         className="bg-zinc-900 border border-zinc-700 rounded p-4 w-72 space-y-3 text-sm"
         onSubmit={async e => {

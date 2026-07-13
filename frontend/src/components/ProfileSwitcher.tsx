@@ -30,7 +30,10 @@ export default function ProfileSwitcher() {
   const [creating, setCreating] = useState(false)
   const [menu, setMenu] = useState<Menu | null>(null)
 
-  useEffect(() => { client.listProfiles().then(setProfiles) }, [setProfiles])
+  // No mount-time listProfiles() here: App's useBootstrap already loads
+  // profiles into the store on every route, and a second fetch on mount just
+  // duplicated that round trip. Profiles are refreshed from the store's
+  // setProfiles (which also keeps activeProfileId valid) after create/delete.
 
   useEffect(() => {
     if (!menu) return

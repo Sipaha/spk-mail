@@ -8,10 +8,12 @@ import Snippet from '../components/Snippet'
 export default function SearchResults({ query }: { query: string }) {
   const [hits, setHits] = useState<SearchHitDTO[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [openError, setOpenError] = useState<string | null>(null)
   const setOpenThread = useStore(s => s.setOpenThread)
 
   useEffect(() => {
     setError(null)
+    setOpenError(null)
     if (!query.trim()) { setHits([]); return }
     let cancelled = false
     setHits(null)
@@ -34,17 +36,26 @@ export default function SearchResults({ query }: { query: string }) {
       <div className="px-4 py-3 border-b border-zinc-800 text-sm text-zinc-400">
         {hits.length} results for <span className="text-zinc-200">"{query}"</span>
       </div>
+      {openError && (
+        <div className="px-4 py-2 text-sm text-rose-400 border-b border-zinc-800" role="alert">
+          Failed to open thread: {openError}
+        </div>
+      )}
       {hits.map(h => (
         <button
           key={h.message_id}
           onClick={async () => {
-            if (h.thread_id) {
+            if (!h.thread_id) return
+            setOpenError(null)
+            try {
               const msgs = await client.getThread(h.thread_id)
               // setOpenThread BEFORE navigating: hashchange fires after the
               // synchronous render that picks up the new thread, so the user
               // never sees a one-frame "Select a thread." placeholder.
               setOpenThread(h.thread_id, msgs)
               window.location.hash = '#/'
+            } catch (err) {
+              setOpenError(err instanceof Error ? err.message : String(err))
             }
           }}
           className="block w-full text-left px-4 py-2 border-b border-zinc-800 hover:bg-zinc-900">

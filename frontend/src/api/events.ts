@@ -1,25 +1,8 @@
 import { useEffect } from 'react'
 import { client } from './client'
 import { useStore } from '../store'
-
-// StoreFilter mirrors the store-side filter shape (camelCase) used by the
-// frontend. The wire-side ThreadFilter is snake_case and lives in ./types —
-// we only need the camelCase form here for the signature compare.
-type StoreFilter = {
-  accountId?: number
-  folderId?: number
-  unreadOnly: boolean
-  hasFlagged: boolean
-}
-
-// filterSig serialises the (filter, profile) pair so two snapshots can be
-// compared by VALUE rather than by reference. `setFilter` always produces a
-// new object reference even when the user clicks the already-active view, so
-// JS `===` would falsely report a "filter change" between snapshots taken
-// before and after a no-op store update.
-function filterSig(f: StoreFilter, profileId: number | null): string {
-  return `${profileId ?? ''}|${f.accountId ?? ''}|${f.folderId ?? ''}|${f.unreadOnly ? 1 : 0}|${f.hasFlagged ? 1 : 0}`
-}
+import { filterSig } from '../lib/filterSig'
+import { refetchLimit } from '../lib/paging'
 
 export function useEventStream() {
   useEffect(() => {
@@ -51,7 +34,7 @@ export function useEventStream() {
             unread_only: reqFilter.unreadOnly,
             has_flagged: reqFilter.hasFlagged,
             profile_id: reqProfileId ?? undefined,
-            limit: 200,
+            limit: refetchLimit(s.threads.length),
           })
           const now = useStore.getState()
           if (filterSig(now.filter, now.activeProfileId) === reqSig) {
@@ -141,7 +124,7 @@ export function useEventStream() {
             unread_only: reqFilter.unreadOnly,
             has_flagged: reqFilter.hasFlagged,
             profile_id: reqProfileId ?? undefined,
-            limit: 200,
+            limit: refetchLimit(s.threads.length),
           })
           const now = useStore.getState()
           if (filterSig(now.filter, now.activeProfileId) === reqSig) {
@@ -158,9 +141,12 @@ export function useEventStream() {
           }
           break
         }
-        case 'WriteError':
-          // surface in console for now; toast UI is plan 7
-          console.error('write error', ev.payload); break
+        case 'WriteError': {
+          const msg = String(ev.payload.err ?? 'Write failed')
+          console.error('write error', ev.payload)
+          useStore.getState().setWriteError(msg)
+          break
+        }
         case 'AttachmentReady': {
           // Re-read openThreadId; a snapshot at handler entry would re-open
           // a thread the user dismissed during the prior await. Then re-check

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { client } from '../api/client'
 import { useStore } from '../store'
 import type { ThreadDTO } from '../api/types'
+import { filterSig } from '../lib/filterSig'
+import { PAGE_SIZE } from '../lib/paging'
 import ThreadRow from './ThreadRow'
 
 // Length of the leaving-row collapse animation. Matches the CSS transition on
@@ -18,6 +20,11 @@ export default function ThreadList() {
   const openThreadId = useStore(s => s.openThreadId)
   const activeProfileId = useStore(s => s.activeProfileId)
 
+  const [listError, setListError] = useState<string | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
+
   // pinned: snapshot of the currently-open thread. Kept in render even if it
   // falls out of the server-filtered list (e.g. user opens an unread thread,
   // mark-read fires, server's Unread filter then excludes it). Without this
@@ -31,6 +38,42 @@ export default function ThreadList() {
   const [rows, setRows] = useState<AnimRow[]>([])
   const leaveTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
 
+  const sig = filterSig(filter, activeProfileId)
+
+  // Generation counter for the filter scope. Bumped every time the filter-
+  // switch effect below runs (new sig, or a manual retry). `isStale()`
+  // closures capture the generation active when a request started; if the
+  // counter has moved on by the time the response lands, the request is for
+  // a scope the user has already navigated away from and its result must be
+  // discarded rather than applied to state.
+  const genRef = useRef(0)
+
+  const fetchThreads = useCallback((offset: number, append: boolean, isStale?: () => boolean) => {
+    return client.listThreads({
+      account_id: filter.accountId,
+      folder_id: filter.folderId,
+      unread_only: filter.unreadOnly,
+      has_flagged: filter.hasFlagged,
+      profile_id: activeProfileId ?? undefined,
+      limit: PAGE_SIZE,
+      offset,
+    }).then(rs => {
+      // A stale response (its scope's generation has moved on) must never
+      // touch state — that's exactly how a delayed response from filter A
+      // would overwrite the already-applied list for filter C.
+      if (isStale?.()) return rs
+      if (append) {
+        const existing = useStore.getState().threads
+        setThreads([...existing, ...rs])
+      } else {
+        setThreads(rs)
+      }
+      setHasMore(rs.length === PAGE_SIZE)
+      setListError(null)
+      return rs
+    })
+  }, [filter.accountId, filter.folderId, filter.unreadOnly, filter.hasFlagged, activeProfileId, setThreads])
+
   useEffect(() => {
     // Clear the store's thread list synchronously before kicking off the new
     // fetch. Without this, threads from the previous filter scope linger in
@@ -41,32 +84,47 @@ export default function ThreadList() {
     // an empty profile" glitch. Clearing first guarantees the only thing the
     // user can see between switch and load is the empty state.
     setThreads([])
+    setHasMore(false)
+    setListError(null)
     // Generation guard: rapid filter switches (A → B → C) used to let A's
-    // delayed response settle and overwrite C's already-applied list. The
-    // closure captures `cancelled` and the cleanup flips it before the next
-    // effect run, so only the in-flight request whose cleanup hasn't fired
-    // is allowed to apply its result. Errors are surfaced to the user so a
-    // network failure no longer leaves them on a silently-empty list.
-    let cancelled = false
-    client.listThreads({
-      account_id: filter.accountId,
-      folder_id: filter.folderId,
-      unread_only: filter.unreadOnly,
-      has_flagged: filter.hasFlagged,
-      profile_id: activeProfileId ?? undefined,
-      limit: 200,
-    }).then(rs => {
-      if (!cancelled) setThreads(rs)
-    }).catch(err => {
-      if (!cancelled) console.error('listThreads failed', err)
+    // delayed response settle and overwrite C's already-applied list, because
+    // fetchThreads applied setThreads/setHasMore unconditionally in its
+    // .then. Bump the generation for this run and hand fetchThreads an
+    // isStale() closure bound to it; a response only gets applied (or its
+    // error surfaced) while its generation is still the current one. Errors
+    // are surfaced to the user so a network failure no longer leaves them on
+    // a silently-empty list.
+    const myGen = ++genRef.current
+    const isStale = () => genRef.current !== myGen
+    fetchThreads(0, false, isStale).catch(err => {
+      if (!isStale()) {
+        console.error('listThreads failed', err)
+        setListError(err instanceof Error ? err.message : String(err))
+      }
     })
-    return () => { cancelled = true }
-  }, [filter.accountId, filter.folderId, filter.unreadOnly, filter.hasFlagged, activeProfileId, setThreads])
+  }, [sig, retryKey, setThreads, fetchThreads])
+
+  const loadMore = () => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    // Same generation guard as the initial fetch: if the filter scope
+    // changes while this load-more is in flight, its page must not be
+    // appended to the new scope's (already-reset) list.
+    const myGen = genRef.current
+    const isStale = () => genRef.current !== myGen
+    fetchThreads(threads.length, true, isStale)
+      .catch(err => {
+        if (!isStale()) {
+          console.error('listThreads load-more failed', err)
+          setListError(err instanceof Error ? err.message : String(err))
+        }
+      })
+      .finally(() => setLoadingMore(false))
+  }
 
   // Clear pinned snapshot when the filter context changes (user navigated to a
   // different folder/view) or when the thread is closed.
-  useEffect(() => { setPinned(undefined) },
-    [filter.accountId, filter.folderId, filter.unreadOnly, filter.hasFlagged, activeProfileId])
+  useEffect(() => { setPinned(undefined) }, [sig])
 
   // Capture / refresh the pinned snapshot. Only refresh when we actually find
   // the open thread in the current filtered list — if it's already been
@@ -84,21 +142,14 @@ export default function ThreadList() {
     ? [...threads, pinned].sort((a, b) => b.last_date - a.last_date)
     : threads
 
-  // filterSig fingerprints the current view context. When it changes (user
-  // switched folder/profile/Unread-toggle/etc.), the whole list legitimately
-  // belongs to a different scope — animating every row out would be visual
-  // noise. We detect such transitions and do an instant replace instead of a
-  // diff with leave-animation. Inside the same context (same filterSig) the
-  // diff path runs and animates only the rows that actually leave.
-  const filterSig = `${activeProfileId}|${filter.accountId ?? ''}|${filter.folderId ?? ''}|${filter.unreadOnly}|${filter.hasFlagged}`
-  const prevSig = useRef(filterSig)
+  const prevSig = useRef(sig)
 
   // Diff visible against the currently-rendered rows. Newcomers are appended
   // immediately, rows that disappear from visible flip to `leaving` and a
   // setTimeout schedules the actual removal after the CSS transition window.
   useEffect(() => {
-    const sigChanged = prevSig.current !== filterSig
-    prevSig.current = filterSig
+    const sigChanged = prevSig.current !== sig
+    prevSig.current = sig
 
     if (sigChanged) {
       // Filter context changed (profile / folder / view toggle). The store
@@ -144,7 +195,7 @@ export default function ThreadList() {
       }
       return out.sort((a, b) => b.thread.last_date - a.thread.last_date)
     })
-  }, [visible, filterSig])
+  }, [visible, sig])
 
   // Cleanup pending timers on unmount.
   useEffect(() => () => {
@@ -154,7 +205,21 @@ export default function ThreadList() {
 
   return (
     <div>
-      {rows.length === 0 && <div className="p-6 text-sm text-zinc-500">No threads.</div>}
+      {listError && (
+        <div className="p-6 text-sm text-rose-400" role="alert">
+          Failed to load threads: {listError}
+          <button
+            type="button"
+            onClick={() => setRetryKey(k => k + 1)}
+            className="ml-2 text-blue-400 hover:text-blue-300 underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {!listError && rows.length === 0 && (
+        <div className="p-6 text-sm text-zinc-500">No threads.</div>
+      )}
       {rows.map(({ thread: t, leaving }) => (
         <div
           key={t.id}
@@ -183,6 +248,18 @@ export default function ThreadList() {
           }} />
         </div>
       ))}
+      {hasMore && !listError && (
+        <div className="p-4 text-center border-t border-zinc-800">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="text-sm text-blue-400 hover:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

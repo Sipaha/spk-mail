@@ -23,10 +23,20 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
   const isUnread = !isOpen && t.unread_count > 0
   const sender = parseSender(t.last_from) || '(unknown)'
 
+  const open = () => onOpen(t.id)
+
   return (
-    <button
-      onClick={() => onOpen(t.id)}
-      className={`group w-full text-left pl-3 pr-4 py-2.5 border-b border-zinc-800 hover:bg-zinc-900/60 transition-colors flex gap-3 ${isOpen ? 'bg-zinc-900' : ''}`}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+      className={`group w-full text-left pl-3 pr-4 py-2.5 border-b border-zinc-800 hover:bg-zinc-900/60 transition-colors flex gap-3 cursor-pointer ${isOpen ? 'bg-zinc-900' : ''}`}>
       {/* Unread indicator: blue dot, fills the left margin if unread.
           When read, an invisible same-size span keeps row heights aligned. */}
       <span className="pt-1.5 shrink-0">
@@ -77,6 +87,6 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
           {t.has_attach  && <span className="text-zinc-500 text-xs shrink-0" title="Attachment">📎</span>}
         </div>
       </div>
-    </button>
+    </div>
   )
 }

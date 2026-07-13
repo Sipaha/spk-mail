@@ -23,8 +23,16 @@ export interface Client {
   subscribeEvents(onEvent: (e: ApiEvent) => void): () => void
 }
 
+function browserApiToken(): string {
+  const el = document.querySelector('meta[name="spk-mail-api-token"]')
+  return el?.getAttribute('content') ?? ''
+}
+
 const post = async <T,>(path: string, body: unknown): Promise<T> => {
-  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  const token = browserApiToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const r = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body ?? {}) })
   if (!r.ok) {
     const txt = (await r.text()).trim()
     throw new Error(txt || `HTTP ${r.status} ${r.statusText} — ${path}`)
@@ -54,7 +62,8 @@ const httpClient: Client = {
   deleteProfile: (id) => post('/api/DeleteProfile', { id }).then(() => undefined),
   setProfileMuted: (id, muted) => post('/api/SetProfileMuted', { id, muted }).then(() => undefined),
   subscribeEvents: (onEvent) => {
-    const es = new EventSource('/api/events')
+    const token = browserApiToken()
+    const es = new EventSource(token ? `/api/events?token=${encodeURIComponent(token)}` : '/api/events')
     const handler = (ev: MessageEvent) => {
       try {
         onEvent(JSON.parse(ev.data) as ApiEvent)

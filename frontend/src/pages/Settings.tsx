@@ -21,7 +21,16 @@ export default function Settings() {
               <div className="font-medium">{a.name}</div>
               <div className="text-xs text-zinc-500">{a.email}</div>
             </div>
-            <button onClick={() => client.removeAccount(a.id).then(refresh)}
+            <button onClick={async () => {
+              if (!window.confirm(`Remove account "${a.name}" (${a.email})? This stops sync and deletes stored credentials.`)) return
+              try {
+                await client.removeAccount(a.id)
+                await refresh()
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e)
+                window.alert(`Failed to remove account: ${msg}`)
+              }
+            }}
               className="text-xs rounded border border-red-900/50 hover:bg-red-900/30 px-2 py-1 text-red-400">
               Remove
             </button>
