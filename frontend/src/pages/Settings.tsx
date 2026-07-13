@@ -108,7 +108,7 @@ export default function Settings() {
                     <AlertIcon className="mt-px size-3.5 shrink-0 text-danger" />
                     <div className="min-w-0 text-xs leading-relaxed">
                       <div className="font-medium text-danger">Can't connect to this account</div>
-                      <div className="break-words font-mono text-[11px] text-fg-sub">{accountDetail[a.id] ?? 'Connection failed'}</div>
+                      <div className="break-words font-mono text-[11px] text-fg-sub">{accountDetail[a.id] ?? a.detail ?? 'Connection failed'}</div>
                       <div className="mt-0.5 text-fg-faint">
                         Sync retries automatically. Check the server address and password, or remove the account if it is no longer needed.
                       </div>

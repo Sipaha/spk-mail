@@ -17,6 +17,12 @@ function parseSender(raw: string): string {
 
 export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: number) => void }) {
   const isOpen = useStore(s => s.openThreadId === t.id)
+  // Account spine: only meaningful when the list actually mixes accounts (the
+  // unified "All mail" view). Once the user has narrowed to one account, every
+  // row would carry the same stripe — noise, not information. account_id is the
+  // NEWEST message's account; a thread can span accounts.
+  const unified = useStore(s => s.filter.accountId === undefined)
+  const accountColor = useStore(s => s.accounts.find(a => a.id === t.account_id)?.color)
   // The currently-open thread is rendered as read (no accent dot, no bold)
   // even if the pinned snapshot still has unread_count > 0. Pinning keeps the
   // row in the list while the user is reading it; muting the unread cue is
@@ -38,9 +44,18 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
         }
       }}
       className={`group relative flex w-full cursor-pointer gap-2.5 border-b border-edge py-2.5 pl-3 pr-3 text-left transition-colors hover:bg-ink-850 ${isOpen ? 'bg-ink-800' : ''}`}>
-      {/* Open marker: accent rail on the reading thread, mirroring the
-          account spine in the sidebar. */}
-      {isOpen && <span aria-hidden="true" className="absolute bottom-0 left-0 top-0 w-0.5 bg-accent" />}
+      {/* Left rail: the reading thread wins (accent); otherwise, in the unified
+          view, the account's own colour — the same spine the sidebar uses, so a
+          row's origin is readable without opening it. */}
+      {isOpen
+        ? <span aria-hidden="true" className="absolute bottom-0 left-0 top-0 w-0.5 bg-accent" />
+        : unified && accountColor && (
+          <span
+            aria-hidden="true"
+            className="absolute bottom-0 left-0 top-0 w-0.5 opacity-70"
+            style={{ background: accountColor }}
+          />
+        )}
 
       {/* Unread indicator: accent dot in the left margin. When read, an
           invisible same-size span keeps row heights aligned. */}

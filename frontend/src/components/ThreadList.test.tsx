@@ -18,7 +18,7 @@ vi.mock('../api/client', () => ({
 function thread(id: number, subject: string): ThreadDTO {
   return {
     id, subject, last_date: id, msg_count: 1, unread_count: 0,
-    has_flagged: false, has_attach: false, last_from: 'a@b.com', snippet: '',
+    has_flagged: false, has_attach: false, account_id: 1, last_from: 'a@b.com', snippet: '',
   }
 }
 

@@ -53,8 +53,15 @@ func (w *spyWorker) SubmitFlagOp(_ context.Context, op flagop.Op) error {
 
 type spyEngine struct {
 	worker *spyWorker
+	// status, when set, is what AccountStatus reports for every account.
+	status string
+	detail string
+	known  bool
 }
 
 func (e *spyEngine) StartAccount(_ context.Context, _ int64) {}
 func (e *spyEngine) StopAccount(_ int64)                     {}
 func (e *spyEngine) WorkerFor(_ int64) FlagOpSubmitter       { return e.worker }
+func (e *spyEngine) AccountStatus(_ int64) (string, string, bool) {
+	return e.status, e.detail, e.known
+}

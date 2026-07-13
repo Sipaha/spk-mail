@@ -1,7 +1,13 @@
-export interface AccountDTO { id: number; name: string; email: string; color: string; status: string; profile_id?: number }
+export interface AccountDTO {
+  id: number; name: string; email: string; color: string
+  status: string   // connecting | ok | error — the worker's live state, not a guess
+  detail?: string  // why the status isn't ok (the dial error), when there is a reason
+  profile_id?: number
+}
 export interface ThreadDTO {
   id: number; subject: string; last_date: number; msg_count: number; unread_count: number;
   has_flagged: boolean; has_attach: boolean;
+  account_id: number; // account of the NEWEST message — a thread can span accounts
   last_from: string;  // raw "Name <addr>" of the most recent message; UI parses display name
   snippet: string;    // ~200-char preview of the most recent message's body_text
 }

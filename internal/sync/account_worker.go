@@ -26,7 +26,10 @@ type AccountWorker struct {
 	secrets   *secrets.Store
 	writer    *StoreWriter
 	em        *api.Emitter
-	flagOps   chan flagop.Op
+	// status is the engine's status tracker. nil in tests that build a bare
+	// worker — setStatus tolerates that (the tracker's methods are nil-safe).
+	status  *statusTracker
+	flagOps chan flagop.Op
 	// syncMu serializes syncFolder per account: while one folder is being
 	// fetched, IDLE/poll-driven syncs of other folders queue up rather than
 	// running in parallel. This makes the per-account "Syncing X: done/total"
@@ -46,6 +49,18 @@ func NewAccountWorker(id int64, s storage.Writer, sec *secrets.Store, w *StoreWr
 		em:        em,
 		flagOps:   make(chan flagop.Op, 64),
 	}
+}
+
+// setStatus records the worker's state with the engine (source of truth for
+// ListAccounts) and notifies the UI. Both halves must happen together: the
+// event can be dropped on a full subscriber, the tracker cannot.
+func (w *AccountWorker) setStatus(state, detail string) {
+	w.status.set(w.accountID, state, detail)
+	payload := map[string]any{"account_id": w.accountID, "state": state}
+	if detail != "" {
+		payload["detail"] = detail
+	}
+	w.em.Emit(api.Event{Type: "AccountStatus", Payload: payload})
 }
 
 // flagOpEnqueueTimeout is how long SubmitFlagOp blocks when the queue is
@@ -99,9 +114,7 @@ func (w *AccountWorker) SubmitFlagOp(ctx context.Context, op flagop.Op) error {
 func (w *AccountWorker) Run(ctx context.Context) {
 	if err := w.runOnce(ctx); err != nil {
 		slog.Warn("account worker error", "account_id", w.accountID, "err", err)
-		w.em.Emit(api.Event{Type: "AccountStatus", Payload: map[string]any{
-			"account_id": w.accountID, "state": "error", "detail": err.Error(),
-		}})
+		w.setStatus("error", err.Error())
 	}
 }
 
@@ -122,9 +135,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		return err
 	}
 
-	w.em.Emit(api.Event{Type: "AccountStatus", Payload: map[string]any{
-		"account_id": acc.ID, "state": "connecting",
-	}})
+	w.setStatus("connecting", "")
 
 	c, err := imap.Dial(runCtx, imap.DialOpts{
 		Host: acc.IMAPHost, Port: acc.IMAPPort,
@@ -135,9 +146,7 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 	}
 	defer c.Close()
 
-	w.em.Emit(api.Event{Type: "AccountStatus", Payload: map[string]any{
-		"account_id": acc.ID, "state": "ok",
-	}})
+	w.setStatus("ok", "")
 
 	folders, err := c.ListFolders(runCtx)
 	if err != nil {

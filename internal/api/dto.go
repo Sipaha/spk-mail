@@ -4,11 +4,17 @@
 package api
 
 type AccountDTO struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Email     string `json:"email"`
-	Color     string `json:"color"`
-	Status    string `json:"status"` // ok|error|connecting (plan 2 fills it; plan 1 returns "ok")
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Color string `json:"color"`
+	// Status is the worker's live state: ok|connecting|error. It comes from the
+	// sync engine, not from the DB — an account whose worker has not reported
+	// yet is "connecting", never a synthetic "ok".
+	Status string `json:"status"`
+	// Detail carries the human-readable reason behind a non-ok Status (the dial
+	// error, typically). Empty when there is nothing to explain.
+	Detail    string `json:"detail,omitempty"`
 	ProfileID *int64 `json:"profile_id,omitempty"`
 }
 
@@ -43,6 +49,10 @@ type ThreadDTO struct {
 	// thread; the frontend parses out a display name. Empty if the thread
 	// has no messages.
 	LastFrom string `json:"last_from"`
+	// AccountID is the account of the thread's most recent message — NOT "the
+	// thread's account" (threads are not account-scoped; one can span
+	// accounts). The unified "All mail" list colours a row by it.
+	AccountID int64 `json:"account_id"`
 	// Snippet is the first ~200 chars of the most recent message's
 	// body_text, with whitespace runs collapsed. The frontend truncates
 	// further to its visible width.

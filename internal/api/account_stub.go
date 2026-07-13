@@ -8,9 +8,14 @@ import (
 	"github.com/spk/spk-mail/internal/storage"
 )
 
-// ListAccounts returns every account row plus a synthetic "ok" status.
-// Real-time status transitions arrive on the event bus as AccountStatus
-// events, so the field returned here is just the initial steady state.
+// ListAccounts returns every account row with the status its worker last
+// reported. An account whose worker has not reported yet is "connecting", never
+// "ok": the window is opened long before the first dial resolves, and a worker
+// that failed sits in a supervise backoff of up to 300s — claiming health for
+// that window would paint a broken account as fine for five minutes.
+//
+// Without an engine (unit tests wire none) there is nothing to ask, so the
+// status stays "ok" — those tests assert on rows, not on liveness.
 func (s *Stub) ListAccounts(ctx context.Context) ([]AccountDTO, error) {
 	rows, err := s.Store.ListAccounts(ctx)
 	if err != nil {
@@ -18,10 +23,18 @@ func (s *Stub) ListAccounts(ctx context.Context) ([]AccountDTO, error) {
 	}
 	out := make([]AccountDTO, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, AccountDTO{
+		dto := AccountDTO{
 			ID: r.ID, Name: r.Name, Email: r.Email, Color: r.Color, Status: "ok",
 			ProfileID: r.ProfileID,
-		})
+		}
+		if s.Engine != nil {
+			state, detail, known := s.Engine.AccountStatus(r.ID)
+			if !known {
+				state, detail = "connecting", ""
+			}
+			dto.Status, dto.Detail = state, detail
+		}
+		out = append(out, dto)
 	}
 	return out, nil
 }

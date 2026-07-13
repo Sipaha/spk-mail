@@ -8,7 +8,7 @@ import type { ThreadDTO } from './types'
 function makeThreads(n: number): ThreadDTO[] {
   return Array.from({ length: n }, (_, i) => ({
     id: i + 1, subject: `t${i}`, unread_count: 0, last_date: i, msg_count: 1,
-    has_flagged: false, has_attach: false, last_from: '', snippet: '',
+    has_flagged: false, has_attach: false, account_id: 1, last_from: '', snippet: '',
   }))
 }
 
@@ -51,7 +51,7 @@ beforeEach(() => {
     accounts: [],
     profiles: [],
     activeProfileId: null,
-    threads: [{ id: 1, subject: 'seed', unread_count: 0, last_date: 0, msg_count: 1, has_flagged: false, has_attach: false, last_from: '', snippet: '' }],
+    threads: [{ id: 1, subject: 'seed', unread_count: 0, last_date: 0, msg_count: 1, has_flagged: false, has_attach: false, account_id: 1, last_from: '', snippet: '' }],
     folders: {},
     filter: { unreadOnly: false, hasFlagged: false },
     search: '',

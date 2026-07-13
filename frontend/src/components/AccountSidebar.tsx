@@ -119,7 +119,9 @@ export default function AccountSidebar() {
             {isError ? (
               <a
                 href="#/settings"
-                title={accountDetail[a.id] ?? 'Connection failed'}
+                // Live event detail wins; a.detail is what ListAccounts knew at
+                // open time — on a cold start that is all we have.
+                title={accountDetail[a.id] ?? a.detail ?? 'Connection failed'}
                 className="block truncate px-2 py-0.5 font-mono text-[10px] text-danger hover:underline"
               >
                 Can't connect — details in Settings

@@ -53,6 +53,9 @@ type engineAdapter struct{ eng *mailsync.Engine }
 
 func (a engineAdapter) StartAccount(ctx context.Context, id int64) { a.eng.StartAccount(ctx, id) }
 func (a engineAdapter) StopAccount(id int64)                       { a.eng.StopAccount(id) }
+func (a engineAdapter) AccountStatus(id int64) (string, string, bool) {
+	return a.eng.AccountStatus(id)
+}
 func (a engineAdapter) WorkerFor(id int64) api.FlagOpSubmitter {
 	w := a.eng.WorkerFor(id)
 	if w == nil {

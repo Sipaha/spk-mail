@@ -33,6 +33,10 @@ type Engine interface {
 	StartAccount(ctx context.Context, id int64)
 	StopAccount(id int64)
 	WorkerFor(id int64) FlagOpSubmitter
+	// AccountStatus reports the account worker's live state ("connecting" |
+	// "ok" | "error") and, for a failure, its reason. known is false when no
+	// worker has reported yet — that is NOT the same as healthy.
+	AccountStatus(id int64) (state, detail string, known bool)
 }
 
 // Stub is the API impl: talks directly to storage/secrets and dispatches to

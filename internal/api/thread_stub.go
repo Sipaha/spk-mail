@@ -169,8 +169,9 @@ func (s *Stub) ListThreads(ctx context.Context, filter ThreadFilter) ([]ThreadDT
 			ID: r.ID, Subject: r.SubjectNorm, LastDate: r.LastDate,
 			MsgCount: r.MsgCount, UnreadCount: r.UnreadCount,
 			HasFlagged: r.HasFlagged, HasAttach: r.HasAttach,
-			LastFrom: strFrom(r.LastFrom),
-			Snippet:  collapseWhitespace(strFrom(r.Snippet)),
+			AccountID: r.AccountID,
+			LastFrom:  strFrom(r.LastFrom),
+			Snippet:   collapseWhitespace(strFrom(r.Snippet)),
 		})
 	}
 	return out, nil

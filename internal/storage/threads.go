@@ -22,6 +22,12 @@ type ThreadRow struct {
 	// Snippet is the most recent message's body_text, server-side truncated
 	// to ~200 chars. Nil if the most recent message has no plain-text body.
 	Snippet *string
+	// AccountID is the account of the most recent message — NOT "the thread's
+	// account": threads are not account-scoped in the schema, so a thread can
+	// in principle hold messages from several accounts (same Message-ID
+	// delivered to two mailboxes). The unified list uses it to colour a row by
+	// its newest message's account. 0 when the thread has no messages yet.
+	AccountID int64
 }
 
 // ThreadFilter mirrors the api-layer ThreadFilter shape but lives in storage to
@@ -102,7 +108,8 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 	// width. NULL columns surface as Go nil pointers via sql.NullString.
 	q := `SELECT t.id, t.subject_norm, t.last_date, t.msg_count, t.unread_count, t.has_flagged, t.has_attach,
 		(SELECT m.from_addr FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS last_from,
-		(SELECT SUBSTR(COALESCE(m.body_text, ''), 1, 200) FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS snippet
+		(SELECT SUBSTR(COALESCE(m.body_text, ''), 1, 200) FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS snippet,
+		(SELECT m.account_id FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS account_id
 		FROM threads t`
 	if len(wheres) > 0 {
 		q += " WHERE " + strings.Join(wheres, " AND ")
@@ -120,9 +127,11 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 		var t ThreadRow
 		var fl, at int
 		var lastFrom, snippet sql.NullString
-		if err := rows.Scan(&t.ID, &t.SubjectNorm, &t.LastDate, &t.MsgCount, &t.UnreadCount, &fl, &at, &lastFrom, &snippet); err != nil {
+		var accountID sql.NullInt64
+		if err := rows.Scan(&t.ID, &t.SubjectNorm, &t.LastDate, &t.MsgCount, &t.UnreadCount, &fl, &at, &lastFrom, &snippet, &accountID); err != nil {
 			return nil, err
 		}
+		t.AccountID = accountID.Int64 // 0 for a thread with no messages yet
 		t.HasFlagged = fl != 0
 		t.HasAttach = at != 0
 		if lastFrom.Valid {

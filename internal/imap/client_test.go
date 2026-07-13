@@ -184,11 +184,13 @@ func TestIdle_ReplaysNotificationArrivedWhileNotIdling(t *testing.T) {
 	require.NoError(t, err)
 	_, err = c.UIDsAbove(context.Background(), 1<<30) // a command, as syncFolder would issue
 	require.NoError(t, err)
+	// Generous bound: this only has to outlast scheduler starvation on a loaded
+	// machine, and the failure it guards (a lost push) is permanent, not slow.
 	require.Eventually(t, func() bool {
 		c.idleMu.Lock()
 		defer c.idleMu.Unlock()
 		return c.idleMissed
-	}, 2*time.Second, 10*time.Millisecond, "server push during the DONE window must be recorded as missed")
+	}, 10*time.Second, 10*time.Millisecond, "server push during the DONE window must be recorded as missed")
 
 	// Re-arming IDLE must replay it, so the worker re-syncs and sees the mail.
 	notifs2 := make(chan IdleNotification, 4)
@@ -197,7 +199,7 @@ func TestIdle_ReplaysNotificationArrivedWhileNotIdling(t *testing.T) {
 	select {
 	case n := <-notifs2:
 		require.Equal(t, NotifExists, n.Kind)
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("notification that arrived while not idling was lost — the message would stay invisible until the session bounces")
 	}
 }

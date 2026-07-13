@@ -39,6 +39,10 @@ type Engine struct {
 	// the engine has fully drained before, e.g., closing the SQLite handle.
 	wg sync.WaitGroup
 
+	// status is the live per-account state ListAccounts reads. Workers write to
+	// it; nothing else does.
+	status *statusTracker
+
 	// runWorker is what supervise actually calls; nil means (*AccountWorker).Run.
 	// Tests substitute a stub here — per-Engine rather than a package global, so
 	// parallel tests can't race each other through it.
@@ -51,6 +55,7 @@ func NewEngine(s storage.Writer, sec *secrets.Store, em *api.Emitter) *Engine {
 		store:           s,
 		secrets:         sec,
 		em:              em,
+		status:          newStatusTracker(),
 		workers:         map[int64]*AccountWorker{},
 		cancels:         map[int64]context.CancelFunc{},
 		downloaders:     map[int64]*AttachmentDownloader{},
@@ -194,6 +199,7 @@ func (e *Engine) StartAccount(parent context.Context, id int64) {
 	}
 	ctx, cancel := context.WithCancel(base)
 	w := NewAccountWorker(id, e.store, e.secrets, e.writer, e.em)
+	w.status = e.status
 	e.workers[id] = w
 	e.cancels[id] = cancel
 	e.wg.Add(1)
@@ -245,10 +251,21 @@ func (e *Engine) StopAccount(id int64) {
 	if c, ok := e.downloaderStops[id]; ok {
 		c()
 	}
+	e.status.forget(id)
 	delete(e.workers, id)
 	delete(e.cancels, id)
 	delete(e.downloaders, id)
 	delete(e.downloaderStops, id)
+}
+
+// AccountStatus reports the last state the account's worker published. known is
+// false when no worker has reported yet (the process just started, or the
+// account has no worker) — callers must render that as "connecting", never as
+// healthy: claiming "ok" for an account whose worker is sitting in a 300s
+// supervise backoff after a failed dial is exactly the lie this replaces.
+func (e *Engine) AccountStatus(id int64) (state, detail string, known bool) {
+	st, ok := e.status.get(id)
+	return st.State, st.Detail, ok
 }
 
 // WorkerFor returns the live worker for an account, or nil if none exists.
