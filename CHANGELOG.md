@@ -10,6 +10,8 @@ Alpha: IMAP receive only; Linux desktop + browser dev mode for UI automation.
 
 - Browser mode now requires a per-run bearer token on every `/api/*` route (injected into `index.html` as a `<meta>` tag; `index.html` is served `no-store` so a cached page can't hold a stale token). The `?token=` fallback exists only for `EventSource`, and on the `_test` routes it is accepted for GET/HEAD only — state-mutating test routes require the header. Token comparison is constant-time.
 - A `crypto/rand` failure now panics instead of degrading the auth token to a predictable constant.
+- The SQLite database and blob files are created owner-only (0600) regardless of umask.
+- A malformed-JSON request gets a bare `400` instead of the decoder's error echoed back.
 
 ### Fixed
 
@@ -21,8 +23,13 @@ Alpha: IMAP receive only; Linux desktop + browser dev mode for UI automation.
 - A stale response from a previous filter/profile scope can no longer overwrite the current thread list.
 - Accounts and profiles are fetched on every route, so a cold load on `#/settings` no longer shows an empty account list.
 - Raw-message blobs are refcount-decremented on folder/account deletion, so the blob sweeper can reclaim them.
+- Account status is reported from the sync engine, not faked: a freshly opened window shows a broken account as "connecting"/"error" with the real reason, instead of "ok" for up to the 300s worker backoff.
+- Switching profiles resets the folder/account filter, so the thread list can't stay scoped to a folder that isn't in the new profile.
+- Opening a thread from search results marks it read, like the main list does.
 
 ### Changed
 
 - Event emission is non-blocking again: a wedged SSE subscriber gets its events dropped (with a warning) rather than throttling the shared write pipeline.
 - The sync engine supervises account workers with tiered backoff and restarts them after a panic.
+- Thread rows in the unified inbox are tinted by account colour; the flag toggle is optimistic.
+- `Emitter` moved to its own `internal/events` package (breaking `internal/sync`'s dependency on `internal/api`); the 757-line account-worker file was split into `flag_ops` / `sync_folder` / `idle_session` / `poll`.
