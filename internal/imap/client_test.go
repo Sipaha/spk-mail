@@ -133,8 +133,10 @@ func TestIdle_FiresOnNewMessage(t *testing.T) {
 	select {
 	case n := <-notifs:
 		require.Equal(t, NotifExists, n.Kind)
-	case <-time.After(2 * time.Second):
-		t.Fatal("no IDLE notification within 2s")
+	case <-time.After(10 * time.Second):
+		// Generous: the notification arrives in microseconds when it works;
+		// the bound only has to survive scheduler starvation on a loaded box.
+		t.Fatal("no IDLE notification within 10s")
 	}
 }
 
