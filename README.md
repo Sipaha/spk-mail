@@ -35,7 +35,7 @@ That's it. There is no other network activity. No data is collected, transmitted
     make build-desktop   # native Wails desktop binary (build/bin/spk-mail-desktop)
     make release         # production desktop binary (build/bin/spk-mail-release; DevTools off)
 
-Requirements: Go 1.26.5, Node 20+, a C toolchain (CGO is enabled for SQLite). For the Wails desktop binary (`make build-desktop`, `make run`) you also need `libgtk-3-dev` and `libwebkit2gtk-4.1-dev` (see `.github/workflows/ci.yml`).
+Requirements: Go 1.26.5, Node 20+, a C toolchain (CGO is enabled for SQLite). For the Wails desktop binary (`make build-desktop`, `make run`) you also need `libgtk-3-dev` and `libwebkit2gtk-4.1-dev` (see `.github/ci.yml.disabled`).
 
 ## Run
 
@@ -49,6 +49,19 @@ Browser dev mode (UI as a localhost web app, useful for development against a re
     # then open http://localhost:5174
 
 The Playwright suite at `tests/playwright/` launches its own copy of the binary with `--imap-mock --seed=...` flags; it does not consume `make run-browser`.
+
+When the OS keyring is unavailable (headless CI, a locked login keyring), browser mode falls back to a password-derived master key: set **`SPK_MAIL_PASSWORD`** and a `master.salt` file is created next to `secrets.bin`. Without it, and with no keyring, startup fails with a clear message rather than storing credentials unprotected.
+
+## Testing
+
+    make test        # everything: Go, frontend, Playwright
+    make test-go     # go test -race ./...
+    make test-front  # vitest (frontend/)
+    make test-e2e    # builds the binary, then the Playwright suite
+
+`make test-e2e` builds the browser-mode binary and drives it against an in-process mock IMAP server — see `docs/ui-testing.md` for the seeded fixtures and the `/api/_test/*` automation routes. The Go suite includes end-to-end smoke tests under `tests/e2e/` that shell out to that binary; they skip if it hasn't been built, so run `make build` first (or `make test`, which does) to exercise them.
+
+CI mirrors these three jobs. The workflow is currently parked at `.github/ci.yml.disabled`; `git mv` it back under `.github/workflows/` to re-enable.
 
 ## Linux desktop integration
 
@@ -69,7 +82,7 @@ All on-disk state lives under `~/.spk/spk-mail/` so it sits alongside other SPK 
 | `~/.spk/spk-mail/db.sqlite` | Messages, threads, attachments metadata, FTS5 index |
 | `~/.spk/spk-mail/secrets.bin` | AES-256-GCM blob of per-account IMAP passwords |
 | `~/.spk/spk-mail/blobs/...` | Content-addressed attachment blob store |
-| `~/.spk/spk-mail/attachments/...` | Legacy per-message attachment tree (pre-v7; migrated by schema v8) |
+| `~/.spk/spk-mail/attachments/...` | Legacy per-message attachment tree (pre-v7 installs only; superseded by the blob store) |
 
 ## License
 

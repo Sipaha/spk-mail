@@ -205,36 +205,6 @@ func (s *Store) UpdateThreadStats(ctx context.Context, threadID int64) error {
 	return updateThreadStats(ctx, s.writeDB, threadID)
 }
 
-// RecomputeAllThreadStats walks every thread row and re-runs UpdateThreadStats.
-// Cheap on small mailboxes (single-digit ms per 100 threads) and run on every
-// app boot so any thread with desynced unread_count / last_date / has_flagged /
-// has_attach (e.g. left behind by an older LIKE-based query, or by a partial
-// write) is repaired without user action.
-func (s *Store) RecomputeAllThreadStats(ctx context.Context) error {
-	rows, err := s.readDB.QueryContext(ctx, `SELECT id FROM threads`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if err := s.UpdateThreadStats(ctx, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // FindThreadBySubject returns a candidate thread bucket for a message that has
 // no usable References / In-Reply-To headers. It looks for a thread that owns
 // at least one message in the SAME accountID with the same normalized subject

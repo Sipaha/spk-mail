@@ -1,9 +1,9 @@
 package config
 
 import (
+	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"testing"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPaths_RespectsEnvOverride(t *testing.T) {
@@ -12,7 +12,6 @@ func TestPaths_RespectsEnvOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail", "db.sqlite"), p.DBFile)
 	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail", "secrets.bin"), p.SecretsFile)
-	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail", "attachments"), p.AttachmentsDir)
 	require.Equal(t, filepath.Join("/tmp/spk-data", "spk-mail"), p.DataDir)
 }
 
@@ -24,5 +23,4 @@ func TestPaths_DefaultsWhenUnset(t *testing.T) {
 	require.Equal(t, "/home/test/.spk/spk-mail", p.DataDir)
 	require.Equal(t, "/home/test/.spk/spk-mail/db.sqlite", p.DBFile)
 	require.Equal(t, "/home/test/.spk/spk-mail/secrets.bin", p.SecretsFile)
-	require.Equal(t, "/home/test/.spk/spk-mail/attachments", p.AttachmentsDir)
 }

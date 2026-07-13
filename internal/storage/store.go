@@ -49,6 +49,17 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = writeDB.Close()
 		return nil, err
 	}
+	// The DB holds message bodies and (encrypted) account rows; keep it owner-
+	// only. The driver creates the file honouring umask, so a lax umask would
+	// leave it group/world-readable — tighten it explicitly. WAL/SHM sidecars
+	// carry the same data mid-transaction, so restrict them too; they may not
+	// exist yet (created lazily on first write), hence best-effort.
+	_ = os.Chmod(path, 0o600)
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if _, statErr := os.Stat(sidecar); statErr == nil {
+			_ = os.Chmod(sidecar, 0o600)
+		}
+	}
 	if err := migrate(ctx, writeDB); err != nil {
 		_ = writeDB.Close()
 		return nil, err

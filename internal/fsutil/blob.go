@@ -89,6 +89,11 @@ func WriteContentAddressed(r io.Reader, finalPath func(sha string) string) (sha 
 		}
 	}
 
+	// Blobs are raw message/attachment bytes; keep them owner-only. CreateTemp
+	// already makes the staged file 0600 and rename preserves the mode, so this
+	// is defensive — it pins the guarantee even if the staging path changes.
+	_ = os.Chmod(dest, 0o600)
+
 	// fsync the parent directory so the rename is durable. Best-effort:
 	// some filesystems return EINVAL on dir-fsync (notably 9p / virtio
 	// passthrough), in which case we accept the lesser durability

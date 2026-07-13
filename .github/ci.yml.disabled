@@ -33,6 +33,11 @@ jobs:
         run: go build ./...
       - name: build (wails desktop_only)
         run: go build -tags "wails desktop_only" ./cmd/spk-mail
+      # The e2e smoke tests under tests/e2e/ shell out to the browser-mode
+      # binary and t.Skip() when it is absent — without this step they would
+      # skip silently in CI, so `go test ./...` below would report a false pass.
+      - name: build app binary (for e2e smoke)
+        run: make build
       - name: test -race
         run: go test -race -timeout 180s ./...
       - name: golangci-lint
@@ -40,6 +45,10 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
   frontend:
     name: frontend (build + vitest)
@@ -54,6 +63,11 @@ jobs:
       - name: install
         working-directory: frontend
         run: npm ci
+      # Fail on a known-vulnerable production dependency. Dev-only advisories
+      # (build tooling) are out of scope for what ships in the binary.
+      - name: npm audit
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
       - name: build
         working-directory: frontend
         run: npm run build

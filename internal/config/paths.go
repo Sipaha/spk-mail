@@ -8,10 +8,9 @@ import (
 const appName = "spk-mail"
 
 type AppPaths struct {
-	DBFile         string
-	SecretsFile    string
-	AttachmentsDir string // legacy: pre-v7 per-message file tree; kept for migration v8
-	DataDir        string // root the content-addressed blob store lives under (<DataDir>/blobs/...)
+	DBFile      string
+	SecretsFile string
+	DataDir     string // root the content-addressed blob store lives under (<DataDir>/blobs/...)
 }
 
 // Paths returns on-disk locations for spk-mail state. By default everything
@@ -30,9 +29,8 @@ func Paths() (AppPaths, error) {
 		dataDir = filepath.Join(home, ".spk", appName)
 	}
 	return AppPaths{
-		DBFile:         filepath.Join(dataDir, "db.sqlite"),
-		SecretsFile:    filepath.Join(dataDir, "secrets.bin"),
-		AttachmentsDir: filepath.Join(dataDir, "attachments"),
-		DataDir:        dataDir,
+		DBFile:      filepath.Join(dataDir, "db.sqlite"),
+		SecretsFile: filepath.Join(dataDir, "secrets.bin"),
+		DataDir:     dataDir,
 	}, nil
 }
