@@ -12,7 +12,7 @@ import (
 )
 
 func TestGetAttachmentLocalPath_NotDownloaded(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 	accID, err := a.Store.InsertAccount(ctx, storage.AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
 	require.NoError(t, err)
@@ -30,7 +30,7 @@ func TestGetAttachmentLocalPath_NotDownloaded(t *testing.T) {
 // TestGetAttachmentLocalPath_FileExists exercises the v7+ blob path:
 // stub.DataDir is set so the resolver hits storage.BlobPath.
 func TestGetAttachmentLocalPath_FileExists(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	dataDir := t.TempDir()
 	a.DataDir = dataDir
 
@@ -62,7 +62,7 @@ func TestGetAttachmentLocalPath_FileExists(t *testing.T) {
 // cleared so the next sweep picks it up as pending and the
 // downloader re-fetches.
 func TestGetAttachmentLocalPath_FileMissingClearsRow(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	dataDir := t.TempDir()
 	a.DataDir = dataDir
 
@@ -85,4 +85,33 @@ func TestGetAttachmentLocalPath_FileMissingClearsRow(t *testing.T) {
 	pending, err := a.Store.ListPendingAttachments(ctx, accID, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "row must be queued for re-download after file-missing recovery")
+}
+
+// TestEnsurePathUnderDataDir covers the containment guard directly: a
+// traversal escape must still be rejected, and a legitimate filename that
+// merely starts with two dots (previously rejected by an imprecise
+// strings.HasPrefix(rel, "..") check) must be accepted.
+func TestEnsurePathUnderDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+
+	t.Run("rejects traversal outside data dir", func(t *testing.T) {
+		outside := filepath.Join(filepath.Dir(dataDir), "etc", "passwd")
+		err := ensurePathUnderDataDir(dataDir, outside)
+		require.Error(t, err)
+	})
+
+	t.Run("rejects the data dir's parent exactly", func(t *testing.T) {
+		err := ensurePathUnderDataDir(dataDir, filepath.Dir(dataDir))
+		require.Error(t, err)
+	})
+
+	t.Run("accepts a name that merely starts with two dots", func(t *testing.T) {
+		p := filepath.Join(dataDir, "..foo")
+		require.NoError(t, ensurePathUnderDataDir(dataDir, p))
+	})
+
+	t.Run("accepts a nested legitimate path", func(t *testing.T) {
+		p := filepath.Join(dataDir, "blobs", "ab", "cd", "file.bin")
+		require.NoError(t, ensurePathUnderDataDir(dataDir, p))
+	})
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func TestProfiles_AddListUpdateDelete(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 
 	p, err := a.AddProfile(ctx, AddProfileRequest{Name: "Work", Color: "#10b981"})
@@ -32,7 +32,7 @@ func TestProfiles_AddListUpdateDelete(t *testing.T) {
 }
 
 func TestProfiles_DeleteInUseSurfacesSentinel(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 	p, _ := a.AddProfile(ctx, AddProfileRequest{Name: "Work", Color: "#10b981"})
 	_, err := a.AddAccount(ctx, AddAccountRequest{
@@ -49,7 +49,7 @@ func TestProfiles_DeleteInUseSurfacesSentinel(t *testing.T) {
 }
 
 func TestAddAccount_PersistsProfileID(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 	p, _ := a.AddProfile(ctx, AddProfileRequest{Name: "Work", Color: "#10b981"})
 	acc, err := a.AddAccount(ctx, AddAccountRequest{
@@ -68,7 +68,7 @@ func TestAddAccount_PersistsProfileID(t *testing.T) {
 }
 
 func TestProfiles_Mute_TogglesAndExcludesFromTotal(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 
 	p, err := a.AddProfile(ctx, AddProfileRequest{Name: "Work", Color: "#10b981"})

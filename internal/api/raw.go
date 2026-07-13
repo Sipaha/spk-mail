@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/spk/spk-mail/internal/fsutil"
-	"github.com/spk/spk-mail/internal/imap"
+	"github.com/spk/spk-mail/internal/imapconn"
 	"github.com/spk/spk-mail/internal/storage"
 )
 
@@ -157,7 +157,7 @@ func (s *Stub) fetchAndStoreRaw(ctx context.Context, msg storage.MessageRow, msg
 		return nil, ErrRawUnavailable
 	}
 
-	c, err := s.dialAccount(ctx, msg.AccountID)
+	c, err := imapconn.DialAccount(ctx, s.Store, s.Secrets, msg.AccountID)
 	if err != nil {
 		return nil, err
 	}
@@ -185,29 +185,6 @@ func (s *Stub) fetchAndStoreRaw(ctx context.Context, msg storage.MessageRow, msg
 		s.persistRaw(ctx, msgID, raw)
 	}
 	return raw, nil
-}
-
-// dialAccount opens a fresh IMAP session for the given account.
-// Mirrors sync.DialAccount but lives here to avoid an import cycle
-// (internal/sync already imports internal/api).
-func (s *Stub) dialAccount(ctx context.Context, accountID int64) (*imap.Client, error) {
-	acc, err := s.Store.GetAccount(ctx, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("dial account %d: %w", accountID, err)
-	}
-	pw, err := s.Secrets.Get(fmt.Sprintf("account:%d", accountID))
-	if err != nil {
-		return nil, fmt.Errorf("dial account %d: secrets: %w", accountID, err)
-	}
-	c, err := imap.Dial(ctx, imap.DialOpts{
-		Host: acc.IMAPHost, Port: acc.IMAPPort,
-		Username: acc.IMAPUsername, Password: string(pw),
-		UseTLS: acc.UseTLS,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("dial account %d: %w", accountID, err)
-	}
-	return c, nil
 }
 
 // persistRaw writes raw bytes to the content-addressed blob store and

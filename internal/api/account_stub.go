@@ -41,6 +41,7 @@ func (s *Stub) AddAccount(ctx context.Context, req AddAccountRequest) (AccountDT
 		return AccountDTO{}, err
 	}
 	if err := s.Secrets.Set(fmt.Sprintf("account:%d", id), []byte(req.IMAPPassword)); err != nil {
+		_ = s.Store.DeleteAccount(ctx, id)
 		return AccountDTO{}, err
 	}
 	if s.Engine != nil {

@@ -9,7 +9,7 @@ import (
 )
 
 func TestListFolders_OrderedByRole(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 
 	accID, _ := a.Store.InsertAccount(ctx, storage.AccountRow{
@@ -39,7 +39,7 @@ func TestListFolders_OrderedByRole(t *testing.T) {
 }
 
 func TestListFolders_UnreadCounts(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 	accID, _ := a.Store.InsertAccount(ctx, storage.AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
 	inbox := "inbox"
@@ -59,7 +59,7 @@ func TestListFolders_UnreadCounts(t *testing.T) {
 }
 
 func TestListThreads_HonorsFolderAndUnreadFilters(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	ctx := context.Background()
 	accID, _ := a.Store.InsertAccount(ctx, storage.AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
 	inbox, sent := "inbox", "sent"

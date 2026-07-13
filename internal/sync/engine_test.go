@@ -10,7 +10,6 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/spk/spk-mail/internal/api"
-	imapwrap "github.com/spk/spk-mail/internal/imap"
 	"github.com/spk/spk-mail/internal/mockimap"
 	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
@@ -34,7 +33,7 @@ func TestEngine_TwoAccountsSyncInParallel(t *testing.T) {
 	require.NoError(t, err)
 
 	add := func(email string, mock *mockimap.Server) int64 {
-		host, port := imapwrap.SplitHostPort(mock.Addr())
+		host, port := splitHostPortAddr(mock.Addr())
 		id, err := st.InsertAccount(context.Background(), storage.AccountRow{
 			Name: email, Email: email, IMAPHost: host, IMAPPort: port, IMAPUsername: email,
 			UseTLS: false, Color: "#fff", CreatedAt: 0,

@@ -3,7 +3,6 @@ package sync
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,8 +10,6 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/spk/spk-mail/internal/api"
-	"github.com/spk/spk-mail/internal/mockimap"
-	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -23,30 +20,13 @@ import (
 // row at the resulting blob, and the file on disk contains the IMAP
 // payload byte-for-byte.
 func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
-	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
-	require.NoError(t, err)
-	defer mock.Close()
+	fx := setupMockAccount(t, "alice@example.com", "secret")
+	st := fx.Store
+	sec := fx.Secrets
+	accID := fx.AccID
+	dir := fx.Dir
 
-	dir := t.TempDir()
-	st, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
-	require.NoError(t, err)
-	defer st.Close()
-
-	key := make([]byte, 32)
-	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
-	require.NoError(t, err)
-
-	host, port := splitHostPortAddr(mock.Addr())
-	accID, err := st.InsertAccount(context.Background(), storage.AccountRow{
-		Name: "X", Email: "alice@example.com",
-		IMAPHost: host, IMAPPort: port,
-		IMAPUsername: "alice@example.com", UseTLS: false,
-		Color: "#fff", CreatedAt: 0,
-	})
-	require.NoError(t, err)
-	require.NoError(t, sec.Set(fmt.Sprintf("account:%d", accID), []byte("secret")))
-
-	u := mock.User("alice@example.com")
+	u := fx.Mock.User("alice@example.com")
 	require.NotNil(t, u)
 	raw := []byte("From: x@y\r\n" +
 		"Subject: t\r\n" +
@@ -65,7 +45,7 @@ func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 		"\r\n" +
 		"DATA\r\n" +
 		"--b--\r\n")
-	_, err = u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
+	_, err := u.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{})
 	require.NoError(t, err)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -106,30 +86,13 @@ func TestAttachmentDownloader_FetchesAndUpdatesRow(t *testing.T) {
 // with byte-identical payloads must share ONE on-disk file (refcount=2)
 // and the directory tree must hold exactly one blob.
 func TestAttachmentDownloader_DedupesIdenticalContent(t *testing.T) {
-	mock, err := mockimap.Start(context.Background(), "alice@example.com", "secret")
-	require.NoError(t, err)
-	defer mock.Close()
+	fx := setupMockAccount(t, "alice@example.com", "secret")
+	st := fx.Store
+	sec := fx.Secrets
+	accID := fx.AccID
+	dir := fx.Dir
 
-	dir := t.TempDir()
-	st, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
-	require.NoError(t, err)
-	defer st.Close()
-
-	key := make([]byte, 32)
-	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
-	require.NoError(t, err)
-
-	host, port := splitHostPortAddr(mock.Addr())
-	accID, err := st.InsertAccount(context.Background(), storage.AccountRow{
-		Name: "X", Email: "alice@example.com",
-		IMAPHost: host, IMAPPort: port,
-		IMAPUsername: "alice@example.com", UseTLS: false,
-		Color: "#fff", CreatedAt: 0,
-	})
-	require.NoError(t, err)
-	require.NoError(t, sec.Set(fmt.Sprintf("account:%d", accID), []byte("secret")))
-
-	u := mock.User("alice@example.com")
+	u := fx.Mock.User("alice@example.com")
 	require.NotNil(t, u)
 
 	mkMsg := func(msgID string) []byte {
@@ -151,7 +114,7 @@ func TestAttachmentDownloader_DedupesIdenticalContent(t *testing.T) {
 			"DUPLICATEPAYLOAD\r\n" +
 			"--b--\r\n")
 	}
-	_, err = u.Append("INBOX", bytes.NewReader(mkMsg("a")), &imap.AppendOptions{})
+	_, err := u.Append("INBOX", bytes.NewReader(mkMsg("a")), &imap.AppendOptions{})
 	require.NoError(t, err)
 	_, err = u.Append("INBOX", bytes.NewReader(mkMsg("b")), &imap.AppendOptions{})
 	require.NoError(t, err)

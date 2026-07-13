@@ -2,11 +2,10 @@ package api
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
-	"github.com/spk/spk-mail/internal/secrets"
 	"github.com/spk/spk-mail/internal/storage"
+	"github.com/spk/spk-mail/internal/teststore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,14 +14,7 @@ import (
 // one MarkMessagesRead) at the storage seam.
 func newSpyStub(t *testing.T) (*Stub, *countingStore, *storage.Store, *spyEngine) {
 	t.Helper()
-	dir := t.TempDir()
-	s, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-
-	key := make([]byte, 32)
-	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
-	require.NoError(t, err)
+	s, sec := teststore.Open(t)
 
 	cs := &countingStore{Writer: s}
 	eng := &spyEngine{worker: &spyWorker{}}
@@ -200,15 +192,16 @@ done:
 	require.ElementsMatch(t, []int64{m1, m2}, gotIDs,
 		"one MessageUpdated event per FLIPPED message (m3 was already \\Seen — no event)")
 
-	require.Len(t, eng.worker.ops, 2, "one IMAP STORE op per flipped message")
-	storeUIDs := []int64{eng.worker.ops[0].UIDs[0], eng.worker.ops[1].UIDs[0]}
-	require.ElementsMatch(t, []int64{1, 2}, storeUIDs)
+	// One bulk op per (account, folder), NOT one per message: SubmitFlagOp
+	// blocks while a worker's queue is full, so a per-message fan-out would
+	// stall the handler by N × the enqueue timeout during an IMAP outage.
+	require.Len(t, eng.worker.ops, 1, "flipped messages of one folder collapse into a single bulk STORE op")
+	require.ElementsMatch(t, []int64{1, 2}, eng.worker.ops[0].UIDs)
 	for _, op := range eng.worker.ops {
 		require.True(t, op.Add)
 		require.Equal(t, []string{`\Seen`}, op.Flags)
 		require.Equal(t, accID, op.AccountID)
 		require.Equal(t, folderID, op.FolderID)
-		require.Len(t, op.UIDs, 1, "per-message MarkRead must emit one Op per message with a 1-element UIDs slice")
 	}
 }
 
@@ -483,14 +476,7 @@ func TestToggleThreadFlagged_Noop(t *testing.T) {
 // TestToggleThreadFlagged_NoEngine — Stub.Engine == nil (unit-test wiring).
 // Storage UPDATE still commits, SSE event still fires, no panic, no flag op.
 func TestToggleThreadFlagged_NoEngine(t *testing.T) {
-	dir := t.TempDir()
-	s, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	key := make([]byte, 32)
-	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
-	require.NoError(t, err)
-
+	s, sec := teststore.Open(t)
 	cs := &countingStore{Writer: s}
 	stub := NewStub(cs, sec, NewEmitter(), nil) // nil engine
 
@@ -504,7 +490,7 @@ func TestToggleThreadFlagged_NoEngine(t *testing.T) {
 	})
 	threadID, _ := s.InsertThread(ctx, storage.ThreadRow{SubjectNorm: "t", LastDate: 100})
 	tid := threadID
-	_, err = s.InsertMessage(ctx, storage.MessageRow{
+	_, err := s.InsertMessage(ctx, storage.MessageRow{
 		AccountID: accID, FolderID: folderID, UID: 1, Date: 100,
 		ThreadID: &tid, Flags: `[]`,
 	})
@@ -577,14 +563,7 @@ func TestToggleThreadFlagged_MultiFolder(t *testing.T) {
 // where sync isn't running). Storage UPDATE still commits, SSE event still
 // fires, no panic on nil engine, no flag op queued.
 func TestMarkFolderRead_NoEngine(t *testing.T) {
-	dir := t.TempDir()
-	s, err := storage.Open(context.Background(), filepath.Join(dir, "db.sqlite"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close() })
-	key := make([]byte, 32)
-	sec, err := secrets.Open(filepath.Join(dir, "secrets.bin"), key)
-	require.NoError(t, err)
-
+	s, sec := teststore.Open(t)
 	cs := &countingStore{Writer: s}
 	stub := NewStub(cs, sec, NewEmitter(), nil) // nil engine
 
@@ -596,7 +575,7 @@ func TestMarkFolderRead_NoEngine(t *testing.T) {
 	folderID, _ := s.UpsertFolder(ctx, storage.FolderRow{
 		AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1,
 	})
-	_, err = s.InsertMessage(ctx, storage.MessageRow{
+	_, err := s.InsertMessage(ctx, storage.MessageRow{
 		AccountID: accID, FolderID: folderID, UID: 1, Date: 1, Flags: `[]`,
 	})
 	require.NoError(t, err)

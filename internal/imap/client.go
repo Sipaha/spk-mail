@@ -30,29 +30,42 @@ type DialOpts struct {
 type Client struct {
 	c *imapclient.Client
 
-	// idleMu guards idleNotifs. The unilateral-data handler closures
-	// installed on imapclient.Options run on arbitrary goroutines, so any
-	// access to idleNotifs is mediated by this mutex. The mutex is never
-	// held while sending on a channel.
+	// idleMu guards idleNotifs and idleMissed. The unilateral-data handler
+	// closures installed on imapclient.Options run on arbitrary goroutines, so
+	// any access to them is mediated by this mutex. The mutex is never held
+	// while sending on a channel.
 	idleMu     sync.Mutex
 	idleNotifs chan IdleNotification
+	// idleMissed records that the server pushed a notification we could not
+	// hand to anyone — either no IDLE consumer was registered (the window
+	// between DONE and the next IDLE, during which the caller runs a FETCH on
+	// this same connection per RFC 2177) or the consumer's buffer was full.
+	// The server will not repeat an EXISTS, so without this flag that arrival
+	// would stay invisible until the next one. Idle() converts a set flag into
+	// a synthetic EXISTS on the fresh channel, which makes the caller re-sync.
+	idleMissed bool
 }
 
 // pushIdleNotif forwards a unilateral-data notification to the IDLE consumer.
-// Non-blocking: drops on full channel, no-op when no consumer is registered.
-// The mutex is released BEFORE the channel send so we never hold idleMu while
-// a goroutine is sleeping on a full buffer.
+// Non-blocking; when the notification cannot be delivered it is recorded in
+// idleMissed rather than dropped, so the next Idle() replays it. The mutex is
+// released BEFORE the channel send so we never hold idleMu while a goroutine is
+// sleeping on a full buffer.
 func (c *Client) pushIdleNotif(n IdleNotification) {
 	c.idleMu.Lock()
 	ch := c.idleNotifs
-	c.idleMu.Unlock()
 	if ch == nil {
+		c.idleMissed = true
+		c.idleMu.Unlock()
 		return
 	}
+	c.idleMu.Unlock()
 	select {
 	case ch <- n:
 	default:
-		// drop on full
+		c.idleMu.Lock()
+		c.idleMissed = true
+		c.idleMu.Unlock()
 	}
 }
 
@@ -199,10 +212,6 @@ func splitHostPort(addr string) (string, int) {
 	p, _ := strconv.Atoi(port)
 	return host, p
 }
-
-// SplitHostPort is the exported flavour, intended for callers that already
-// have a "host:port" string (e.g. config loaders).
-func SplitHostPort(addr string) (string, int) { return splitHostPort(addr) }
 
 // Capabilities returns the set of advertised CAPABILITY tokens. Used by the
 // engine to decide IDLE vs poll.

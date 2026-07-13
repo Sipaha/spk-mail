@@ -46,8 +46,9 @@ type spyWorker struct {
 	ops []flagop.Op
 }
 
-func (w *spyWorker) SubmitFlagOp(op flagop.Op) {
+func (w *spyWorker) SubmitFlagOp(_ context.Context, op flagop.Op) error {
 	w.ops = append(w.ops, op)
+	return nil
 }
 
 type spyEngine struct {

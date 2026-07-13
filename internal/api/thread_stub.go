@@ -250,20 +250,20 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 	if err != nil {
 		return err
 	}
+	// One bulk Op per (account, folder) — never one per message. SubmitFlagOp
+	// blocks while a worker's queue is full (worker down, supervise backing
+	// off), so a per-message fan-out would stall this handler by N × the
+	// enqueue timeout on an IMAP outage. Grouping mirrors ToggleThreadFlagged:
+	// UIDs are folder-scoped, so folders cannot share an Op.
+	groups := make(map[folderKey][]int64)
 	for _, ch := range out.Changed {
-		if s.Engine != nil {
-			if w := s.Engine.WorkerFor(ch.AccountID); w != nil {
-				w.SubmitFlagOp(flagop.Op{
-					AccountID: ch.AccountID,
-					FolderID:  ch.FolderID,
-					UIDs:      []int64{ch.UID},
-					Add:       true,
-					Flags:     []string{`\Seen`},
-				})
-			} else {
-				slog.Warn("MarkRead: no worker for account", "account_id", ch.AccountID)
-			}
-		}
+		k := folderKey{ch.AccountID, ch.FolderID}
+		groups[k] = append(groups[k], ch.UID)
+	}
+	for k, uids := range groups {
+		s.submitFlagOp(ctx, "MarkRead", k, uids, true, `\Seen`)
+	}
+	for _, ch := range out.Changed {
 		s.Emitter.Emit(Event{Type: "MessageUpdated", Payload: map[string]any{
 			"id":         ch.MessageID,
 			"account_id": ch.AccountID,
@@ -271,6 +271,41 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 		}})
 	}
 	return nil
+}
+
+// folderKey identifies the IMAP mailbox a bulk flag op addresses. A thread can
+// span folders if a message moved, and IMAP UIDs are folder-scoped, so ops are
+// always grouped per (account, folder) — one covering both would address the
+// wrong messages.
+type folderKey struct {
+	accountID int64
+	folderID  int64
+}
+
+// submitFlagOp hands one bulk op to the account's worker, logging (never
+// failing the request) when there is no worker or the queue stays full: the
+// DB is already updated, and the worker re-syncs flags from the server on its
+// next pass, so a dropped op degrades to a delayed IMAP flag, not lost state.
+func (s *Stub) submitFlagOp(ctx context.Context, caller string, k folderKey, uids []int64, add bool, flag string) {
+	if s.Engine == nil {
+		return
+	}
+	w := s.Engine.WorkerFor(k.accountID)
+	if w == nil {
+		slog.Warn(caller+": no worker for account",
+			"account_id", k.accountID, "folder_id", k.folderID)
+		return
+	}
+	if err := w.SubmitFlagOp(ctx, flagop.Op{
+		AccountID: k.accountID,
+		FolderID:  k.folderID,
+		UIDs:      uids,
+		Add:       add,
+		Flags:     []string{flag},
+	}); err != nil {
+		slog.Warn(caller+": flag op submit failed",
+			"account_id", k.accountID, "folder_id", k.folderID, "err", err)
+	}
 }
 
 // MarkFolderRead flips \Seen on every unread message in the folder. The
@@ -291,20 +326,7 @@ func (s *Stub) MarkFolderRead(ctx context.Context, folderID int64) (int64, error
 	for i, ch := range out.Changed {
 		uids[i] = ch.UID
 	}
-	if s.Engine != nil {
-		if w := s.Engine.WorkerFor(accountID); w != nil {
-			w.SubmitFlagOp(flagop.Op{
-				AccountID: accountID,
-				FolderID:  folderID,
-				UIDs:      uids,
-				Add:       true,
-				Flags:     []string{`\Seen`},
-			})
-		} else {
-			slog.Warn("MarkFolderRead: no worker for account",
-				"account_id", accountID, "folder_id", folderID)
-		}
-	}
+	s.submitFlagOp(ctx, "MarkFolderRead", folderKey{accountID, folderID}, uids, true, `\Seen`)
 	s.Emitter.Emit(Event{
 		Type: "FolderMarkedRead",
 		Payload: map[string]any{
@@ -332,36 +354,13 @@ func (s *Stub) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTog
 		return FlagToggleResult{Action: "noop", Count: 0}, nil
 	}
 
-	// Group changed UIDs by (account, folder) — typically one group, but a
-	// thread CAN span folders if a message moved between them, and IMAP
-	// UIDs are folder-scoped, so a single Op covering both would address
-	// the wrong messages.
-	type key struct {
-		accountID int64
-		folderID  int64
-	}
-	groups := make(map[key][]int64)
+	groups := make(map[folderKey][]int64)
 	for _, ch := range out.Changed {
-		k := key{ch.AccountID, ch.FolderID}
+		k := folderKey{ch.AccountID, ch.FolderID}
 		groups[k] = append(groups[k], ch.UID)
 	}
-
-	if s.Engine != nil {
-		for k, uids := range groups {
-			w := s.Engine.WorkerFor(k.accountID)
-			if w == nil {
-				slog.Warn("ToggleThreadFlagged: no worker for account",
-					"account_id", k.accountID, "folder_id", k.folderID)
-				continue
-			}
-			w.SubmitFlagOp(flagop.Op{
-				AccountID: k.accountID,
-				FolderID:  k.folderID,
-				UIDs:      uids,
-				Add:       out.Action == "added",
-				Flags:     []string{`\Flagged`},
-			})
-		}
+	for k, uids := range groups {
+		s.submitFlagOp(ctx, "ToggleThreadFlagged", k, uids, out.Action == "added", `\Flagged`)
 	}
 
 	for _, ch := range out.Changed {

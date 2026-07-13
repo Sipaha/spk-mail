@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/spk/spk-mail/internal/storage"
 )
@@ -69,7 +72,28 @@ func (s *Stub) GetAttachmentLocalPath(ctx context.Context, id int64) (string, er
 		_, _ = s.Store.ClearAttachmentBlob(ctx, id)
 		return "", ErrAttachmentNotReady
 	}
+	if s.DataDir != "" {
+		if err := ensurePathUnderDataDir(s.DataDir, path); err != nil {
+			return "", err
+		}
+	}
 	return path, nil
+}
+
+func ensurePathUnderDataDir(dataDir, path string) error {
+	absRoot, err := filepath.Abs(dataDir)
+	if err != nil {
+		return fmt.Errorf("resolve data dir: %w", err)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve attachment path: %w", err)
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("attachment path outside data directory")
+	}
+	return nil
 }
 
 // OpenAttachment hands the local file off to xdg-open (Linux). Detached: we

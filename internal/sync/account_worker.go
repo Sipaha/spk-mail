@@ -48,28 +48,44 @@ func NewAccountWorker(id int64, s storage.Writer, sec *secrets.Store, w *StoreWr
 	}
 }
 
-// SubmitFlagOp queues a flag operation for async UID STORE. It is non-blocking:
-// if the queue is full (cap 64) the op is dropped with a warning. An empty
+// flagOpEnqueueTimeout is how long SubmitFlagOp blocks when the queue is
+// full before returning an error to the caller.
+const flagOpEnqueueTimeout = 2 * time.Second
+
+// SubmitFlagOp queues a flag operation for async UID STORE. It blocks briefly
+// when the queue is full; returns an error if the queue stays full. An empty
 // UIDs slice is rejected at the boundary — the doc on flagop.Op states it
 // must hold at least one UID, and accepting an empty slice would silently
 // pass through to a no-op StoreFlags + a misleading "uids=[]" warning if
 // the worker logged the dropped path.
-func (w *AccountWorker) SubmitFlagOp(op flagop.Op) {
+//
+// The only reader of the queue is the worker's runOnce loop, which is NOT
+// running while the worker is down and supervise backs off (up to 300s). So a
+// full queue can stay full for minutes; callers sit on the HTTP request path
+// and must be able to walk away — hence ctx. Cancelling the request aborts the
+// enqueue instead of pinning the handler for the full timeout.
+func (w *AccountWorker) SubmitFlagOp(ctx context.Context, op flagop.Op) error {
 	if len(op.UIDs) == 0 {
 		slog.Warn("flag op rejected: empty UIDs",
 			"account_id", w.accountID, "folder_id", op.FolderID,
 			"add", op.Add, "flags", op.Flags)
-		return
+		return fmt.Errorf("flag op rejected: empty UIDs")
 	}
+	timer := time.NewTimer(flagOpEnqueueTimeout)
+	defer timer.Stop()
 	select {
 	case w.flagOps <- op:
-	default:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("flag op dropped: %w", ctx.Err())
+	case <-timer.C:
 		slog.Warn("flag op dropped: queue full",
 			"account_id", w.accountID,
 			"folder_id", op.FolderID,
 			"uids", op.UIDs,
 			"add", op.Add,
 			"flags", op.Flags)
+		return fmt.Errorf("flag op dropped: queue full")
 	}
 }
 
@@ -558,7 +574,11 @@ func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, fol
 	// rotation does happen, supervise will bounce the worker (next IMAP auth
 	// fails → connection error → Run returns → restart picks up the fresh
 	// secret), so caching here doesn't pin a stale credential indefinitely.
-	pw, _ := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
+	pw, err := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
+	if err != nil {
+		slog.Warn("IDLE: secrets get failed", "account_id", acc.ID, "err", err)
+		return
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -632,8 +652,13 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 	// in SELECTED state and Idle() can be called directly. No need to
 	// re-Select.
 	notifs := make(chan imap.IdleNotification, 8)
-	stop := c.Idle(sessionCtx, notifs)
-	defer stop()
+	var stopIdle func()
+	stopIdle = c.Idle(sessionCtx, notifs)
+	defer func() {
+		if stopIdle != nil {
+			stopIdle()
+		}
+	}()
 	slog.Info("IDLE session started", "account_id", acc.ID, "folder", folder)
 	for {
 		select {
@@ -651,29 +676,27 @@ func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountR
 				// no MessageInserted follows, the failure is in the
 				// post-EXISTS sync path.
 				slog.Info("IDLE EXISTS received", "account_id", acc.ID, "folder", folder)
-				folders, _ := w.store.ListFolders(ctx, acc.ID)
-				for _, f := range folders {
-					if strings.EqualFold(f.Name, folder) {
-						syncC, err := imap.Dial(ctx, imap.DialOpts{
-							Host: acc.IMAPHost, Port: acc.IMAPPort,
-							Username: acc.IMAPUsername, Password: string(pw),
-							UseTLS: acc.UseTLS,
-						})
-						if err != nil {
-							slog.Warn("IDLE post-EXISTS dial failed", "account_id", acc.ID, "err", err)
-							break
-						}
-						// runIDLE post-EXISTS — these messages just landed
-						// on the server while we were connected, so they
-						// are real-time arrivals and should produce a
-						// MessageArrived notification.
-						if syncErr := w.syncFolder(ctx, syncC, f.ID, folder, role, true); syncErr != nil {
-							slog.Warn("IDLE post-EXISTS sync failed", "account_id", acc.ID, "folder", folder, "err", syncErr)
-						}
-						_ = syncC.Close()
-						break
-					}
+				folderID, ok := w.folderIDByName(ctx, acc.ID, folder)
+				if !ok {
+					continue
 				}
+				// RFC 2177: client must issue DONE before FETCH on the
+				// same connection. Reuse this session instead of dialing
+				// a second connection per EXISTS.
+				stopIdle()
+				stopIdle = nil
+				// runIDLE post-EXISTS — these messages just landed on the
+				// server while we were connected, so they are real-time
+				// arrivals and should produce a MessageArrived notification.
+				if syncErr := w.syncFolder(ctx, c, folderID, folder, role, true); syncErr != nil {
+					if ctx.Err() == nil {
+						slog.Warn("IDLE post-EXISTS sync failed", "account_id", acc.ID, "folder", folder, "err", syncErr)
+					}
+					return
+				}
+				notifs = make(chan imap.IdleNotification, 8)
+				stopIdle = c.Idle(sessionCtx, notifs)
+				slog.Info("IDLE session resumed", "account_id", acc.ID, "folder", folder)
 			}
 		}
 	}
@@ -723,4 +746,3 @@ func roleStr(p *string) string {
 	}
 	return *p
 }
-

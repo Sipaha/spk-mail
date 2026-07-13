@@ -57,21 +57,33 @@ func (s *Store) InsertMessage(ctx context.Context, m MessageRow) (int64, error) 
 func (s *Store) UpdateFlagsByUID(ctx context.Context, folderID, uid int64, flagsJSON string) (int64, *int64, bool, error) {
 	var msgID int64
 	var threadID *int64
-	var existing string
-	err := s.readDB.QueryRowContext(ctx,
-		`SELECT id, thread_id, flags FROM messages WHERE folder_id = ? AND uid = ?`,
-		folderID, uid).Scan(&msgID, &threadID, &existing)
+	var changed bool
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		var existing string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT id, thread_id, flags FROM messages WHERE folder_id = ? AND uid = ?`,
+			folderID, uid).Scan(&msgID, &threadID, &existing); err != nil {
+			return err
+		}
+		if existing == flagsJSON {
+			return nil
+		}
+		// The SELECT above and this UPDATE run in the same tx on the store's
+		// single writer connection (MaxOpenConns=1), so no other writer can
+		// slip between them — the row still holds `existing`, and an
+		// `AND flags = ?` guard here would never fire.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE messages SET flags = ? WHERE id = ?`,
+			flagsJSON, msgID); err != nil {
+			return err
+		}
+		changed = true
+		return nil
+	})
 	if err != nil {
 		return 0, nil, false, err
 	}
-	if existing == flagsJSON {
-		return msgID, threadID, false, nil
-	}
-	if _, err := s.writeDB.ExecContext(ctx,
-		`UPDATE messages SET flags = ? WHERE id = ?`, flagsJSON, msgID); err != nil {
-		return 0, nil, false, err
-	}
-	return msgID, threadID, true, nil
+	return msgID, threadID, changed, nil
 }
 
 func (s *Store) GetMessage(ctx context.Context, id int64) (MessageRow, error) {
@@ -344,7 +356,7 @@ func (s *Store) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTo
 				}
 				out.Changed = append(out.Changed, FlagChange{
 					MessageID: c.id, AccountID: c.accountID,
-					FolderID:  c.folderID, UID: c.uid,
+					FolderID: c.folderID, UID: c.uid,
 				})
 			}
 		} else {
@@ -365,7 +377,7 @@ func (s *Store) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTo
 			}
 			out.Changed = append(out.Changed, FlagChange{
 				MessageID: c.id, AccountID: c.accountID,
-				FolderID:  c.folderID, UID: c.uid,
+				FolderID: c.folderID, UID: c.uid,
 			})
 		}
 
@@ -383,7 +395,9 @@ func (s *Store) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTo
 // scanSeenCandidates is the shared post-SELECT scan routine: takes a SQL
 // query and materializes its result set into seenCandidates. The query MUST
 // project columns in this exact order:
-//   id, account_id, folder_id, uid, thread_id, flags
+//
+//	id, account_id, folder_id, uid, thread_id, flags
+//
 // Wrong column order yields silent scan miscorrelation (e.g. folderID lands
 // in uid). Used by both MarkMessagesRead (id-list SELECT) and
 // MarkFolderMessagesRead (folder-scope SELECT).

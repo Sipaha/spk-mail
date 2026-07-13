@@ -24,7 +24,7 @@ var ErrProfileInUse = errors.New("api: profile has attached accounts")
 // internal/flagop so api and sync can share it without an import cycle
 // (sync depends on api.Emitter).
 type FlagOpSubmitter interface {
-	SubmitFlagOp(op flagop.Op)
+	SubmitFlagOp(ctx context.Context, op flagop.Op) error
 }
 
 // Engine is the minimal surface the API stub needs from the sync engine.

@@ -75,7 +75,10 @@ func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
 		// Drain blob refcounts BEFORE the cascade removes the
 		// attachments rows we'd otherwise count from.
-		if err := decBlobRefsByAccount(ctx, tx, id); err != nil {
+		if err := decBlobRefs(ctx, tx, blobRefAttachment, "account_id", id); err != nil {
+			return err
+		}
+		if err := decBlobRefs(ctx, tx, blobRefRawMessage, "account_id", id); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, id)
@@ -84,7 +87,12 @@ func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
 		}
 		n, _ := res.RowsAffected()
 		deleted = n > 0
-		return nil
+		// ON DELETE CASCADE on messages.account_id has just removed
+		// every message row for this account; any thread that now has
+		// zero messages is an orphan (threads have no account FK) that
+		// ListThreads would otherwise keep surfacing. Sweep it here, in
+		// the same tx as the cascade.
+		return deleteOrphanThreads(ctx, tx)
 	})
 	if err != nil {
 		return err

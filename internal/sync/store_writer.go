@@ -47,6 +47,10 @@ func (w *StoreWriter) Submit(ctx context.Context, m IncomingMessage) error {
 	}
 }
 
+// writerDrainGrace bounds how long Run keeps draining queued messages after
+// ctx cancellation so in-flight bulk-sync batches can land before shutdown.
+const writerDrainGrace = 5 * time.Second
+
 func (w *StoreWriter) Run(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -58,14 +62,60 @@ func (w *StoreWriter) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			w.drainOnShutdown(nil)
 			return
 		case m, ok := <-w.in:
 			if !ok {
 				return
 			}
+			if ctx.Err() != nil {
+				// Shutdown raced this receive: when both cases are ready
+				// `select` picks at random, so we can land here with a
+				// cancelled ctx. Processing m with it would fail the DB write
+				// and lose the message — hand it to the drain path instead,
+				// which writes on a fresh ctx.
+				w.drainOnShutdown(&m)
+				return
+			}
 			if err := w.process(ctx, m); err != nil {
 				api.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": m.UID, "folder_id": m.FolderID})
 			}
+		}
+	}
+}
+
+// drainOnShutdown processes messages already queued when ctx cancelled, for up
+// to writerDrainGrace, on a fresh context (the run ctx is dead — writing on it
+// would fail). `pending`, when non-nil, is a message already taken off the
+// queue by Run and is written first so it isn't lost. drainOnShutdown returns
+// as soon as the queue is empty — nothing closes w.in, so blocking on a receive
+// would stall every shutdown by the full grace period. Anything still queued at
+// the deadline is logged and dropped.
+func (w *StoreWriter) drainOnShutdown(pending *IncomingMessage) {
+	drainCtx, cancel := context.WithTimeout(context.Background(), writerDrainGrace)
+	defer cancel()
+	deadline := time.After(writerDrainGrace)
+	if pending != nil {
+		if err := w.process(drainCtx, *pending); err != nil {
+			api.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": pending.UID, "folder_id": pending.FolderID})
+		}
+	}
+	for {
+		select {
+		case m, ok := <-w.in:
+			if !ok {
+				return
+			}
+			if err := w.process(drainCtx, m); err != nil {
+				api.Emit(w.em, "WriteError", map[string]any{"err": err.Error(), "uid": m.UID, "folder_id": m.FolderID})
+			}
+		case <-deadline:
+			if n := len(w.in); n > 0 {
+				slog.Warn("store writer shutdown: dropped queued messages", "count", n)
+			}
+			return
+		default:
+			return
 		}
 	}
 }

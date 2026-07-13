@@ -14,9 +14,9 @@ const (
 	// NotifExists means the server reported an EXISTS update — typically a
 	// new message has arrived in the selected mailbox. EXPUNGE / FETCH
 	// updates are observed by the underlying handler but not surfaced here:
-	// the only consumer (account_worker.runIDLE) re-fetches via
-	// FetchSinceUIDRange after EXISTS, which already picks up flag changes
-	// and doesn't need a separate FETCH notification.
+	// the only consumer (account_worker.runIDLE) re-syncs via syncFolder
+	// after EXISTS (UID SEARCH + FetchByUIDs), which already picks up flag
+	// changes and doesn't need a separate FETCH notification.
 	NotifExists NotifKind = "exists"
 )
 
@@ -47,7 +47,21 @@ func (c *Client) Idle(ctx context.Context, ch chan<- IdleNotification) func() {
 	c.idleMu.Lock()
 	c.idleNotifs = make(chan IdleNotification, 16)
 	internalCh := c.idleNotifs
+	missed := c.idleMissed
+	c.idleMissed = false
 	c.idleMu.Unlock()
+
+	// Replay a notification the server pushed while nobody was listening —
+	// the DONE→FETCH→IDLE window in the caller, or a full buffer. Registering
+	// the channel and taking the flag happen under the same lock, so a
+	// notification arriving during the swap either lands in internalCh or sets
+	// the flag again for the next Idle; it cannot fall between the two.
+	// EXISTS is idempotent for the caller (it re-syncs the folder), so a
+	// spurious replay costs one extra UID SEARCH, while a lost one costs a
+	// message invisible until the session bounces.
+	if missed {
+		internalCh <- IdleNotification{Kind: NotifExists}
+	}
 
 	stopCh := make(chan struct{})
 	var stopOnce sync.Once

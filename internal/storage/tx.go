@@ -103,50 +103,83 @@ func (s *Store) InsertParsedMessageBundle(ctx context.Context, b MessageBundle) 
 // out-of-band; this function only adjusts the counter.
 func (s *Store) DeleteMessagesByFolder(ctx context.Context, folderID int64) error {
 	return s.WithTx(ctx, func(tx *sql.Tx) error {
-		if err := decBlobRefsByFolder(ctx, tx, folderID); err != nil {
+		if err := decBlobRefs(ctx, tx, blobRefAttachment, "folder_id", folderID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID)
-		return err
+		if err := decBlobRefs(ctx, tx, blobRefRawMessage, "folder_id", folderID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID); err != nil {
+			return err
+		}
+		// Any thread that just lost its last message in this folder is
+		// now an orphan (threads have no account/folder FK); sweep it in
+		// the same tx as the message DELETE.
+		return deleteOrphanThreads(ctx, tx)
 	})
 }
 
-// decBlobRefsByFolder finds every (blob_id, count) pair contributed by
-// attachments in messages of `folderID` and subtracts that count from
-// blobs.refcount. The CTE collapses N attachment rows pointing at the
-// same blob into a single UPDATE — without that, a blob referenced
-// twice in the folder would only get refcount-=1 from a per-row UPDATE
-// and end up with a phantom positive count after the DELETE CASCADE.
-func decBlobRefsByFolder(ctx context.Context, tx *sql.Tx, folderID int64) error {
-	_, err := tx.ExecContext(ctx, `
+// blobRefSource selects which column, on which table, holds the blob
+// reference being decremented by decBlobRefs: an attachment's blob_id
+// (joined through messages to reach the scope column) or a message's own
+// raw_blob_id (no join needed — the scope column lives on the same row).
+type blobRefSource struct {
+	fromClause string // FROM clause, aliased so the scope column is always m.<col>
+	blobIDExpr string // column holding the blob id, e.g. "a.blob_id"
+	nullGuard  string // predicate excluding NULL blob refs from the GROUP BY
+}
+
+var (
+	blobRefAttachment = blobRefSource{
+		fromClause: "attachments a JOIN messages m ON m.id = a.message_id",
+		blobIDExpr: "a.blob_id",
+		nullGuard:  "a.blob_id IS NOT NULL",
+	}
+	blobRefRawMessage = blobRefSource{
+		fromClause: "messages m",
+		blobIDExpr: "m.raw_blob_id",
+		nullGuard:  "m.raw_blob_id IS NOT NULL",
+	}
+)
+
+// decBlobRefs finds every (blob_id, count) pair contributed by src within
+// the given scope (scopeCol is "folder_id" or "account_id" — both live on
+// messages) and subtracts that count from blobs.refcount. The CTE
+// collapses N rows pointing at the same blob into a single UPDATE —
+// without that, a blob referenced twice in scope would only get
+// refcount-=1 from a per-row UPDATE and end up with a phantom positive
+// count after the DELETE CASCADE.
+//
+// This is the single place that implements the refcount-drain SQL for
+// both the attachment and raw-message-blob columns, and both the
+// per-folder and per-account scopes — collapsing what used to be four
+// near-identical copies.
+func decBlobRefs(ctx context.Context, tx *sql.Tx, src blobRefSource, scopeCol string, scopeID int64) error {
+	query := fmt.Sprintf(`
 		WITH dec AS (
-			SELECT a.blob_id AS bid, COUNT(*) AS n
-			FROM attachments a
-			JOIN messages m ON m.id = a.message_id
-			WHERE m.folder_id = ? AND a.blob_id IS NOT NULL
-			GROUP BY a.blob_id
+			SELECT %s AS bid, COUNT(*) AS n
+			FROM %s
+			WHERE m.%s = ? AND %s
+			GROUP BY %s
 		)
 		UPDATE blobs
 		SET refcount = refcount - (SELECT n FROM dec WHERE bid = blobs.id)
-		WHERE id IN (SELECT bid FROM dec)`, folderID)
+		WHERE id IN (SELECT bid FROM dec)`,
+		src.blobIDExpr, src.fromClause, scopeCol, src.nullGuard, src.blobIDExpr)
+	_, err := tx.ExecContext(ctx, query, scopeID)
 	return err
 }
 
-// decBlobRefsByAccount mirrors decBlobRefsByFolder but spans every
-// folder of the account — used by DeleteAccount to drain refcounts in
-// the same tx as the cascade.
-func decBlobRefsByAccount(ctx context.Context, tx *sql.Tx, accountID int64) error {
-	_, err := tx.ExecContext(ctx, `
-		WITH dec AS (
-			SELECT a.blob_id AS bid, COUNT(*) AS n
-			FROM attachments a
-			JOIN messages m ON m.id = a.message_id
-			WHERE m.account_id = ? AND a.blob_id IS NOT NULL
-			GROUP BY a.blob_id
-		)
-		UPDATE blobs
-		SET refcount = refcount - (SELECT n FROM dec WHERE bid = blobs.id)
-		WHERE id IN (SELECT bid FROM dec)`, accountID)
+// deleteOrphanThreads removes thread rows with no remaining messages.
+// threads carries no account/folder FK, so a message-owning delete
+// (folder wipe via DeleteMessagesByFolder, account delete via
+// DeleteAccount) leaves ghost thread rows behind — visible to ListThreads
+// with no filter — unless the caller sweeps them in the same tx. The
+// statement mirrors the one-off cleanup in migrations.go's v5 migration;
+// shared here so the SQL exists in exactly one place.
+func deleteOrphanThreads(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx,
+		`DELETE FROM threads WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id)`)
 	return err
 }
 

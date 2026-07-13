@@ -38,6 +38,11 @@ type Engine struct {
 	// downloaders). Run blocks on wg.Wait before returning so callers know
 	// the engine has fully drained before, e.g., closing the SQLite handle.
 	wg sync.WaitGroup
+
+	// runWorker is what supervise actually calls; nil means (*AccountWorker).Run.
+	// Tests substitute a stub here — per-Engine rather than a package global, so
+	// parallel tests can't race each other through it.
+	runWorker func(*AccountWorker, context.Context)
 }
 
 // NewEngine constructs an Engine. It performs no I/O.
@@ -81,9 +86,20 @@ func (e *Engine) Run(ctx context.Context) {
 	}()
 
 	// Start workers for every account currently in DB.
-	accs, _ := e.store.ListAccounts(ctx)
-	for _, a := range accs {
-		e.StartAccount(ctx, a.ID)
+	accs, err := e.store.ListAccounts(ctx)
+	if err != nil {
+		slog.Error("engine: list accounts failed", "err", err)
+		// WriteError, not AccountStatus: the failure has no account to attach
+		// to, and the frontend's AccountStatus handler keys on account_id
+		// (Number(undefined) → NaN matches nothing), so it would swallow this
+		// silently. WriteError renders a banner via setWriteError.
+		api.Emit(e.em, "WriteError", map[string]any{
+			"err": "failed to load accounts: " + err.Error(),
+		})
+	} else {
+		for _, a := range accs {
+			e.StartAccount(ctx, a.ID)
+		}
 	}
 
 	// Best-effort startup blob maintenance, gated on attachDir (the
@@ -266,7 +282,11 @@ func (e *Engine) supervise(ctx context.Context, id int64, w *AccountWorker) {
 					slog.Error("account worker panicked", "id", id, "panic", r)
 				}
 			}()
-			w.Run(runCtx)
+			if e.runWorker != nil {
+				e.runWorker(w, runCtx)
+			} else {
+				w.Run(runCtx)
+			}
 		}()
 		<-done
 		if time.Since(startedAt) >= healthyThreshold {

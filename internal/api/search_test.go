@@ -11,7 +11,7 @@ import (
 )
 
 func TestStub_Search_ReturnsHitsWithSentinelSnippet(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	st := a.Store
 	ctx := context.Background()
 
@@ -50,7 +50,7 @@ func TestStub_Search_ReturnsHitsWithSentinelSnippet(t *testing.T) {
 }
 
 func TestStub_Search_NoMatch(t *testing.T) {
-	a := newStub(t)
+	a := testStub(t)
 	hits, err := a.Search(context.Background(), "nothingmatches", 50, 0)
 	require.NoError(t, err)
 	require.Empty(t, hits)

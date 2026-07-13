@@ -172,6 +172,90 @@ func TestBlobs_DeleteAccount_DecRefcount(t *testing.T) {
 	require.EqualValues(t, 0, got.Refcount, "both refs across folders must drain")
 }
 
+// TestBlobs_DeleteMessages_DecRawBlobRefcount mirrors
+// TestBlobs_DeleteMessages_DecRefcount but for the raw-message-blob
+// column (messages.raw_blob_id) instead of attachments.blob_id. Two
+// messages in the same folder share one raw blob; deleting the folder
+// must land refcount at exactly 0 — not -1 from an unguarded double
+// decrement, not 1 from a per-row UPDATE that only counts one of the two
+// references.
+func TestBlobs_DeleteMessages_DecRawBlobRefcount(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
+	fID, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1})
+
+	const sha = "0000000000000000000000000000000000000000000000000000000000000003"
+	blobID, _, err := s.InsertOrIncBlob(ctx, sha, 100, 1700000000)
+	require.NoError(t, err)
+	// Bump to refcount=2 to match the two messages that will link to it.
+	_, _, err = s.InsertOrIncBlob(ctx, sha, 100, 1700000000)
+	require.NoError(t, err)
+
+	m1, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fID, UID: 1, Date: 1, Flags: "[]"})
+	m2, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: fID, UID: 2, Date: 2, Flags: "[]"})
+	_, _, err = s.SetMessageRawBlob(ctx, m1, blobID, 1700000000)
+	require.NoError(t, err)
+	_, _, err = s.SetMessageRawBlob(ctx, m2, blobID, 1700000000)
+	require.NoError(t, err)
+
+	got, err := s.GetBlob(ctx, blobID)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, got.Refcount, "sanity: refcount must be 2 before delete")
+
+	require.NoError(t, s.DeleteMessagesByFolder(ctx, fID))
+
+	got, err = s.GetBlob(ctx, blobID)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, got.Refcount,
+		"both raw-blob references in the folder must drop refcount by exactly 2 (not -1, not 1)")
+}
+
+// TestBlobs_DeleteAccount_DecRawBlobRefcount: same invariant as
+// TestBlobs_DeleteAccount_DecRefcount but for messages.raw_blob_id. A
+// raw blob is referenced from messages in two different folders of the
+// same account; deleting one folder must drain only its own reference
+// (leaving refcount=1), and deleting the account afterward must drain
+// the rest (refcount=0).
+func TestBlobs_DeleteAccount_DecRawBlobRefcount(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	accID, _ := s.InsertAccount(ctx, AccountRow{Name: "X", Email: "a@x", IMAPHost: "h", IMAPPort: 993, IMAPUsername: "u", UseTLS: true, Color: "#fff", CreatedAt: 0})
+	f1, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "INBOX", Delimiter: "/", UIDValidity: 1, UIDNext: 1})
+	f2, _ := s.UpsertFolder(ctx, FolderRow{AccountID: accID, Name: "Sent", Delimiter: "/", UIDValidity: 1, UIDNext: 1})
+
+	const sha = "0000000000000000000000000000000000000000000000000000000000000004"
+	blobID, _, err := s.InsertOrIncBlob(ctx, sha, 50, 1700000000)
+	require.NoError(t, err)
+	_, _, err = s.InsertOrIncBlob(ctx, sha, 50, 1700000000)
+	require.NoError(t, err)
+
+	m1, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: f1, UID: 1, Date: 1, Flags: "[]"})
+	m2, _ := s.InsertMessage(ctx, MessageRow{AccountID: accID, FolderID: f2, UID: 1, Date: 2, Flags: "[]"})
+	_, _, err = s.SetMessageRawBlob(ctx, m1, blobID, 1700000000)
+	require.NoError(t, err)
+	_, _, err = s.SetMessageRawBlob(ctx, m2, blobID, 1700000000)
+	require.NoError(t, err)
+
+	got, err := s.GetBlob(ctx, blobID)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, got.Refcount)
+
+	require.NoError(t, s.DeleteMessagesByFolder(ctx, f1))
+
+	got, err = s.GetBlob(ctx, blobID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, got.Refcount, "only f1's reference must drain; f2's must survive the folder delete")
+
+	require.NoError(t, s.DeleteAccount(ctx, accID))
+
+	got, err = s.GetBlob(ctx, blobID)
+	require.NoError(t, err)
+	require.EqualValues(t, 0, got.Refcount, "f2's reference must drain when the account is deleted")
+}
+
 // TestBlobs_SweepBlobs_UnlinksAndDeletes — full integration: a blob
 // row at refcount=0 with a real file on disk gets the file unlinked
 // and the row dropped. Live blobs are untouched.

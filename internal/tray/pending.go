@@ -93,11 +93,3 @@ func (p *pendingActions) Delete(id uint32) {
 		}
 	}
 }
-
-// Len reports the current number of tracked notifications. Test-only;
-// the controller never inspects size.
-func (p *pendingActions) Len() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.by)
-}
