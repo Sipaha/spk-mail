@@ -5,7 +5,8 @@ test('search by free text shows snippets', async ({ page }) => {
   // Search is reactive (store-bound onChange); typing alone produces
   // results — no Enter / form-submit step.
   await page.getByPlaceholder(/Search…/).fill('milestones')
-  await expect(page.getByText(/results for/)).toBeVisible({ timeout: 5_000 })
+  // "result for" / "results for" — the header now pluralizes correctly.
+  await expect(page.getByText(/results? for/)).toBeVisible({ timeout: 5_000 })
   await expect(page.locator('mark').first()).toBeVisible()
 })
 

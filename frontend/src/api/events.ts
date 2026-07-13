@@ -73,8 +73,20 @@ export function useEventStream() {
         }
         case 'AccountStatus': {
           const id = Number(ev.payload.account_id), state = String(ev.payload.state ?? 'ok')
+          // Error events carry a human-readable `detail` (the dial/sync error
+          // string from the account worker). Keep it in the store so the
+          // sidebar and Settings can explain WHY an account is broken.
+          const detail = ev.payload.detail != null ? String(ev.payload.detail) : undefined
+          useStore.getState().setAccountDetail(id, state === 'error' ? (detail ?? 'Connection failed') : undefined)
           const list = await client.listAccounts()
-          useStore.getState().setAccounts(list.map(a => a.id === id ? { ...a, status: state } : a))
+          // ListAccounts returns a synthetic "ok" for every row (real status
+          // only exists on this event bus), so for accounts OTHER than the
+          // event's subject keep the live status already in the store —
+          // otherwise one account reconnecting would repaint a still-broken
+          // account as healthy.
+          const prevById = new Map(useStore.getState().accounts.map(a => [a.id, a.status]))
+          useStore.getState().setAccounts(list.map(a =>
+            a.id === id ? { ...a, status: state } : { ...a, status: prevById.get(a.id) ?? a.status }))
           break
         }
         case 'SyncProgress': {

@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { ReactNode, useEffect, useRef, useState } from 'react'
 import { client } from './api/client'
 import { useEventStream } from './api/events'
 import { useStore } from './store'
 import Layout from './components/Layout'
 import AccountSidebar from './components/AccountSidebar'
 import ProfileSwitcher from './components/ProfileSwitcher'
+import SidebarFooter from './components/SidebarFooter'
 import MailListPane from './components/MailListPane'
 import ThreadView from './components/ThreadView'
 import Settings from './pages/Settings'
 import AddAccount from './pages/AddAccount'
+import { ArrowLeftIcon } from './components/icons'
 
 // useBootstrap fetches the account + profile lists once on app start (and
 // again on demand via `retry`). This must run for EVERY route — including
@@ -51,31 +53,54 @@ function AppBanners({ bootstrapError, onRetryBootstrap }: { bootstrapError: stri
   if (!bootstrapError && !writeError) return null
 
   return (
-    <div className="border-b border-zinc-800 bg-zinc-900 text-sm">
+    <div className="border-b border-edge bg-ink-900 text-[13px]">
       {bootstrapError && (
-        <div className="px-4 py-2 text-rose-400 flex items-center gap-2" role="alert">
-          <span>Failed to load accounts and profiles: {bootstrapError}</span>
+        <div className="flex items-center gap-3 border-l-2 border-danger px-4 py-2" role="alert">
+          <span className="text-danger">Failed to load accounts and profiles: {bootstrapError}</span>
           <button
             type="button"
             onClick={onRetryBootstrap}
-            className="text-blue-400 hover:text-blue-300 underline shrink-0"
+            className="shrink-0 rounded border border-edge-strong px-2 py-0.5 text-fg-sub hover:bg-ink-800 hover:text-fg"
           >
             Retry
           </button>
         </div>
       )}
       {writeError && (
-        <div className="px-4 py-2 text-amber-400 flex items-center gap-2" role="alert">
-          <span>Sync error: {writeError}</span>
+        <div className="flex items-center gap-3 border-l-2 border-warn px-4 py-2" role="alert">
+          <span className="text-warn">Sync error: {writeError}</span>
           <button
             type="button"
             onClick={() => setWriteError(null)}
-            className="text-zinc-400 hover:text-zinc-200 underline shrink-0 ml-auto"
+            className="ml-auto shrink-0 rounded border border-edge-strong px-2 py-0.5 text-fg-sub hover:bg-ink-800 hover:text-fg"
           >
             Dismiss
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+// PageShell frames the full-window routes (settings, add-account) with the
+// banner strip and a header that carries the ONE way back to the mail view —
+// replacing the old floating "← back" text link that sat outside any layout.
+function PageShell({ title, banners, children }: { title: string; banners: ReactNode; children: ReactNode }) {
+  return (
+    <div className="min-h-screen bg-ink-950 text-fg">
+      {banners}
+      <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-edge bg-ink-900 px-4 py-2.5">
+        <a
+          href="#/"
+          className="flex items-center gap-2 rounded px-2 py-1 text-[13px] text-fg-sub hover:bg-ink-800 hover:text-fg"
+        >
+          <ArrowLeftIcon className="size-3.5" />
+          Mail
+        </a>
+        <span className="select-none text-fg-faint">/</span>
+        <h1 className="px-1 text-[13px] font-semibold tracking-wide">{title}</h1>
+      </header>
+      {children}
     </div>
   )
 }
@@ -150,34 +175,53 @@ export default function App() {
 
   if (route.startsWith('#/add-account')) {
     return (
-      <div className="bg-zinc-950 text-zinc-100 min-h-screen">
-        <AppBanners bootstrapError={bootstrapError} onRetryBootstrap={retryBootstrap} />
-        <a href="#/" className="absolute top-3 left-3 text-xs text-zinc-500">← back</a>
-        <AddAccount onDone={() => { window.location.hash = '#/' }} />
-      </div>
+      <PageShell
+        title="Add account"
+        banners={<AppBanners bootstrapError={bootstrapError} onRetryBootstrap={retryBootstrap} />}
+      >
+        <AddAccount
+          onDone={() => { window.location.hash = '#/' }}
+          onCancel={() => { window.location.hash = '#/' }}
+        />
+      </PageShell>
     )
   }
 
   if (route.startsWith('#/settings')) {
     return (
-      <div className="bg-zinc-950 text-zinc-100 min-h-screen">
-        <AppBanners bootstrapError={bootstrapError} onRetryBootstrap={retryBootstrap} />
-        <a href="#/" className="absolute top-3 left-3 text-xs text-zinc-500">← back</a>
+      <PageShell
+        title="Settings"
+        banners={<AppBanners bootstrapError={bootstrapError} onRetryBootstrap={retryBootstrap} />}
+      >
         <Settings />
-      </div>
+      </PageShell>
     )
   }
 
-  const sidebar = <><ProfileSwitcher /><AccountSidebar /></>
+  const sidebar = (
+    <>
+      <ProfileSwitcher />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <AccountSidebar />
+      </div>
+      <SidebarFooter />
+    </>
+  )
 
+  // Banner row + panes as a flex column, NOT grid-rows-[auto_1fr]: AppBanners
+  // renders null when there is nothing to report, which under the grid version
+  // shifted Layout into the `auto` row — the panes collapsed to content height
+  // and lost their independent scrolling. flex-1 + min-h-0 is placement-proof.
   return (
-    <div className="grid h-screen w-screen grid-rows-[auto_1fr] bg-zinc-950 text-zinc-100">
+    <div className="flex h-screen w-screen flex-col bg-ink-950 text-fg">
       <AppBanners bootstrapError={bootstrapError} onRetryBootstrap={retryBootstrap} />
-      <Layout
-        sidebar={sidebar}
-        list={<MailListPane />}
-        detail={<ThreadView />}
-      />
+      <div className="min-h-0 flex-1">
+        <Layout
+          sidebar={sidebar}
+          list={<MailListPane />}
+          detail={<ThreadView />}
+        />
+      </div>
     </div>
   )
 }

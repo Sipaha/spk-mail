@@ -54,7 +54,7 @@ export default function NewProfileDialog({ onDone, onCancel }: { onDone: () => v
       aria-labelledby={titleId}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <form
-        className="bg-zinc-900 border border-zinc-700 rounded p-4 w-72 space-y-3 text-sm"
+        className="bg-ink-900 border border-edge-strong rounded-md p-4 w-72 space-y-3 text-sm shadow-xl"
         onSubmit={async e => {
           e.preventDefault()
           setBusy(true); setErr(undefined)
@@ -64,12 +64,12 @@ export default function NewProfileDialog({ onDone, onCancel }: { onDone: () => v
         }}>
         <h3 id={titleId} className="text-base font-semibold">New profile</h3>
         <label className="block">
-          <div className="text-xs text-zinc-400">Name</div>
+          <div className="text-xs text-fg-sub mb-1">Name</div>
           <input autoFocus required value={name} onChange={e => setName(e.target.value)}
-            className="w-full rounded bg-zinc-800 border border-zinc-700 focus:border-zinc-500 px-2 py-1.5" />
+            className="w-full rounded-md bg-ink-850 border border-edge-strong focus:border-accent/60 px-2.5 py-1.5 text-[13px]" />
         </label>
         <div className="flex gap-2 items-center">
-          <span className="text-xs text-zinc-400">Color:</span>
+          <span className="text-xs text-fg-sub">Color:</span>
           {palette.map(c => (
             <button key={c} type="button" onClick={() => setColor(c)}
               aria-label={`Color ${c}${color === c ? ' (selected)' : ''}`}
@@ -78,10 +78,10 @@ export default function NewProfileDialog({ onDone, onCancel }: { onDone: () => v
               style={{ background: c, borderColor: color === c ? '#fff' : 'transparent' }} />
           ))}
         </div>
-        {err && <div role="alert" className="text-red-400 text-xs">{err}</div>}
+        {err && <div role="alert" className="text-danger text-xs">{err}</div>}
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" onClick={onCancel} className="px-2 py-1 text-zinc-400 hover:text-zinc-200">Cancel</button>
-          <button type="submit" disabled={busy || !name.trim()} className="rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-3 py-1.5">
+          <button type="button" onClick={onCancel} className="px-2 py-1 text-fg-sub hover:text-fg">Cancel</button>
+          <button type="submit" disabled={busy || !name.trim()} className="rounded-md bg-accent-deep hover:bg-accent-deep/80 disabled:opacity-50 px-3 py-1.5 text-[13px] font-medium">
             {busy ? 'Creating…' : 'Create'}
           </button>
         </div>

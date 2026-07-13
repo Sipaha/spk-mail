@@ -2,23 +2,7 @@ import { useEffect, useState } from 'react'
 import { client } from '../api/client'
 import { useStore } from '../store'
 import NewProfileDialog from './NewProfileDialog'
-
-// Heroicons-style bell / bell-slash inline SVG (licensed MIT, traced from heroicons.com).
-// Kept inline so we don't pull in an icon package for two glyphs.
-function BellIcon({ slashed, className = '' }: { slashed: boolean; className?: string }) {
-  if (slashed) {
-    return (
-      <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.143 17.082a24.25 24.25 0 0 0 3.844.148m-3.844-.148a23.86 23.86 0 0 1-5.455-1.31 8.96 8.96 0 0 0 2.3-5.542m3.155 6.852a3 3 0 0 0 5.667 1.97m1.965-2.277L21 21M4.281 15.772a14.94 14.94 0 0 1-.831-1.252M6 9.75V9c0-.43.045-.85.13-1.255M7.5 5.25v.005a6.013 6.013 0 0 1 4.5-2.005 6 6 0 0 1 5.85 7.503M3 3l18 18" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0" />
-    </svg>
-  )
-}
+import { BellIcon } from './icons'
 
 type Menu = { profileId: number; x: number; y: number }
 
@@ -48,9 +32,9 @@ export default function ProfileSwitcher() {
   }, [menu])
 
   const tabClass = (active: boolean) =>
-    `px-2 py-1 text-xs rounded-t border-b-2 ${active
-      ? 'border-zinc-200 text-zinc-100'
-      : 'border-transparent text-zinc-500 hover:text-zinc-300'}`
+    `px-2 py-1 text-xs rounded-md ${active
+      ? 'bg-ink-800 text-fg'
+      : 'text-fg-sub hover:text-fg hover:bg-ink-850'}`
 
   const onDelete = async (id: number) => {
     setMenu(null)
@@ -76,7 +60,7 @@ export default function ProfileSwitcher() {
 
   return (
     <>
-      <div className="flex items-center gap-1 px-3 pt-2 border-b border-zinc-800 overflow-x-auto">
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-edge px-2 py-2">
         {profiles.map(p => (
           <span key={p.id} className="group inline-flex items-center">
             <button
@@ -87,7 +71,7 @@ export default function ProfileSwitcher() {
                 e.preventDefault()
                 setMenu({ profileId: p.id, x: e.clientX, y: e.clientY })
               }}>
-              <span className="inline-block size-2 rounded-full mr-1.5 align-middle" style={{ background: p.color }} />
+              <span className="mr-1.5 inline-block size-2 rounded-full align-middle" style={{ background: p.color }} />
               {p.name}
             </button>
             {/* Mute toggle. Hidden by default, revealed on hover. Always visible
@@ -97,8 +81,8 @@ export default function ProfileSwitcher() {
               aria-label={p.muted ? 'Unmute' : 'Mute'}
               className={`p-1 transition-opacity duration-150 ${
                 p.muted
-                  ? 'text-zinc-300 hover:text-zinc-100 opacity-100'
-                  : 'text-zinc-500 hover:text-zinc-200 opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+                  ? 'text-fg-sub hover:text-fg opacity-100'
+                  : 'text-fg-faint hover:text-fg opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
               }`}
               onClick={async (e) => {
                 e.stopPropagation()
@@ -109,7 +93,7 @@ export default function ProfileSwitcher() {
             </button>
           </span>
         ))}
-        <button className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200" title="New profile" onClick={() => setCreating(true)}>+</button>
+        <button className="px-2 py-1 text-xs text-fg-faint hover:text-fg" title="New profile" onClick={() => setCreating(true)}>+</button>
       </div>
       {creating && <NewProfileDialog onDone={async () => { setCreating(false); setProfiles(await client.listProfiles()) }} onCancel={() => setCreating(false)} />}
       {menu && (
@@ -123,7 +107,7 @@ export default function ProfileSwitcher() {
           // edge can't push the menu offscreen. menu width/height are
           // approximate (160×40); a tighter clamp would need a post-mount
           // measure pass via ref, which isn't worth the extra render here.
-          className="fixed z-50 min-w-[160px] rounded border border-zinc-800 bg-zinc-900 shadow-lg py-1 text-xs"
+          className="fixed z-50 min-w-[160px] rounded-md border border-edge-strong bg-ink-850 py-1 text-xs shadow-lg"
           style={{
             left: Math.min(menu.x, window.innerWidth - 168),
             top: Math.min(menu.y, window.innerHeight - 48),
@@ -131,7 +115,7 @@ export default function ProfileSwitcher() {
           <button
             type="button"
             onClick={() => onDelete(menu.profileId)}
-            className="block w-full text-left px-3 py-1.5 text-rose-400 hover:bg-zinc-800">
+            className="block w-full px-3 py-1.5 text-left text-danger hover:bg-ink-800">
             Delete profile…
           </button>
         </div>

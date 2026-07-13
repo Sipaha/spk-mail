@@ -1,3 +1,83 @@
 @import "tailwindcss";
-:root { color-scheme: dark; }
-body { @apply bg-zinc-950 text-zinc-100; }
+
+/*
+ * spk-mail surface system — "ink console".
+ *
+ * A blue-black ink ramp instead of neutral gray: panes get their own surface
+ * levels (canvas < panel < raised < active) so the three-pane layout reads as
+ * structure without heavy borders. One interactive accent (steel blue), brass
+ * reserved for flags, green/amber/red only as connection-status signals.
+ * Metadata (dates, counts, hostnames, status words) is set in the monospace
+ * "console voice" — see the `font-mono` usages across components.
+ */
+@theme {
+  /* surfaces */
+  --color-ink-950: #0b0d11; /* window canvas */
+  --color-ink-900: #10141b; /* sidebar / chrome panel */
+  --color-ink-850: #141a23; /* raised: cards, inputs, hover */
+  --color-ink-800: #1b2230; /* active row / pressed */
+
+  /* hairlines */
+  --color-edge: #1d2430;
+  --color-edge-strong: #2a3342;
+
+  /* text */
+  --color-fg: #e6eaf2;
+  --color-fg-sub: #9ba6b9;
+  --color-fg-faint: #647084;
+
+  /* signals */
+  --color-accent: #7e9cde; /* unread, links, focus */
+  --color-accent-deep: #33518f; /* primary action fill */
+  --color-brass: #d9a552; /* flagged */
+  --color-ok: #58a876;
+  --color-warn: #d99552;
+  --color-danger: #d96a5c;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink-950 text-fg antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+/* Thin, ink-toned scrollbars so the pane hairlines stay the strongest lines
+   on screen. WebKit covers the Wails runtime; scrollbar-* covers Firefox. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-edge-strong);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Visible keyboard focus everywhere, in the accent voice. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
+  outline-offset: -1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

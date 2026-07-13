@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { SearchIcon } from './icons'
 
 const SEARCH_DEBOUNCE_MS = 250
 
@@ -24,8 +25,9 @@ export default function SearchBar() {
   }
 
   return (
-    <div className="px-3 py-2 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
+    <div className="sticky top-0 z-10 border-b border-edge bg-ink-950/95 px-3 py-2 backdrop-blur">
       <div className="relative">
+        <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-fg-faint" />
         <input
           // type="text" rather than "search": the native search-input
           // decoration paints a webkit ✕ that duplicates our custom
@@ -40,14 +42,14 @@ export default function SearchBar() {
             timer.current = setTimeout(() => setSearch(next), SEARCH_DEBOUNCE_MS)
           }}
           onKeyDown={(e) => { if (e.key === 'Enter') flush(value) }}
-          placeholder="Search… (try: from:bob has:attachment unread)"
-          className="w-full rounded bg-zinc-900 border border-zinc-700 focus:border-zinc-500 px-2 py-1.5 pr-7 text-sm" />
+          placeholder="Search… from:bob has:attachment unread"
+          className="w-full rounded-md border border-edge-strong bg-ink-850 py-1.5 pl-8 pr-7 text-[13px] placeholder:text-fg-faint focus:border-accent/60" />
         {value.length > 0 && (
           <button
             type="button"
             aria-label="Clear search"
             onClick={() => { setValue(''); flush('') }}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 size-5 leading-none text-zinc-500 hover:text-zinc-200">
+            className="absolute right-1.5 top-1/2 size-5 -translate-y-1/2 leading-none text-fg-faint hover:text-fg">
             ✕
           </button>
         )}

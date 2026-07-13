@@ -2,6 +2,7 @@ import { useStore } from '../store'
 import type { ThreadDTO } from '../api/types'
 import { relative } from '../lib/time'
 import { client } from '../api/client'
+import { PaperclipIcon, StarIcon } from './icons'
 
 // parseSender extracts a display name from a raw "Name <addr@example.com>"
 // header value. Falls back to the addr-part, then the whole string.
@@ -16,7 +17,7 @@ function parseSender(raw: string): string {
 
 export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: number) => void }) {
   const isOpen = useStore(s => s.openThreadId === t.id)
-  // The currently-open thread is rendered as read (no blue dot, no bold)
+  // The currently-open thread is rendered as read (no accent dot, no bold)
   // even if the pinned snapshot still has unread_count > 0. Pinning keeps the
   // row in the list while the user is reading it; muting the unread cue is
   // the standard visual feedback that "yes, you've opened this".
@@ -36,37 +37,41 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
           open()
         }
       }}
-      className={`group w-full text-left pl-3 pr-4 py-2.5 border-b border-zinc-800 hover:bg-zinc-900/60 transition-colors flex gap-3 cursor-pointer ${isOpen ? 'bg-zinc-900' : ''}`}>
-      {/* Unread indicator: blue dot, fills the left margin if unread.
-          When read, an invisible same-size span keeps row heights aligned. */}
-      <span className="pt-1.5 shrink-0">
+      className={`group relative flex w-full cursor-pointer gap-2.5 border-b border-edge py-2.5 pl-3 pr-3 text-left transition-colors hover:bg-ink-850 ${isOpen ? 'bg-ink-800' : ''}`}>
+      {/* Open marker: accent rail on the reading thread, mirroring the
+          account spine in the sidebar. */}
+      {isOpen && <span aria-hidden="true" className="absolute bottom-0 left-0 top-0 w-0.5 bg-accent" />}
+
+      {/* Unread indicator: accent dot in the left margin. When read, an
+          invisible same-size span keeps row heights aligned. */}
+      <span className="shrink-0 pt-1.5">
         {isUnread
-          ? <span className="block size-2 rounded-full bg-blue-500" />
+          ? <span className="block size-2 rounded-full bg-accent" />
           : <span className="block size-2" />}
       </span>
 
       <div className="min-w-0 flex-1">
-        {/* Top row: sender + (msg count badge) + date */}
+        {/* Top row: sender + (msg count) + date */}
         <div className="flex items-baseline gap-2">
-          <span className={`truncate ${isUnread ? 'font-semibold text-zinc-100' : 'text-zinc-300'}`}>
+          <span className={`truncate text-[13px] ${isUnread ? 'font-semibold text-fg' : 'text-fg-sub'}`}>
             {sender}
           </span>
           {t.msg_count > 1 && (
-            <span className="text-xs text-zinc-500 shrink-0">{t.msg_count}</span>
+            <span className="shrink-0 font-mono text-[10px] text-fg-faint">{t.msg_count}</span>
           )}
-          <span className="ml-auto text-xs text-zinc-500 shrink-0">{relative(t.last_date)}</span>
+          <span className="ml-auto shrink-0 font-mono text-[11px] text-fg-faint">{relative(t.last_date)}</span>
         </div>
 
-        {/* Subject row — bold for unread */}
-        <div className={`truncate text-sm mt-0.5 ${isUnread ? 'text-zinc-200 font-medium' : 'text-zinc-400'}`}>
+        {/* Subject row — carries the unread weight */}
+        <div className={`mt-0.5 truncate text-[13px] ${isUnread ? 'font-medium text-fg' : 'text-fg-sub'}`}>
           {t.subject || '(no subject)'}
         </div>
 
         {/* Snippet row + flagged/attachment icons. nbsp keeps height stable
             when snippet is empty so all rows are the same size. */}
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="truncate text-xs text-zinc-500 flex-1">
-            {t.snippet || ' '}
+        <div className="mt-0.5 flex items-center gap-1.5">
+          <span className="flex-1 truncate text-xs text-fg-faint">
+            {t.snippet || ' '}
           </span>
           <button
             type="button"
@@ -76,15 +81,15 @@ export default function ThreadRow({ t, onOpen }: { t: ThreadDTO; onOpen: (id: nu
             }}
             title={t.has_flagged ? 'Unflag thread' : 'Flag thread'}
             aria-label={t.has_flagged ? `Unflag thread "${t.subject || '(no subject)'}"` : `Flag thread "${t.subject || '(no subject)'}"`}
-            className={`text-lg leading-none shrink-0 transition-colors ${
+            className={`shrink-0 transition-colors ${
               t.has_flagged
-                ? 'text-amber-400 hover:text-amber-300'
-                : 'text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-amber-400'
+                ? 'text-brass hover:text-brass/80'
+                : 'text-fg-faint opacity-0 hover:text-brass group-hover:opacity-100'
             }`}
           >
-            {t.has_flagged ? '★' : '☆'}
+            <StarIcon className="size-3.5" filled={t.has_flagged} />
           </button>
-          {t.has_attach  && <span className="text-zinc-500 text-xs shrink-0" title="Attachment">📎</span>}
+          {t.has_attach && <PaperclipIcon className="size-3 shrink-0 text-fg-faint" />}
         </div>
       </div>
     </div>

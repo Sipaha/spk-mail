@@ -28,24 +28,24 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-6">
+        <div className="min-h-screen bg-ink-950 text-fg flex items-center justify-center p-6">
           <div className="max-w-md space-y-4 text-sm">
             <h1 className="text-lg font-semibold">spk-mail hit an error</h1>
-            <p className="text-zinc-400">
+            <p className="text-fg-sub">
               Something in the UI threw an exception and rendering stopped. Your messages on disk are safe.
             </p>
-            <pre className="whitespace-pre-wrap rounded border border-zinc-800 bg-zinc-900 p-3 text-xs text-rose-300">
+            <pre className="whitespace-pre-wrap rounded-md border border-edge bg-ink-900 p-3 text-xs text-danger">
               {this.state.error.message}
             </pre>
             <div className="flex gap-2">
               <button
                 onClick={this.reset}
-                className="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1.5">
+                className="rounded-md bg-accent-deep hover:bg-accent-deep/80 px-3 py-1.5">
                 Try again
               </button>
               <button
                 onClick={() => window.location.reload()}
-                className="rounded border border-zinc-700 hover:bg-zinc-800 px-3 py-1.5">
+                className="rounded-md border border-edge-strong text-fg-sub hover:bg-ink-800 hover:text-fg px-3 py-1.5">
                 Reload
               </button>
             </div>

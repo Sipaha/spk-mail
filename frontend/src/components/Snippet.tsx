@@ -24,7 +24,7 @@ export default function Snippet({ text }: { text: string }) {
     <span>
       {parts.map((p, idx) => (
         <Fragment key={idx}>
-          {p.mark ? <mark className="bg-amber-300/30 text-amber-100 px-0.5 rounded">{p.text}</mark> : p.text}
+          {p.mark ? <mark className="rounded bg-brass/25 px-0.5 text-brass">{p.text}</mark> : p.text}
         </Fragment>
       ))}
     </span>

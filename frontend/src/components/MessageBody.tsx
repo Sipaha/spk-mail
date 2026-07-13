@@ -48,10 +48,10 @@ const blockedImagesCSS = `img[data-spk-original-src]{display:none !important}`
 // resolved against computedStyle of each element after iframe load.
 const adaptedCSS = `
   :root{color-scheme:dark}
-  html,body{background:#0a0a0a !important;color:#e4e4e7 !important}
-  body{margin:0;padding:12px 16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5}
-  hr{border-color:#3f3f46 !important}
-  a,a *{color:#60a5fa !important}
+  html,body{background:#0b0d11 !important;color:#e6eaf2 !important}
+  body{margin:0;padding:14px 20px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.55}
+  hr{border-color:#2a3342 !important}
+  a,a *{color:#7e9cde !important}
   img{max-width:100%;height:auto}
   ${blockedImagesCSS}
 `
@@ -91,7 +91,7 @@ function adaptDarkTheme(doc: Document) {
     }
     const fg = parseRGB(cs.color)
     if (fg && fg.a > 0.5 && luma(fg) < 0.30) {
-      el.style.setProperty('color', '#e4e4e7', 'important')
+      el.style.setProperty('color', '#e6eaf2', 'important')
     }
   }
 }
@@ -287,15 +287,15 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
   }, [html, adapted])
 
   if (!html) {
-    return <pre className="whitespace-pre-wrap text-sm text-zinc-200 px-4 py-3">{msg.body_text}</pre>
+    return <pre className="max-w-[80ch] whitespace-pre-wrap px-5 py-4 font-mono text-[13px] leading-relaxed text-fg">{msg.body_text}</pre>
   }
 
   const css = adapted ? adaptedCSS : originalCSS
-  const wrapperBg = adapted ? 'bg-zinc-950' : 'bg-white'
+  const wrapperBg = adapted ? 'bg-ink-950' : 'bg-white'
 
   return (
-    <div className="px-4 py-3">
-      <div className={`relative rounded overflow-hidden ${wrapperBg}`}>
+    <div className="px-5 py-3">
+      <div className={`relative rounded-md overflow-hidden ${wrapperBg}`}>
         {/* Floating controls in the top-right corner of the body card —
             keeps the chrome out of the message header but right at hand
             for when the user wants to flip styling or unblock images.
@@ -308,14 +308,14 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
                 const updated = await client.allowRemote(msg.id)
                 setHtml(updated); setHasBlocked(false)
               }}
-              className="text-[11px] rounded border border-zinc-700/80 bg-zinc-900/80 backdrop-blur px-2 py-0.5 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800">
+              className="text-[11px] rounded border border-edge-strong bg-ink-850/90 backdrop-blur px-2 py-0.5 text-fg-sub hover:text-fg hover:bg-ink-800">
               Show remote content
             </button>
           )}
           <button
             onClick={() => setAdapted(v => !v)}
             title={adapted ? 'Show as authored (light card)' : 'Adapt to dark theme'}
-            className="text-[11px] rounded border border-zinc-700/80 bg-zinc-900/80 backdrop-blur px-2 py-0.5 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800">
+            className="text-[11px] rounded border border-edge-strong bg-ink-850/90 backdrop-blur px-2 py-0.5 text-fg-sub hover:text-fg hover:bg-ink-800">
             {adapted ? 'Original' : 'Dark adapt'}
           </button>
         </div>

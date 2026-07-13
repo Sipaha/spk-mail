@@ -23,6 +23,10 @@ export default function ThreadList() {
   const [listError, setListError] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  // loading: true while the initial fetch for the current filter scope is in
+  // flight. Gates the empty states below — without it, "You're all caught up"
+  // flashes for the fetch round-trip on every filter switch.
+  const [loading, setLoading] = useState(true)
   const [retryKey, setRetryKey] = useState(0)
 
   // pinned: snapshot of the currently-open thread. Kept in render even if it
@@ -96,12 +100,16 @@ export default function ThreadList() {
     // a silently-empty list.
     const myGen = ++genRef.current
     const isStale = () => genRef.current !== myGen
-    fetchThreads(0, false, isStale).catch(err => {
-      if (!isStale()) {
-        console.error('listThreads failed', err)
-        setListError(err instanceof Error ? err.message : String(err))
-      }
-    })
+    setLoading(true)
+    fetchThreads(0, false, isStale)
+      .then(() => { if (!isStale()) setLoading(false) })
+      .catch(err => {
+        if (!isStale()) {
+          setLoading(false)
+          console.error('listThreads failed', err)
+          setListError(err instanceof Error ? err.message : String(err))
+        }
+      })
   }, [sig, retryKey, setThreads, fetchThreads])
 
   const loadMore = () => {
@@ -206,20 +214,18 @@ export default function ThreadList() {
   return (
     <div>
       {listError && (
-        <div className="p-6 text-sm text-rose-400" role="alert">
+        <div className="p-6 text-sm text-danger" role="alert">
           Failed to load threads: {listError}
           <button
             type="button"
             onClick={() => setRetryKey(k => k + 1)}
-            className="ml-2 text-blue-400 hover:text-blue-300 underline"
+            className="ml-2 rounded border border-edge-strong px-2 py-0.5 text-xs text-fg-sub hover:bg-ink-800 hover:text-fg"
           >
             Retry
           </button>
         </div>
       )}
-      {!listError && rows.length === 0 && (
-        <div className="p-6 text-sm text-zinc-500">No threads.</div>
-      )}
+      {!listError && rows.length === 0 && (loading ? <ListLoading /> : <ListEmpty />)}
       {rows.map(({ thread: t, leaving }) => (
         <div
           key={t.id}
@@ -249,17 +255,61 @@ export default function ThreadList() {
         </div>
       ))}
       {hasMore && !listError && (
-        <div className="p-4 text-center border-t border-zinc-800">
+        <div className="border-t border-edge p-4 text-center">
           <button
             type="button"
             onClick={loadMore}
             disabled={loadingMore}
-            className="text-sm text-blue-400 hover:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="text-sm text-accent hover:text-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loadingMore ? 'Loading…' : 'Load more'}
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+function ListLoading() {
+  return <div className="p-6 text-center text-[13px] text-fg-faint">Loading…</div>
+}
+
+// ListEmpty picks copy for WHY the list is empty: no accounts configured at
+// all (invite the first setup), an exhausted Unread/Flagged filter (good
+// news), or simply an empty folder scope. An empty screen is an invitation
+// to act, not a dead end.
+function ListEmpty() {
+  const accounts = useStore(s => s.accounts)
+  const activeProfileId = useStore(s => s.activeProfileId)
+  const filter = useStore(s => s.filter)
+  const anyVisible = accounts.some(a =>
+    activeProfileId === null || a.profile_id == null || a.profile_id === activeProfileId)
+
+  if (!anyVisible) {
+    return (
+      <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+        <div className="text-sm font-medium text-fg-sub">No accounts in this profile</div>
+        <p className="max-w-[26ch] text-xs leading-relaxed text-fg-faint">
+          Connect an IMAP account to start reading mail here.
+        </p>
+        <a
+          href="#/add-account"
+          className="rounded-md bg-accent-deep px-3 py-1.5 text-[13px] font-medium text-fg hover:bg-accent-deep/80"
+        >
+          Add account
+        </a>
+      </div>
+    )
+  }
+  const [title, hint] = filter.unreadOnly
+    ? ['All caught up', 'No unread mail in this view.']
+    : filter.hasFlagged
+      ? ['No flagged mail', 'Flag a thread with the star to pin it here.']
+      : ['Nothing here yet', 'Mail that arrives in this view will show up here.']
+  return (
+    <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
+      <div className="text-sm font-medium text-fg-sub">{title}</div>
+      <p className="max-w-[28ch] text-xs leading-relaxed text-fg-faint">{hint}</p>
     </div>
   )
 }

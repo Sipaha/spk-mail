@@ -27,17 +27,26 @@ export default function SearchResults({ query }: { query: string }) {
     return () => { cancelled = true }
   }, [query])
 
-  if (error) return <div className="p-6 text-sm text-rose-400">Search failed: {error}</div>
-  if (hits === null) return <div className="p-6 text-sm text-zinc-500">Searching…</div>
-  if (hits.length === 0) return <div className="p-6 text-sm text-zinc-500">No results for "{query}".</div>
+  if (error) return <div className="p-6 text-sm text-danger">Search failed: {error}</div>
+  if (hits === null) return <div className="p-6 text-center text-[13px] text-fg-faint">Searching…</div>
+  if (hits.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
+        <div className="text-sm font-medium text-fg-sub">No results for "{query}"</div>
+        <p className="max-w-[30ch] text-xs leading-relaxed text-fg-faint">
+          Try fewer words, or narrow with from:, has:attachment, unread.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div>
-      <div className="px-4 py-3 border-b border-zinc-800 text-sm text-zinc-400">
-        {hits.length} results for <span className="text-zinc-200">"{query}"</span>
+      <div className="border-b border-edge px-4 py-2.5 text-xs text-fg-sub">
+        <span className="font-mono text-fg">{hits.length}</span> {hits.length === 1 ? 'result' : 'results'} for <span className="text-fg">"{query}"</span>
       </div>
       {openError && (
-        <div className="px-4 py-2 text-sm text-rose-400 border-b border-zinc-800" role="alert">
+        <div className="border-b border-edge px-4 py-2 text-sm text-danger" role="alert">
           Failed to open thread: {openError}
         </div>
       )}
@@ -58,13 +67,13 @@ export default function SearchResults({ query }: { query: string }) {
               setOpenError(err instanceof Error ? err.message : String(err))
             }
           }}
-          className="block w-full text-left px-4 py-2 border-b border-zinc-800 hover:bg-zinc-900">
+          className="block w-full border-b border-edge px-4 py-2.5 text-left hover:bg-ink-850">
           <div className="flex items-baseline gap-2">
-            <span className="font-medium truncate">{h.subject || '(no subject)'}</span>
-            <span className="text-xs text-zinc-500 ml-auto">{relative(h.date)}</span>
+            <span className="truncate text-[13px] font-medium">{h.subject || '(no subject)'}</span>
+            <span className="ml-auto shrink-0 font-mono text-[11px] text-fg-faint">{relative(h.date)}</span>
           </div>
-          <div className="text-xs text-zinc-500">{h.from_addr}</div>
-          <div className="text-sm mt-1"><Snippet text={h.snippet} /></div>
+          <div className="truncate text-xs text-fg-faint">{h.from_addr}</div>
+          <div className="mt-1 text-xs text-fg-sub"><Snippet text={h.snippet} /></div>
         </button>
       ))}
     </div>

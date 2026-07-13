@@ -13,6 +13,10 @@ interface State {
   openThreadId?: number
   openThread?: MessageDTO[]
   syncProgress: Record<number, { folder: string; folderId?: number; done: number; total: number }>
+  // accountDetail: last human-readable connection detail per account id —
+  // the `detail` field of an AccountStatus{state:"error"} event. Cleared when
+  // the account recovers. Not persisted: it describes a live connection.
+  accountDetail: Record<number, string>
   writeError: string | null
   bootstrapError: string | null
 
@@ -27,6 +31,7 @@ interface State {
   setFilter: (f: Partial<State['filter']>) => void
   setSearch: (q: string) => void
   setSyncProgress: (accId: number, folder: string, done: number, total: number, folderId?: number) => void
+  setAccountDetail: (accId: number, detail: string | undefined) => void
   setWriteError: (msg: string | null) => void
   setBootstrapError: (msg: string | null) => void
 }
@@ -42,6 +47,7 @@ export const useStore = create<State>()(
       filter: { unreadOnly: false, hasFlagged: false },
       search: '',
       syncProgress: {},
+      accountDetail: {},
       writeError: null,
       bootstrapError: null,
 
@@ -79,6 +85,12 @@ export const useStore = create<State>()(
       setFilter: (f) => set((s) => ({ filter: { ...s.filter, ...f } })),
       setSearch: (q) => set({ search: q }),
       setSyncProgress: (accId, folder, done, total, folderId) => set((s) => ({ syncProgress: { ...s.syncProgress, [accId]: { folder, folderId, done, total } } })),
+      setAccountDetail: (accId, detail) => set((s) => {
+        const next = { ...s.accountDetail }
+        if (detail === undefined) delete next[accId]
+        else next[accId] = detail
+        return { accountDetail: next }
+      }),
       setWriteError: (msg) => set({ writeError: msg }),
       setBootstrapError: (msg) => set({ bootstrapError: msg }),
     }),

@@ -2,10 +2,7 @@ import { useEffect } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { client } from '../api/client'
 import { useStore } from '../store'
-
-const ROLE_ICON: Record<string, string> = {
-  inbox: '📥', sent: '📤', drafts: '📝', archive: '🗃', spam: '⚠️', trash: '🗑',
-}
+import { EyeIcon, FolderIcon, ROLE_ICONS, StarIcon } from './icons'
 
 const EMPTY_FOLDERS: never[] = []
 
@@ -40,7 +37,7 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
     fAccountId === ownerId && fFolderId === undefined && fHasFlagged && !fUnreadOnly
 
   const rowClass = (active: boolean) =>
-    `w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-zinc-800 ${active ? 'bg-zinc-800' : ''}`
+    `w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-ink-800 ${active ? 'bg-ink-800 text-fg' : 'text-fg-sub'}`
 
   return (
     // <nav aria-label="Folders"> turns the FolderTree into a discoverable
@@ -50,15 +47,15 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
     // aria-label, which they do (one per account, all sharing the
     // "Folders" label is fine since they live in different account
     // sub-trees of the sidebar).
-    <nav aria-label="Folders"><ul className="ml-4 mt-1 space-y-0.5 text-xs">
+    <nav aria-label="Folders"><ul className="ml-2 mt-0.5 space-y-px text-xs">
       <li>
         <button
           onClick={() => setFilter({ accountId: ownerId, folderId: undefined, unreadOnly: true, hasFlagged: false })}
           className={rowClass(isUnreadActive)}>
-          <span>👁</span>
+          <EyeIcon className="size-3.5 shrink-0" />
           <span className="truncate">Unread</span>
           {totalUnread > 0 && (
-            <span className="ml-auto rounded-full bg-blue-600 text-white px-1.5 leading-tight">{totalUnread}</span>
+            <span className="ml-auto rounded-full bg-accent-deep px-1.5 font-mono text-[10px] leading-tight text-fg">{totalUnread}</span>
           )}
         </button>
       </li>
@@ -66,10 +63,10 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
         <button
           onClick={() => setFilter({ accountId: ownerId, folderId: undefined, unreadOnly: false, hasFlagged: true })}
           className={rowClass(isFlaggedActive)}>
-          <span>⭐</span>
+          <StarIcon className="size-3.5 shrink-0" />
           <span className="truncate">Flagged</span>
           {totalFlagged > 0 && (
-            <span className="ml-auto text-[10px] text-amber-400 shrink-0">{totalFlagged}</span>
+            <span className="ml-auto shrink-0 font-mono text-[10px] text-brass">{totalFlagged}</span>
           )}
         </button>
       </li>
@@ -77,15 +74,16 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
         const active = fAccountId === ownerId && fFolderId === f.id
         const unread = f.unread_count ?? 0
         const total = f.total_count ?? 0
+        const Icon = ROLE_ICONS[f.role] ?? FolderIcon
         return (
           <li key={f.id}>
             <button
               onClick={() => setFilter({ accountId: ownerId, folderId: f.id, unreadOnly: false, hasFlagged: false })}
               className={rowClass(active)}>
-              <span>{ROLE_ICON[f.role] ?? '📁'}</span>
-              <span className="truncate">{f.name}</span>
+              <Icon className="size-3.5 shrink-0" />
+              <span className={`truncate ${unread > 0 ? 'font-medium text-fg' : ''}`}>{f.name}</span>
               {(unread > 0 || total > 0) && (
-                <span className="ml-auto text-[10px] shrink-0 flex items-center gap-1.5">
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 font-mono text-[10px]">
                   {unread > 0 && (
                     // Note: <button> nested inside the row's <button> is
                     // technically invalid HTML per the W3C content model
@@ -104,11 +102,11 @@ export default function FolderTree({ accountId: ownerId }: { accountId: number }
                       }}
                       title="Mark all as read"
                       aria-label={`Mark all messages in ${f.name} as read`}
-                      className="size-1.5 rounded-full bg-zinc-500 hover:bg-blue-400 hover:size-2 transition-[width,height,background-color]"
+                      className="size-1.5 rounded-full bg-fg-faint transition-[width,height,background-color] hover:size-2 hover:bg-accent"
                     />
                   )}
-                  {unread > 0 && <span className="text-blue-400">{unread}</span>}
-                  {total > 0 && <span className="text-zinc-500">/ {total}</span>}
+                  {unread > 0 && <span className="text-accent">{unread}</span>}
+                  {total > 0 && <span className="text-fg-faint">/ {total}</span>}
                 </span>
               )}
             </button>

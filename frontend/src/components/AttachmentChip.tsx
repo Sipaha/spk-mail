@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { client } from '../api/client'
 import type { AttachmentDTO } from '../api/types'
+import { PaperclipIcon } from './icons'
 
 // formatSize renders a byte count in B / KB / MB. Sub-1KB attachments
 // (favicons, signature images) used to show "0 KB" via Math.round; report
@@ -27,13 +28,13 @@ export default function AttachmentChip({ a }: { a: AttachmentDTO }) {
       type="button" onClick={open} disabled={!a.downloaded || busy}
       title={a.downloaded ? 'Open with system handler' : 'Downloading…'}
       className={`text-xs rounded border px-2 py-1 inline-flex items-center gap-1 ${
-        a.downloaded ? 'border-zinc-700 hover:bg-zinc-800' : 'border-zinc-800 text-zinc-500 cursor-progress'
+        a.downloaded ? 'border-edge-strong text-fg-sub hover:bg-ink-800 hover:text-fg' : 'border-edge text-fg-faint cursor-progress'
       }`}>
-      <span>📎</span>
+      <PaperclipIcon className="size-3 shrink-0" />
       <span className="truncate max-w-[12rem]">{a.filename}</span>
-      <span className="text-zinc-500">({formatSize(a.size_bytes)})</span>
-      {!a.downloaded && <span className="ml-1 size-1.5 rounded-full bg-amber-400 animate-pulse" />}
-      {err && <span className="text-red-400 ml-1">!</span>}
+      <span className="font-mono text-[11px] text-fg-faint">({formatSize(a.size_bytes)})</span>
+      {!a.downloaded && <span className="ml-1 size-1.5 rounded-full bg-warn animate-pulse" />}
+      {err && <span className="text-danger ml-1">!</span>}
     </button>
   )
 }
