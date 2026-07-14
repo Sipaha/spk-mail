@@ -33,14 +33,26 @@
   --color-ok: #58a876;
   --color-warn: #d99552;
   --color-danger: #d96a5c;
+
+  /* Explicit stacks (Tailwind reads --font-* here for the font-sans/font-mono
+     utilities) so hinting is predictable across WebKitGTK builds. */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
 }
 
 :root {
   color-scheme: dark;
+  font-family: var(--font-sans);
 }
 
 body {
-  @apply bg-ink-950 text-fg antialiased;
+  /* No -webkit-font-smoothing override: on Linux/WebKitGTK it forces grayscale
+     AA and kills the crisper subpixel rendering — the pre-redesign default (and
+     the project's stated preference) is subpixel. */
+  @apply bg-ink-950 text-fg;
+  /* The "console" type scale is tight (10–13px). WebKitGTK on a scaled display
+     renders those physically tiny, so scale the whole UI up. Adjust to taste. */
+  zoom: 1.15;
 }
 
 ::selection {
