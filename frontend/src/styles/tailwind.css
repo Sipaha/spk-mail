@@ -48,11 +48,13 @@
 body {
   /* No -webkit-font-smoothing override: on Linux/WebKitGTK it forces grayscale
      AA and kills the crisper subpixel rendering — the pre-redesign default (and
-     the project's stated preference) is subpixel. */
+     the project's stated preference) is subpixel.
+     UI scale is NOT set here: the desktop applies a native webview zoom
+     (internal/desktop/window.go uiZoom) that composes with the OS display
+     scale and stays transparent to JS layout — a CSS `zoom` would break pointer
+     coords / getBoundingClientRect. Browser dev mode intentionally renders at
+     1.0 (that's the design's true size, and Playwright snapshots key off it). */
   @apply bg-ink-950 text-fg;
-  /* The "console" type scale is tight (10–13px). WebKitGTK on a scaled display
-     renders those physically tiny, so scale the whole UI up. Adjust to taste. */
-  zoom: 1.15;
 }
 
 ::selection {

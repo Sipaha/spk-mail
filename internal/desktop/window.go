@@ -20,6 +20,12 @@ import (
 	"github.com/spk/spk-mail/internal/tray"
 )
 
+// uiZoom is the desktop webview's native zoom, applied to every window. It
+// composes with the OS display scale (see the WebviewWindowOptions.Zoom comment
+// below), so physical size stays consistent across densities while the tight
+// type scale reads comfortably. Adjust here.
+const uiZoom = 1.25
+
 // Options bundles the dependencies the desktop runner needs.
 type Options struct {
 	FrontendFS    fs.FS
@@ -62,12 +68,25 @@ func Run(ctx context.Context, opts Options) error {
 		Height:           800,
 		BackgroundColour: application.NewRGBA(10, 10, 10, 255),
 		URL:              "/",
+		// Native webview zoom (WebKitGTK set_zoom_level), NOT a CSS zoom. It
+		// scales the whole UI uniformly AND composes on top of the OS display
+		// scale — so a HiDPI/fractionally-scaled desktop multiplies correctly
+		// and the tight "console" type scale (10–13px) isn't microscopic. Being
+		// native, it's transparent to JS layout (getBoundingClientRect / pointer
+		// coords stay in CSS px), unlike CSS `zoom`. Tune uiZoom to taste.
+		Zoom: uiZoom,
 		// Build-tag gated. Dev builds keep DevTools on for IPC/DOM
 		// inspection (see devtools_dev.go); release builds (built with
 		// `-tags production`, e.g. via `make release`) flip this off so
 		// in-memory state — including unwrapped IMAP credentials living
 		// in goroutines — is not inspectable from the embedded webview.
 		DevToolsEnabled: devToolsEnabled,
+	})
+	// Re-apply once the webview is ready: on macOS the init path skips
+	// options.Zoom (it's only wired at runtime there); harmless on Linux where
+	// options.Zoom already took effect. Mirrors citeck-launcher's wailswin.
+	w.RegisterHook(events.Common.WindowRuntimeReady, func(_ *application.WindowEvent) {
+		w.SetZoom(uiZoom)
 	})
 
 	// Hide the window on close instead of quitting. RegisterHook fires before
