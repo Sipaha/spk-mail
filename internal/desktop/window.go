@@ -15,6 +15,8 @@ import (
 
 	"github.com/spk/spk-mail/internal/api"
 	"github.com/spk/spk-mail/internal/api/transport"
+	// Aliased: this file also imports the Wails `events` package above.
+	mailevents "github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/tray"
 )
 
@@ -22,7 +24,7 @@ import (
 type Options struct {
 	FrontendFS    fs.FS
 	API           api.API
-	Emitter       *events.Emitter
+	Emitter       *mailevents.Emitter
 	IconPNG       []byte
 	UnreadIconPNG []byte // optional accent variant; tray uses it when unread > 0
 }
