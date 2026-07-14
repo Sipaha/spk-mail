@@ -49,7 +49,7 @@ const blockedImagesCSS = `img[data-spk-original-src]{display:none !important}`
 const adaptedCSS = `
   :root{color-scheme:dark}
   html,body{background:#0b0d11 !important;color:#e6eaf2 !important}
-  body{margin:0;padding:14px 20px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.55}
+  body{margin:0;padding:14px 20px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;line-height:1.55}
   hr{border-color:#2a3342 !important}
   a,a *{color:#7e9cde !important}
   img{max-width:100%;height:auto}
@@ -98,7 +98,7 @@ function adaptDarkTheme(doc: Document) {
 
 // originalCSS: white card, no filters. Email renders exactly as authored.
 const originalCSS = `
-  body{margin:0;padding:12px 16px;color-scheme:light;background:#ffffff;color:#1f2937;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5}
+  body{margin:0;padding:12px 16px;color-scheme:light;background:#ffffff;color:#1f2937;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;line-height:1.5}
   a{color:#1d4ed8}
   img{max-width:100%;height:auto}
   ${blockedImagesCSS}
