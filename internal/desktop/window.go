@@ -24,7 +24,7 @@ import (
 // composes with the OS display scale (see the WebviewWindowOptions.Zoom comment
 // below), so physical size stays consistent across densities while the tight
 // type scale reads comfortably. Adjust here.
-const uiZoom = 1.25
+const uiZoom = 1.1
 
 // Options bundles the dependencies the desktop runner needs.
 type Options struct {
