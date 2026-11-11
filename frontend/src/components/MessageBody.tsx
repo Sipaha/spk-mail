@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as wails from '@wailsio/runtime'
 import { client } from '../api/client'
 import type { MessageDTO } from '../api/types'
@@ -106,6 +106,8 @@ const originalCSS = `
 
 export default function MessageBody({ msg }: { msg: MessageDTO }) {
   const ref = useRef<HTMLIFrameElement>(null)
+  // Keep the card's space while a theme/remote-content reload is prepared.
+  const height = useRef(0)
   const [html, setHtml] = useState(msg.body_html)
   const [hasBlocked, setHasBlocked] = useState(false)
   const [adapted, setAdapted] = useState(true)
@@ -115,6 +117,9 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
     setHasBlocked(/data-spk-original-src/.test(msg.body_html))
   }, [msg.body_html])
 
+  const css = adapted ? adaptedCSS : originalCSS
+  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${html}</body></html>`
+
   // On every iframe (re)load: resize to content height AND wire up a click
   // interceptor so <a> taps open in the system browser instead of trying to
   // navigate inside the sandboxed iframe (which silently does nothing).
@@ -122,13 +127,24 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
   // cleanup can remove the listener — without that, srcDoc reloads (toggling
   // adapted/original, marking remote-content allowed) would accumulate
   // listeners on the same document object.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const f = ref.current; if (!f) return
     let activeDoc: Document | null = null
     let activeWin: Window | null = null
     let activeClick: ((e: Event) => void) | null = null
     let activeWheel: ((e: WheelEvent) => void) | null = null
+    let frame = 0
+    let resizeFrame = 0
+    let disposeSizing = () => {}
     const onLoad = () => {
+      const doc = f.contentDocument
+      // A new iframe starts with a complete about:blank document. It is not
+      // the email: measuring it exposes a small strip of the next document
+      // before its colors have been adapted. Wait only for srcdoc parsing,
+      // not resource-dependent load (an allowed image can be arbitrarily slow).
+      if (!doc || doc.URL !== 'about:srcdoc' || doc.readyState === 'loading' || !doc.body || doc === activeDoc) return
+      disposeSizing()
+      if (activeWheel) f.removeEventListener('wheel', activeWheel as EventListener, true)
       // Strip any handlers from a previous load before installing new ones.
       if (activeDoc) {
         if (activeClick) {
@@ -140,8 +156,6 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
       if (activeWin && activeWheel) {
         activeWin.removeEventListener('wheel', activeWheel, true)
       }
-      const doc = f.contentDocument
-      if (!doc || !doc.body) return
       // Dark-theme adaptation runs BEFORE the height measurement, since
       // restyling can change body height (transparent backgrounds don't
       // reflow but a future change might).
@@ -165,9 +179,36 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
         a.removeAttribute('href')
         a.style.cursor = 'pointer'
       }
-      try {
-        f.style.height = (doc.body.scrollHeight + 8) + 'px'
-      } catch { /* noop */ }
+      const measure = () => {
+        height.current = doc.body.scrollHeight + 8
+        f.style.height = height.current + 'px'
+      }
+      measure()
+      // Observe causes of intrinsic size changes, not body height itself.
+      // A body ResizeObserver feeds back through iframe viewport units (100vh
+      // plus padding grows forever). Parent height writes cannot trigger these
+      // content/resource observers; width changes still remeasure wrapped text.
+      const scheduleMeasure = () => {
+        if (resizeFrame) return
+        resizeFrame = requestAnimationFrame(() => { resizeFrame = 0; measure() })
+      }
+      const content = new MutationObserver(scheduleMeasure)
+      content.observe(doc.body, { subtree: true, childList: true, characterData: true, attributes: true })
+      let width = f.clientWidth
+      const resize = new ResizeObserver(() => {
+        if (f.clientWidth !== width) { width = f.clientWidth; scheduleMeasure() }
+      })
+      resize.observe(f)
+      doc.addEventListener('load', scheduleMeasure, true)
+      doc.addEventListener('error', scheduleMeasure, true)
+      doc.fonts?.addEventListener('loadingdone', scheduleMeasure)
+      disposeSizing = () => {
+        content.disconnect()
+        resize.disconnect()
+        doc.removeEventListener('load', scheduleMeasure, true)
+        doc.removeEventListener('error', scheduleMeasure, true)
+        doc.fonts?.removeEventListener('loadingdone', scheduleMeasure)
+      }
       const onClick = (e: Event) => {
         const target = (e.target as Element | null)?.closest?.('a') as HTMLAnchorElement | null
         if (!target) return
@@ -260,19 +301,23 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
       activeWin = win
       activeClick = onClick
       activeWheel = onWheel
+      f.style.visibility = 'visible'
     }
     f.addEventListener('load', onLoad)
-    // srcDoc loads synchronously in some engines: by the time this effect
-    // runs the iframe's "load" event has already fired and we'd never
-    // attach the click handler. Detect a live document and run onLoad
-    // immediately when that's the case. We use readyState on the iframe's
-    // own document, NOT the parent's.
-    const doc = f.contentDocument
-    if (doc && doc.readyState === 'complete' && doc.body) {
+    // Poll across the initial document replacement. Preparing in the parent's
+    // animation frame keeps adaptation, height and reveal in one paint. The
+    // iframe stays mounted so parsing/images/layout can progress while hidden.
+    const prepare = () => {
       onLoad()
+      if (!activeDoc) frame = requestAnimationFrame(prepare)
     }
+    prepare()
     return () => {
+      cancelAnimationFrame(frame)
+      cancelAnimationFrame(resizeFrame)
+      disposeSizing()
       f.removeEventListener('load', onLoad)
+      if (activeWheel) f.removeEventListener('wheel', activeWheel as EventListener, true)
       if (activeDoc) {
         if (activeClick) {
           activeDoc.removeEventListener('click', activeClick, true)
@@ -284,18 +329,17 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
         activeWin.removeEventListener('wheel', activeWheel as EventListener, true)
       }
     }
-  }, [html, adapted])
+  }, [srcDoc, adapted])
 
   if (!html) {
     return <pre className="max-w-[80ch] whitespace-pre-wrap px-5 py-4 font-mono text-[13px] leading-relaxed text-fg">{msg.body_text}</pre>
   }
 
-  const css = adapted ? adaptedCSS : originalCSS
   const wrapperBg = adapted ? 'bg-ink-950' : 'bg-white'
 
   return (
     <div className="px-5 py-3">
-      <div className={`relative rounded-md overflow-hidden ${wrapperBg}`}>
+      <div className={`relative min-h-10 rounded-md overflow-hidden ${wrapperBg}`}>
         {/* Floating controls in the top-right corner of the body card —
             keeps the chrome out of the message header but right at hand
             for when the user wants to flip styling or unblock images.
@@ -320,7 +364,9 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
           </button>
         </div>
         <iframe
+          key={srcDoc}
           ref={ref}
+          title="Message body"
           // allow-scripts is required for event dispatch INSIDE the iframe
           // to function on WebKitGTK: without it, the iframe's JS engine
           // is dormant and listeners attached from parent JS on
@@ -341,9 +387,9 @@ export default function MessageBody({ msg }: { msg: MessageDTO }) {
           // it. Default target=_self is fine: the click handler runs first
           // (capture phase, preventDefault) and routes through
           // openExternal, so the iframe never attempts the navigation.
-          srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${html}</body></html>`}
+          srcDoc={srcDoc}
           className="w-full border-0"
-          style={{ height: 0, background: 'transparent' }}
+          style={{ height: height.current, visibility: 'hidden', background: 'transparent' }}
         />
       </div>
     </div>

@@ -97,3 +97,37 @@ The committed Playwright spec `tests/playwright/01-visual-regression.spec.ts` al
 - The mock server resets when the binary restarts. To preserve state, persist via the on-disk DB (`XDG_DATA_HOME=…/data` set per run).
 - Notifications (`MessageArrived` event) only fire for INBOX-role folders with `\Seen` flag NOT set.
 - The Playwright suite uses `mkdtempSync` for `XDG_DATA_HOME` per test run (see `tests/playwright/playwright.config.ts`); local re-runs do NOT reuse the seeded DB.
+
+## Email iframe transitions (Chromium and native WebKitGTK)
+
+The component fixture under `tests/message-body/` imports the production
+`MessageBody` and styles. Its local server holds image responses until explicitly
+released. The shared checks sample every animation frame, reject visible initial
+`about:blank` or unadapted white email surfaces, require readable content **before
+iframe load**, and cover seven bodies, rapid thread switches, reopen, Original /
+Dark, links, selection, wheel forwarding and late height growth/shrinkage.
+
+After installing the normal frontend and Playwright dependencies:
+
+```sh
+cd tests/playwright
+NO_PROXY=127.0.0.1,localhost npx playwright test --config message-body.config.ts
+```
+
+On Linux with Wails GTK4/WebKitGTK6 development dependencies, Xvfb and Python
+Pillow, run the same assertions in the real native engine (from repository root):
+
+```sh
+go build -o "$TEST_SCRATCH/message-body-native" ./tests/message-body/native
+/usr/bin/python3 tests/message-body/native-check.py \
+  --scratch "$TEST_SCRATCH" --binary "$TEST_SCRATCH/message-body-native"
+```
+
+Set `TEST_SCRATCH` to a test-owned directory. Preserve the inherited `TMPDIR`.
+The runner starts its own local fixture server on port 5186, private Xvfb display,
+HOME/XDG profile and abstract D-Bus session. It removes the sandbox-disable
+environment variable. It uses the normal `wails:` asset origin/runtime; a private
+`xdg-open` executable records link destinations without launching an external
+browser. Each checkpoint saves screenshots and JSON traces. It terminates only
+its own process groups. Do not run the Chromium and native fixture servers
+concurrently; both require port 5186. This fixture has no real mailbox backend.
