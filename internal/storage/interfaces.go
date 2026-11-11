@@ -50,6 +50,12 @@ type Reader interface {
 type Writer interface {
 	Reader
 
+	ListFlagIntents(ctx context.Context, accountID int64, limit int) ([]FlagIntent, error)
+	ListDueFlagIntents(ctx context.Context, accountID int64, limit int) ([]FlagIntent, error)
+	DeferFlagIntents(ctx context.Context, ids []int64, retryAt int64, detail string) error
+	FlagIntentFailure(ctx context.Context, accountID int64) (string, error)
+	AckFlagIntents(ctx context.Context, ids []int64) error
+
 	InsertMessage(ctx context.Context, m MessageRow) (int64, error)
 	UpdateFlags(ctx context.Context, id int64, flagsJSON string) error
 	UpdateFlagsByUID(ctx context.Context, folderID, uid int64, flagsJSON string) (msgID int64, threadID *int64, changed bool, err error)
@@ -133,7 +139,7 @@ type MarkReadChange struct {
 // Action values:
 //   - "added"   — flag was added to the most-recent message in the thread
 //   - "removed" — flag was removed from every message in the thread that
-//                 had it
+//     had it
 //   - "noop"    — thread was empty / unknown id; nothing to do
 type FlagToggleOutcome struct {
 	Action  string

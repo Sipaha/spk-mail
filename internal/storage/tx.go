@@ -103,6 +103,25 @@ func (s *Store) InsertParsedMessageBundle(ctx context.Context, b MessageBundle) 
 // out-of-band; this function only adjusts the counter.
 func (s *Store) DeleteMessagesByFolder(ctx context.Context, folderID int64) error {
 	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT thread_id FROM messages WHERE folder_id=? AND thread_id IS NOT NULL`, folderID)
+		if err != nil {
+			return err
+		}
+		var tids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			tids = append(tids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+
 		if err := decBlobRefs(ctx, tx, blobRefAttachment, "folder_id", folderID); err != nil {
 			return err
 		}
@@ -111,6 +130,15 @@ func (s *Store) DeleteMessagesByFolder(ctx context.Context, folderID int64) erro
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE folder_id = ?`, folderID); err != nil {
 			return err
+		}
+		// The new mailbox epoch has its own CONDSTORE counter and cursor.
+		if _, err := tx.ExecContext(ctx, `UPDATE folders SET highest_modseq=0,uid_next=0 WHERE id=?`, folderID); err != nil {
+			return err
+		}
+		for _, tid := range tids {
+			if err := updateThreadStats(ctx, tx, tid); err != nil {
+				return err
+			}
 		}
 		// Any thread that just lost its last message in this folder is
 		// now an orphan (threads have no account/folder FK); sweep it in

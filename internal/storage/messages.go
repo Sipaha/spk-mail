@@ -65,6 +65,11 @@ func (s *Store) UpdateFlagsByUID(ctx context.Context, folderID, uid int64, flags
 			folderID, uid).Scan(&msgID, &threadID, &existing); err != nil {
 			return err
 		}
+		merged, err := overlayFlagIntents(ctx, tx, msgID, flagsJSON)
+		if err != nil {
+			return err
+		}
+		flagsJSON = merged
 		if existing == flagsJSON {
 			return nil
 		}
@@ -125,9 +130,44 @@ func (s *Store) GetMessagesByThread(ctx context.Context, threadID int64) ([]Mess
 	return out, rows.Err()
 }
 
+// UpdateFlags applies an explicit local flag edit, persisting only changed
+// flags as user intent. Server snapshots must use UpdateFlagsByUID instead.
 func (s *Store) UpdateFlags(ctx context.Context, id int64, flagsJSON string) error {
-	_, err := s.writeDB.ExecContext(ctx, `UPDATE messages SET flags = ? WHERE id = ?`, flagsJSON, id)
-	return err
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		var before string
+		var threadID *int64
+		if err := tx.QueryRowContext(ctx, `SELECT flags,thread_id FROM messages WHERE id=?`, id).Scan(&before, &threadID); err != nil {
+			return err
+		}
+		var old, next []string
+		if err := json.Unmarshal([]byte(before), &old); err != nil {
+			return err
+		}
+		if err := json.Unmarshal([]byte(flagsJSON), &next); err != nil {
+			return err
+		}
+		for _, flag := range old {
+			if !slices.Contains(next, flag) {
+				if err := queueFlagTx(ctx, tx, id, flag, false); err != nil {
+					return err
+				}
+			}
+		}
+		for _, flag := range next {
+			if !slices.Contains(old, flag) {
+				if err := queueFlagTx(ctx, tx, id, flag, true); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE messages SET flags=? WHERE id=?`, flagsJSON, id); err != nil {
+			return err
+		}
+		if threadID != nil {
+			return updateThreadStats(ctx, tx, *threadID)
+		}
+		return nil
+	})
 }
 
 // UpdateBodyHTML overwrites the cached HTML body of a message. Used by
@@ -196,6 +236,9 @@ func markRowsAsSeen(ctx context.Context, tx *sql.Tx, cands []seenCandidate, out 
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
+			return err
+		}
+		if err := queueFlagTx(ctx, tx, c.id, `\Seen`, true); err != nil {
 			return err
 		}
 		out.Changed = append(out.Changed, MarkReadChange{
@@ -354,6 +397,9 @@ func (s *Store) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTo
 					`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
 					return err
 				}
+				if err := queueFlagTx(ctx, tx, c.id, `\Flagged`, false); err != nil {
+					return err
+				}
 				out.Changed = append(out.Changed, FlagChange{
 					MessageID: c.id, AccountID: c.accountID,
 					FolderID: c.folderID, UID: c.uid,
@@ -373,6 +419,9 @@ func (s *Store) ToggleThreadFlagged(ctx context.Context, threadID int64) (FlagTo
 			}
 			if _, err := tx.ExecContext(ctx,
 				`UPDATE messages SET flags = ? WHERE id = ?`, string(b), c.id); err != nil {
+				return err
+			}
+			if err := queueFlagTx(ctx, tx, c.id, `\Flagged`, true); err != nil {
 				return err
 			}
 			out.Changed = append(out.Changed, FlagChange{

@@ -20,16 +20,17 @@ func (s *Store) UpsertFolder(ctx context.Context, f FolderRow) (int64, error) {
 	// (it doesn't track CONDSTORE state), so wiring it into the ON
 	// CONFLICT update would clobber a fresh watermark set by
 	// SetFolderHighestModSeq. The CONDSTORE watermark has its own
-	// dedicated setter — see below.
+	// dedicated setter — see below. UIDValidity=0 means LIST discovery, not
+	// a new epoch: retain sync coordinates until SELECT validates the mailbox.
 	_, err := s.writeDB.ExecContext(ctx, `
 		INSERT INTO folders(account_id,name,delimiter,role,uid_validity,uid_next,last_synced_at)
 		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(account_id,name) DO UPDATE SET
 			delimiter=excluded.delimiter,
 			role=excluded.role,
-			uid_validity=excluded.uid_validity,
-			uid_next=excluded.uid_next,
-			last_synced_at=excluded.last_synced_at`,
+			uid_validity=CASE WHEN excluded.uid_validity=0 THEN folders.uid_validity ELSE excluded.uid_validity END,
+			uid_next=CASE WHEN excluded.uid_validity=0 THEN folders.uid_next ELSE excluded.uid_next END,
+			last_synced_at=CASE WHEN excluded.uid_validity=0 THEN folders.last_synced_at ELSE excluded.last_synced_at END`,
 		f.AccountID, f.Name, f.Delimiter, f.Role, f.UIDValidity, f.UIDNext, f.LastSyncedAt)
 	if err != nil {
 		return 0, err

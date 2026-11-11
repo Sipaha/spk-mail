@@ -6,46 +6,121 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/flagop"
+	"github.com/spk/spk-mail/internal/imap"
+	"github.com/spk/spk-mail/internal/storage"
 )
 
-// flagOpEnqueueTimeout is how long SubmitFlagOp blocks when the queue is
-// full before returning an error to the caller.
-const flagOpEnqueueTimeout = 2 * time.Second
-
-// SubmitFlagOp queues a flag operation for async UID STORE. It blocks briefly
-// when the queue is full; returns an error if the queue stays full. An empty
-// UIDs slice is rejected at the boundary — the doc on flagop.Op states it
-// must hold at least one UID, and accepting an empty slice would silently
-// pass through to a no-op StoreFlags + a misleading "uids=[]" warning if
-// the worker logged the dropped path.
-//
-// The only reader of the queue is the worker's runOnce loop, which is NOT
-// running while the worker is down and supervise backs off (up to 300s). So a
-// full queue can stay full for minutes; callers sit on the HTTP request path
-// and must be able to walk away — hence ctx. Cancelling the request aborts the
-// enqueue instead of pinning the handler for the full timeout.
+// SubmitFlagOp wakes the outbox drainer after the API's storage transaction.
+// Op coordinates describe the change for adapters; they are never replayed
+// directly, because only the durable, epoch-bound current intent is safe.
+// A full hint channel already guarantees a wake; no HTTP request waits on IMAP.
 func (w *AccountWorker) SubmitFlagOp(ctx context.Context, op flagop.Op) error {
-	if len(op.UIDs) == 0 {
-		slog.Warn("flag op rejected: empty UIDs",
-			"account_id", w.accountID, "folder_id", op.FolderID,
-			"add", op.Add, "flags", op.Flags)
-		return fmt.Errorf("flag op rejected: empty UIDs")
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	timer := time.NewTimer(flagOpEnqueueTimeout)
-	defer timer.Stop()
+	if op.AccountID != w.accountID || len(op.UIDs) == 0 {
+		return fmt.Errorf("invalid flag wake-up")
+	}
 	select {
 	case w.flagOps <- op:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("flag op dropped: %w", ctx.Err())
-	case <-timer.C:
-		slog.Warn("flag op dropped: queue full",
-			"account_id", w.accountID,
-			"folder_id", op.FolderID,
-			"uids", op.UIDs,
-			"add", op.Add,
-			"flags", op.Flags)
-		return fmt.Errorf("flag op dropped: queue full")
+	default:
 	}
+	return nil
+}
+
+// flushFlagIntents sends bounded bulk STOREs, one per mailbox/epoch/flag/value.
+// Errors leave all unacknowledged intents durable and reconnect the primary
+// session through the supervisor instead of keeping a dead connection forever.
+func (w *AccountWorker) flushFlagIntents(ctx context.Context, c *imap.Client) error {
+	for {
+		more, err := w.flushFlagIntentBatch(ctx, c)
+		if err != nil {
+			return err
+		}
+		if !more {
+			return nil
+		}
+	}
+}
+
+// Yield the account sync mutex between pages, just like the body-fetch path.
+// Keep SELECT/STORE/ack together so stale inbound deltas cannot race the ack.
+func (w *AccountWorker) flushFlagIntentBatch(ctx context.Context, c *imap.Client) (bool, error) {
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
+	pending, err := w.store.ListDueFlagIntents(ctx, w.accountID, 500)
+	if err != nil {
+		return false, err
+	}
+	if len(pending) == 0 {
+		detail, err := w.store.FlagIntentFailure(ctx, w.accountID)
+		if err != nil {
+			return false, err
+		}
+		if detail != w.flagError {
+			w.flagError = detail
+			if detail != "" {
+				w.setStatus("error", detail)
+			} else {
+				w.setStatus("ok", "")
+			}
+		}
+		return false, nil
+	}
+	type key struct {
+		folder, epoch int64
+		name, flag    string
+		add           bool
+	}
+	groups := make(map[key][]storage.FlagIntent)
+	var order []key
+	for _, p := range pending {
+		k := key{p.FolderID, p.UIDValidity, p.FolderName, p.Flag, p.Add}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], p)
+	}
+	for _, k := range order {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		ps := groups[k]
+		ids := make([]int64, 0, len(ps))
+		uids := make([]int64, 0, len(ps))
+		for _, p := range ps {
+			ids = append(ids, p.ID)
+			uids = append(uids, p.UID)
+		}
+		state, err := c.Select(ctx, k.name)
+		if err != nil {
+			if imap.IsCommandRejection(err) {
+				if err := w.store.DeferFlagIntents(ctx, ids, time.Now().Add(30*time.Second).Unix(), "Flag synchronization SELECT rejected: "+err.Error()); err != nil {
+					return false, err
+				}
+				continue
+			}
+			return false, fmt.Errorf("flag SELECT: %w", err)
+		}
+		if k.epoch == 0 || state.UIDValidity != k.epoch {
+			// Never apply old UIDs to a replacement mailbox. The normal folder sync
+			// will remove its obsolete messages. Unknown epochs cannot be replayed.
+			slog.Warn("discarding obsolete flag intents", "account_id", w.accountID, "folder_id", k.folder)
+			events.Emit(w.em, "WriteError", map[string]any{"account_id": w.accountID, "folder_id": k.folder, "err": "A folder was reset on the mail server. Its earlier flag changes could not be synchronized."})
+		} else if err := c.StoreFlags(ctx, uids, []string{k.flag}, k.add); err != nil {
+			if imap.IsCommandRejection(err) {
+				if err := w.store.DeferFlagIntents(ctx, ids, time.Now().Add(30*time.Second).Unix(), "Flag synchronization STORE rejected: "+err.Error()); err != nil {
+					return false, err
+				}
+				continue
+			}
+			return false, fmt.Errorf("flag STORE: %w", err)
+		}
+		if err := w.store.AckFlagIntents(ctx, ids); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }

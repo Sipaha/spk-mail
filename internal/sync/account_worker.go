@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	stdsync "sync"
+	"time"
 
 	"github.com/spk/spk-mail/internal/events"
 	"github.com/spk/spk-mail/internal/flagop"
@@ -25,8 +26,9 @@ type AccountWorker struct {
 	em        *events.Emitter
 	// status is the engine's status tracker. nil in tests that build a bare
 	// worker — setStatus tolerates that (the tracker's methods are nil-safe).
-	status  *statusTracker
-	flagOps chan flagop.Op
+	status    *statusTracker
+	flagOps   chan flagop.Op
+	flagError string
 	// syncMu serializes syncFolder per account: while one folder is being
 	// fetched, IDLE/poll-driven syncs of other folders queue up rather than
 	// running in parallel. This makes the per-account "Syncing X: done/total"
@@ -57,7 +59,7 @@ func (w *AccountWorker) setStatus(state, detail string) {
 	if detail != "" {
 		payload["detail"] = detail
 	}
-	w.em.Emit(events.Event{Type: "AccountStatus", Payload: payload})
+	events.Emit(w.em, "AccountStatus", payload)
 }
 
 // Run is the worker main loop. It blocks until ctx is cancelled. Errors during
@@ -101,19 +103,16 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		return err
 	}
 	defer c.Close()
+	stopClose := context.AfterFunc(runCtx, func() { _ = c.Close() })
+	defer stopClose()
 
 	w.setStatus("ok", "")
+	w.flagError = ""
 
 	folders, err := c.ListFolders(runCtx)
 	if err != nil {
 		return err
 	}
-	type syncedFolder struct {
-		ID   int64
-		Name string
-		Role string
-	}
-	synced := make([]syncedFolder, 0, len(folders))
 	for _, f := range folders {
 		role := f.Role
 		var rolePtr *string
@@ -132,9 +131,13 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		// messages from before this session is noise. Real-time arrivals
 		// (runIDLE post-EXISTS) re-call syncFolder with notify=true.
 		if err := w.syncFolder(runCtx, c, fid, f.Name, f.Role, false); err != nil {
-			return err
+			if !imap.IsCommandRejection(err) {
+				return err
+			}
+			// An inaccessible/deleted mailbox must not prevent this account's
+			// healthy mailboxes or durable flag outbox from making progress.
+			slog.Warn("initial folder sync rejected", "account_id", w.accountID, "folder_id", fid, "err", err)
 		}
-		synced = append(synced, syncedFolder{ID: fid, Name: f.Name, Role: f.Role})
 	}
 
 	// IDLE on inbox-role folders for push notifications; periodic poll for
@@ -157,65 +160,24 @@ func (w *AccountWorker) runOnce(ctx context.Context) error {
 		}
 	}
 
-	// Drain flag ops on the primary session until ctx cancels.
-	//
-	// Before each STORE we re-Select the folder that owns the UID. Without
-	// this, STORE fires against whatever mailbox happened to be selected
-	// last (the final folder synced above), which silently mutates flags on
-	// the wrong message in multi-folder accounts.
-	folderName := func(id int64) string {
-		for _, f := range synced {
-			if f.ID == id {
-				return f.Name
-			}
-		}
-		return ""
-	}
-	currentSel := ""
+	// The channel is a wake-up hint only. SQLite owns the queue, including
+	// requests made without a worker and requests interrupted by process exit.
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
+		if err := w.flushFlagIntents(runCtx, c); err != nil {
+			return err
+		}
 		select {
 		case <-runCtx.Done():
 			return nil
-		case op := <-w.flagOps:
-			name := folderName(op.FolderID)
-			if name == "" {
-				// Folder wasn't in the startup snapshot (e.g. server-side
-				// folder discovered after runOnce began). Refresh from the
-				// store and look it up directly — without this, flag ops
-				// against the new folder would be dropped until the worker
-				// next restarts.
-				if folders, err := w.store.ListFolders(runCtx, w.accountID); err == nil {
-					for _, f := range folders {
-						if f.ID == op.FolderID {
-							name = f.Name
-							synced = append(synced, syncedFolder{ID: f.ID, Name: f.Name, Role: roleStr(f.Role)})
-							break
-						}
-					}
-				}
-			}
-			if name == "" {
-				slog.Warn("store flag dropped: unknown folder",
-					"account_id", w.accountID, "folder_id", op.FolderID, "uids", op.UIDs)
-				continue
-			}
-			if name != currentSel {
-				if _, err := c.Select(runCtx, name); err != nil {
-					slog.Warn("store flag select failed", "folder", name, "err", err)
-					continue
-				}
-				currentSel = name
-			}
-			if err := c.StoreFlags(runCtx, op.UIDs, op.Flags, op.Add); err != nil {
-				slog.Warn("store flag failed", "folder", name, "uids", op.UIDs, "err", err)
-			}
+		case <-w.flagOps:
+		case <-ticker.C:
 		}
 	}
 }
 
-// roleStr safely dereferences a *string role on a FolderRow, returning
-// "" when nil. Used by the flag-ops drain loop when refreshing folder
-// metadata mid-run.
+// roleStr safely dereferences an optional role.
 func roleStr(p *string) string {
 	if p == nil {
 		return ""

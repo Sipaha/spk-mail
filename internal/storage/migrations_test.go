@@ -17,7 +17,7 @@ func TestMigrate_FreshDBAppliesAllVersions(t *testing.T) {
 
 	var v int
 	require.NoError(t, s.DB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&v))
-	require.Equal(t, 9, v)
+	require.Equal(t, 10, v)
 
 	// profiles table exists
 	var name string

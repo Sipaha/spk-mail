@@ -252,11 +252,7 @@ func (s *Stub) MarkRead(ctx context.Context, ids []int64) error {
 	if err != nil {
 		return err
 	}
-	// One bulk Op per (account, folder) — never one per message. SubmitFlagOp
-	// blocks while a worker's queue is full (worker down, supervise backing
-	// off), so a per-message fan-out would stall this handler by N × the
-	// enqueue timeout on an IMAP outage. Grouping mirrors ToggleThreadFlagged:
-	// UIDs are folder-scoped, so folders cannot share an Op.
+	// One wake-up per (account, folder); durable intent already lives in SQLite.
 	groups := make(map[folderKey][]int64)
 	for _, ch := range out.Changed {
 		k := folderKey{ch.AccountID, ch.FolderID}
@@ -284,10 +280,10 @@ type folderKey struct {
 	folderID  int64
 }
 
-// submitFlagOp hands one bulk op to the account's worker, logging (never
-// failing the request) when there is no worker or the queue stays full: the
-// DB is already updated, and the worker re-syncs flags from the server on its
-// next pass, so a dropped op degrades to a delayed IMAP flag, not lost state.
+// submitFlagOp wakes the account worker. Local flags and durable IMAP intent
+// were committed atomically by storage, so a missing worker or failed hint is
+// safe: startup and the periodic outbox drain pick it up. Success means locally
+// accepted for synchronization, not confirmation from the mail server.
 func (s *Stub) submitFlagOp(ctx context.Context, caller string, k folderKey, uids []int64, add bool, flag string) {
 	if s.Engine == nil {
 		return

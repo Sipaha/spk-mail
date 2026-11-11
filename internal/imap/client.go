@@ -5,6 +5,7 @@ package imap
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -225,4 +226,11 @@ func (c *Client) Capabilities() (map[string]bool, error) {
 		out[strings.ToUpper(string(k))] = true
 	}
 	return out, nil
+}
+
+// IsCommandRejection distinguishes a tagged command response from a broken
+// transport. A denied mailbox must not block independent mailbox operations.
+func IsCommandRejection(err error) bool {
+	var rejected *imap.Error
+	return errors.As(err, &rejected) && (rejected.Type == imap.StatusResponseTypeNo || rejected.Type == imap.StatusResponseTypeBad)
 }

@@ -21,6 +21,7 @@ var migrationSteps = []migrationStep{
 	{version: 7, apply: applyMigrationV7},
 	{version: 8, apply: applyMigrationV8},
 	{version: 9, apply: applyMigrationV9},
+	{version: 10, apply: applyMigrationV10},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -357,4 +358,24 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// Durable flag outbox. Existing Seen rows are deliberately not backfilled:
+// they may reflect server state rather than an undelivered user request.
+func applyMigrationV10(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS flag_intents (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+ flag TEXT NOT NULL, add_flag INTEGER NOT NULL, uid_validity INTEGER NOT NULL,
+ retry_at INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+ UNIQUE(message_id,flag));
+ INSERT INTO schema_migrations(version,applied_at) VALUES (10,strftime('%s','now'))`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

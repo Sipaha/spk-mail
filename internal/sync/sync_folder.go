@@ -57,6 +57,12 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		prev.UIDNext = 0
 	}
 
+	// Persist the epoch before any fetched message can become visible to the
+	// UI and receive a read request. A failed partial sync must retain it too.
+	if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: prev.Role, UIDValidity: state.UIDValidity, UIDNext: prev.UIDNext, LastSyncedAt: prev.LastSyncedAt}); err != nil {
+		return err
+	}
+
 	// Resume from MAX(uid) actually present in messages, not just the
 	// persisted folders.uid_next. Older sync paths could insert messages
 	// without ever reaching the final UpsertFolder (e.g. partial bulk sync
@@ -254,6 +260,11 @@ func (w *AccountWorker) folderIDByName(ctx context.Context, accountID int64, nam
 //
 // Returns the number of rows whose flags actually changed.
 func (w *AccountWorker) syncFlagDeltas(ctx context.Context, c *imap.Client, folderID int64, serverModSeq uint64) (int, error) {
+	// A response fetched before our STORE must be applied before its ack removes
+	// the pending overlay. Otherwise a late server snapshot could undo the UI.
+	w.syncMu.Lock()
+	defer w.syncMu.Unlock()
+
 	if serverModSeq == 0 {
 		return 0, nil // server doesn't support CONDSTORE
 	}

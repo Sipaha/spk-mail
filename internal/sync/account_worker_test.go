@@ -60,57 +60,22 @@ func TestAccountWorker_SubmitFlagOp_HappyPath(t *testing.T) {
 	}
 }
 
-// TestAccountWorker_SubmitFlagOp_QueueFull verifies the full-queue path:
-// SubmitFlagOp must neither silently drop the op nor block forever. It
-// should block for roughly flagOpEnqueueTimeout and then return a non-nil
-// error. Filling the queue to capacity is derived from cap(w.flagOps)
-// rather than a hardcoded 64 so this test survives a queue resize.
+// A full wake-up channel cannot block acceptance of durable intent.
 func TestAccountWorker_SubmitFlagOp_QueueFull(t *testing.T) {
 	w := NewAccountWorker(1, nil, nil, nil, nil)
-
-	capacity := cap(w.flagOps)
-	for i := 0; i < capacity; i++ {
-		op := flagop.Op{AccountID: 1, FolderID: 2, UIDs: []int64{int64(i + 1)}, Add: true, Flags: []string{`\Seen`}}
-		require.NoError(t, w.SubmitFlagOp(context.Background(), op), "queue should accept ops up to capacity without blocking")
-	}
-
-	start := time.Now()
-	err := w.SubmitFlagOp(context.Background(), flagop.Op{AccountID: 1, FolderID: 2, UIDs: []int64{999}, Add: true, Flags: []string{`\Seen`}})
-	elapsed := time.Since(start)
-
-	require.Error(t, err, "SubmitFlagOp must return an error rather than silently dropping or blocking forever when the queue is full")
-	require.GreaterOrEqual(t, elapsed, flagOpEnqueueTimeout-250*time.Millisecond,
-		"SubmitFlagOp returned too early — it should really wait roughly flagOpEnqueueTimeout before giving up")
-	require.Less(t, elapsed, flagOpEnqueueTimeout+3*time.Second,
-		"SubmitFlagOp blocked far longer than flagOpEnqueueTimeout — generous upper bound for a loaded CI machine")
-}
-
-// TestAccountWorker_SubmitFlagOp_ContextCancel verifies that a caller on the
-// HTTP request path can walk away from a full queue. The queue only drains
-// while the worker's runOnce loop runs, so during an IMAP outage (worker down,
-// supervise backing off up to 300s) it can stay full for minutes — a cancelled
-// request must abort the enqueue immediately instead of pinning the handler for
-// the whole flagOpEnqueueTimeout.
-func TestAccountWorker_SubmitFlagOp_ContextCancel(t *testing.T) {
-	w := NewAccountWorker(1, nil, nil, nil, nil)
-
+	op := flagop.Op{AccountID: 1, FolderID: 2, UIDs: []int64{7}}
 	for i := 0; i < cap(w.flagOps); i++ {
-		op := flagop.Op{AccountID: 1, FolderID: 2, UIDs: []int64{int64(i + 1)}, Add: true, Flags: []string{`\Seen`}}
 		require.NoError(t, w.SubmitFlagOp(context.Background(), op))
 	}
-
+	done := make(chan error, 1)
+	go func() { done <- w.SubmitFlagOp(context.Background(), op) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("full wake channel blocked caller")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	err := w.SubmitFlagOp(ctx, flagop.Op{AccountID: 1, FolderID: 2, UIDs: []int64{999}, Add: true, Flags: []string{`\Seen`}})
-	elapsed := time.Since(start)
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Less(t, elapsed, flagOpEnqueueTimeout,
-		"cancelling the caller's context must abort the enqueue well before the full-queue timeout")
+	cancel()
+	require.ErrorIs(t, w.SubmitFlagOp(ctx, op), context.Canceled)
 }

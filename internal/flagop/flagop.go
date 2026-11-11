@@ -5,11 +5,10 @@
 // without touching the others would silently drop the field at the bridge.
 package flagop
 
-// Op is a request to add or remove flags on a set of IMAP messages within
-// one folder. The AccountWorker for AccountID receives it via its
-// SubmitFlagOp method and translates it to a single UID STORE on the named
-// folder. UIDs of length 1 is the per-message case (e.g. mark one read);
-// larger slices come from bulk operations like "mark all in folder read".
+// Op describes an accepted local flag change for the worker wake-up adapter.
+// Storage commits durable per-message intents with the local edit; workers
+// drain those current, UIDVALIDITY-bound intents instead of replaying this
+// transient payload. UIDs are scoped to the account's folder.
 type Op struct {
 	AccountID int64
 	FolderID  int64
