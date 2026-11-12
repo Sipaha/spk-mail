@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { Profiler, StrictMode } from 'react'
 import ThreadList from './ThreadList'
 import { useStore } from '../store'
 import type { ThreadDTO } from '../api/types'
 
-const { listThreads } = vi.hoisted(() => ({ listThreads: vi.fn() }))
+const { listThreads, getThread, markRead } = vi.hoisted(() => ({ listThreads: vi.fn(), getThread: vi.fn(), markRead: vi.fn() }))
 
 vi.mock('../api/client', () => ({
   client: {
     listThreads,
-    getThread: vi.fn(),
-    markRead: vi.fn(),
+    getThread,
+    markRead,
     toggleThreadFlagged: vi.fn(),
   },
 }))
@@ -108,5 +109,59 @@ describe('ThreadList filter-switch generation guard', () => {
 
     expect(screen.queryByText('stale-p2-0')).toBeNull()
     expect(useStore.getState().threads.map(t => t.subject)).toEqual(['new-scope-thread'])
+  })
+})
+
+describe('ThreadList pinned rows settle after server filtering', () => {
+  it.each(['unread', 'flagged'] as const)('keeps a filtered-out %s thread without continuously committing', async (scope) => {
+    const opened = { ...thread(2, 'Pinned notification'), unread_count: 1, has_flagged: true }
+    const other = thread(1, 'Other notification')
+    listThreads.mockResolvedValue([opened, other])
+    getThread.mockResolvedValue([{ id: 20, flags: [] }])
+    markRead.mockResolvedValue(undefined)
+    useStore.getState().setFilter(scope === 'unread' ? { unreadOnly: true } : { hasFlagged: true })
+
+    let commits = 0
+    render(<StrictMode><Profiler id="thread-list" onRender={() => {
+      // Fail a feedback loop deterministically instead of letting act() hang.
+      if (++commits > 40) throw new Error('Pinned thread list did not settle')
+    }}><ThreadList /></Profiler></StrictMode>)
+    await screen.findByText('Pinned notification')
+    fireEvent.click(screen.getByText('Pinned notification'))
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith([20]))
+
+    // An event refetch now excludes the read/unflagged thread. It must stay
+    // visible while open, even when it is the only remaining pinned row.
+    act(() => { useStore.getState().setThreads([other]) })
+    expect(screen.getByText('Pinned notification')).toBeTruthy()
+    act(() => { useStore.getState().setThreads([]) })
+    expect(screen.getByText('Pinned notification')).toBeTruthy()
+    const settled = commits
+    await act(async () => { await new Promise(r => setTimeout(r, 0)) })
+    expect(commits).toBe(settled)
+
+    // A later server refresh must replace the snapshot without duplicating it.
+    act(() => { useStore.getState().setThreads([{ ...opened, subject: 'Updated notification', unread_count: 0 }]) })
+    expect(screen.queryByText('Pinned notification')).toBeNull()
+    expect(screen.getAllByText('Updated notification')).toHaveLength(1)
+    act(() => { useStore.getState().setThreads([]) })
+    expect(screen.getByText('Updated notification')).toBeTruthy()
+
+    // Closing also clears the pin and lets the existing leave animation finish.
+    act(() => { useStore.getState().setOpenThread(undefined) })
+    await act(async () => { await new Promise(r => setTimeout(r, 300)) })
+    expect(screen.queryByText('Updated notification')).toBeNull()
+    act(() => {
+      useStore.getState().setThreads([{ ...opened, subject: 'Updated notification' }])
+      useStore.getState().setOpenThread(opened.id)
+    })
+    act(() => { useStore.getState().setThreads([]) })
+    expect(screen.getByText('Updated notification')).toBeTruthy()
+
+    // Changing the filter clears the retained row rather than leaking it into
+    // another scope. Keep the next request pending to observe that boundary.
+    listThreads.mockReturnValue(new Promise(() => {}))
+    act(() => { useStore.getState().setFilter({ folderId: 99 }) })
+    expect(screen.queryByText('Updated notification')).toBeNull()
   })
 })

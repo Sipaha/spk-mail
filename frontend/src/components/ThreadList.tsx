@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { client } from '../api/client'
 import { useStore } from '../store'
 import type { ThreadDTO } from '../api/types'
@@ -146,9 +146,11 @@ export default function ThreadList() {
 
   // Compose the rendered list: server-filtered threads + pinned (when not
   // already in the list). Sorted by last_date DESC to keep ordering stable.
-  const visible = pinned && !threads.some(t => t.id === pinned.id)
+  // The row-diff effect writes state. Keep its input stable between list/pin
+  // changes, including when an open thread falls out of a filtered result.
+  const visible = useMemo(() => pinned && !threads.some(t => t.id === pinned.id)
     ? [...threads, pinned].sort((a, b) => b.last_date - a.last_date)
-    : threads
+    : threads, [threads, pinned])
 
   const prevSig = useRef(sig)
 
