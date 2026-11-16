@@ -32,9 +32,9 @@ func runDesktop(ctx context.Context) error {
 		return fmt.Errorf("ensure default profile: %w", err)
 	}
 
-	masterKey, err := secrets.LoadOrCreateMasterKey()
+	masterKey, err := resolveMasterKey(paths.SecretsFile)
 	if err != nil {
-		return fmt.Errorf("master key: %w", err)
+		return err
 	}
 	sec, err := secrets.Open(paths.SecretsFile, masterKey)
 	if err != nil {

@@ -70,22 +70,21 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 	if limit <= 0 {
 		limit = 100
 	}
+	if f.FolderID != nil {
+		return s.listThreadsByFolder(ctx, f, limit, offset)
+	}
 	var (
 		wheres []string
 		args   []any
 	)
 
-	// account/folder/profile filters all join through messages -> accounts.
-	needSubQ := f.AccountID != nil || f.FolderID != nil || f.ProfileID != nil
+	// account/profile filters join through messages -> accounts.
+	needSubQ := f.AccountID != nil || f.ProfileID != nil
 	if needSubQ {
 		subAnd := []string{"m.thread_id = t.id"}
 		if f.AccountID != nil {
 			subAnd = append(subAnd, "m.account_id = ?")
 			args = append(args, *f.AccountID)
-		}
-		if f.FolderID != nil {
-			subAnd = append(subAnd, "m.folder_id  = ?")
-			args = append(args, *f.FolderID)
 		}
 		if f.ProfileID != nil {
 			subAnd = append(subAnd, "a.profile_id = ?")
@@ -107,9 +106,9 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 	// keep the JSON payload small; the frontend trims further to its visible
 	// width. NULL columns surface as Go nil pointers via sql.NullString.
 	q := `SELECT t.id, t.subject_norm, t.last_date, t.msg_count, t.unread_count, t.has_flagged, t.has_attach,
-		(SELECT m.from_addr FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS last_from,
-		(SELECT SUBSTR(COALESCE(m.body_text, ''), 1, 200) FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS snippet,
-		(SELECT m.account_id FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC LIMIT 1) AS account_id
+		(SELECT m.from_addr FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC, m.id DESC LIMIT 1) AS last_from,
+		(SELECT SUBSTR(COALESCE(m.body_text, ''), 1, 200) FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC, m.id DESC LIMIT 1) AS snippet,
+		(SELECT m.account_id FROM messages m WHERE m.thread_id = t.id ORDER BY m.date DESC, m.id DESC LIMIT 1) AS account_id
 		FROM threads t`
 	if len(wheres) > 0 {
 		q += " WHERE " + strings.Join(wheres, " AND ")
@@ -117,6 +116,73 @@ func (s *Store) ListThreads(ctx context.Context, f ThreadFilter, limit, offset i
 	q += " ORDER BY t.last_date DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
+	return s.scanThreads(ctx, q, args...)
+}
+
+// listThreadsByFolder scopes thread membership, sort timestamp, counts, sender,
+// and snippet strictly to messages residing in f.FolderID. Replying to an Inbox
+// message creates a copy in Sent; without folder scoping, Inbox rows sort and
+// display the user's Sent reply instead of the Inbox message.
+func (s *Store) listThreadsByFolder(ctx context.Context, f ThreadFilter, limit, offset int) ([]ThreadRow, error) {
+	folderID := *f.FolderID
+	var (
+		cteJoins  string
+		cteWheres = []string{"m.thread_id IS NOT NULL", "m.folder_id = ?"}
+		cteArgs   = []any{folderID}
+		havings   []string
+	)
+	if f.AccountID != nil {
+		cteWheres = append(cteWheres, "m.account_id = ?")
+		cteArgs = append(cteArgs, *f.AccountID)
+	}
+	if f.ProfileID != nil {
+		cteJoins = "JOIN accounts a ON a.id = m.account_id "
+		cteWheres = append(cteWheres, "a.profile_id = ?")
+		cteArgs = append(cteArgs, *f.ProfileID)
+	}
+	if f.UnreadOnly {
+		havings = append(havings, "SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\\Seen') THEN 1 ELSE 0 END) > 0")
+	}
+	if f.HasFlagged {
+		havings = append(havings, "SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(m.flags) WHERE value = '\\Flagged') THEN 1 ELSE 0 END) > 0")
+	}
+
+	havingClause := ""
+	if len(havings) > 0 {
+		havingClause = " HAVING " + strings.Join(havings, " AND ")
+	}
+
+	q := `WITH scoped_threads AS (
+		SELECT m.thread_id, MAX(m.date) AS folder_last_date
+		FROM messages m ` + cteJoins + `
+		WHERE ` + strings.Join(cteWheres, " AND ") + `
+		GROUP BY m.thread_id` + havingClause + `
+		ORDER BY folder_last_date DESC, m.thread_id DESC
+		LIMIT ? OFFSET ?
+	)
+	SELECT t.id, t.subject_norm, st.folder_last_date,
+		(SELECT COUNT(*) FROM messages m2 WHERE m2.thread_id = t.id AND m2.folder_id = ?) AS msg_count,
+		(SELECT COUNT(*) FROM messages m2 WHERE m2.thread_id = t.id AND m2.folder_id = ?
+			AND NOT EXISTS (SELECT 1 FROM json_each(m2.flags) WHERE value = '\Seen')) AS unread_count,
+		CASE WHEN EXISTS (
+			SELECT 1 FROM messages m2 WHERE m2.thread_id = t.id AND m2.folder_id = ?
+			AND EXISTS (SELECT 1 FROM json_each(m2.flags) WHERE value = '\Flagged')
+		) THEN 1 ELSE 0 END AS has_flagged,
+		CASE WHEN EXISTS (
+			SELECT 1 FROM messages m2 WHERE m2.thread_id = t.id AND m2.folder_id = ? AND m2.has_attachments = 1
+		) THEN 1 ELSE 0 END AS has_attach,
+		(SELECT m2.from_addr FROM messages m2 WHERE m2.thread_id = t.id AND m2.folder_id = ? ORDER BY m2.date DESC, m2.id DESC LIMIT 1) AS last_from,
+		(SELECT SUBSTR(COALESCE(m2.body_text, ''), 1, 200) FROM messages m2 WHERE m2.thread_id = t.id AND m2.folder_id = ? ORDER BY m2.date DESC, m2.id DESC LIMIT 1) AS snippet,
+		(SELECT m2.account_id FROM messages m2 WHERE m2.thread_id = t.id AND m2.folder_id = ? ORDER BY m2.date DESC, m2.id DESC LIMIT 1) AS account_id
+	FROM scoped_threads st
+	JOIN threads t ON t.id = st.thread_id
+	ORDER BY st.folder_last_date DESC, t.id DESC`
+
+	args := append(cteArgs, limit, offset, folderID, folderID, folderID, folderID, folderID, folderID, folderID)
+	return s.scanThreads(ctx, q, args...)
+}
+
+func (s *Store) scanThreads(ctx context.Context, q string, args ...any) ([]ThreadRow, error) {
 	rows, err := s.readDB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

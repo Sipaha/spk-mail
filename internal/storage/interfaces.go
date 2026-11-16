@@ -83,6 +83,7 @@ type Writer interface {
 	SetProfileMuted(ctx context.Context, id int64, muted bool) error
 
 	InsertParsedMessageBundle(ctx context.Context, b MessageBundle) (int64, int64, error)
+	InsertParsedMessageBundleIfNew(ctx context.Context, b MessageBundle) (msgID, threadID int64, inserted bool, err error)
 	WithTx(ctx context.Context, fn func(*sql.Tx) error) error
 
 	AddApprovedRemoteURLs(ctx context.Context, urls []string) error

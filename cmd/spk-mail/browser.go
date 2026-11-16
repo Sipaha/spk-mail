@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -46,20 +45,9 @@ func runBrowser(ctx context.Context, port int, mockIMAP bool, seedPath string, t
 		return fmt.Errorf("ensure default profile: %w", err)
 	}
 
-	masterKey, err := secrets.LoadOrCreateMasterKey()
-	if errors.Is(err, secrets.ErrKeyringUnavailable) {
-		pw := os.Getenv("SPK_MAIL_PASSWORD")
-		if pw == "" {
-			return fmt.Errorf("master key: %w (set SPK_MAIL_PASSWORD when keyring is unavailable)", err)
-		}
-		saltPath := filepath.Join(filepath.Dir(paths.SecretsFile), "master.salt")
-		salt, serr := secrets.LoadOrCreateSalt(saltPath)
-		if serr != nil {
-			return fmt.Errorf("master key salt: %w", serr)
-		}
-		masterKey = secrets.DeriveKeyFromPassword(pw, salt)
-	} else if err != nil {
-		return fmt.Errorf("master key: %w", err)
+	masterKey, err := resolveMasterKey(paths.SecretsFile)
+	if err != nil {
+		return err
 	}
 	sec, err := secrets.Open(paths.SecretsFile, masterKey)
 	if err != nil {

@@ -1,4 +1,5 @@
 import { useStore } from '../store'
+import { scopeThreadMessages } from '../lib/filterSig'
 import MessageBubble from './MessageBubble'
 import { EnvelopeIcon } from './icons'
 
@@ -15,19 +16,22 @@ function Placeholder({ title, hint }: { title: string; hint?: string }) {
 export default function ThreadView() {
   const msgs = useStore(s => s.openThread)
   const id = useStore(s => s.openThreadId)
+  const folderId = useStore(s => s.filter.folderId)
   const accounts = useStore(s => s.accounts)
   if (!id) return <Placeholder title="No conversation open" hint="Pick a thread from the list to read it here." />
   if (!msgs) return <Placeholder title="Loading…" />
+  const visibleMsgs = scopeThreadMessages(msgs, folderId)
   if (msgs.length === 0) return <Placeholder title="Empty thread" hint="This conversation has no messages." />
+  if (visibleMsgs.length === 0) return <Placeholder title="No messages in this folder" hint="Switch to All mail to view messages from other folders in this thread." />
 
   // The account spine, third echo: the reading pane names which account the
   // open conversation belongs to, in that account's color.
-  const account = accounts.find(a => a.id === msgs[0].account_id)
+  const account = accounts.find(a => a.id === visibleMsgs[0].account_id)
 
   return (
     <div>
       <div className="sticky top-0 z-10 border-b border-edge bg-ink-950/95 px-5 py-3 backdrop-blur">
-        <h2 className="text-base font-semibold leading-snug">{msgs[0].subject || '(no subject)'}</h2>
+        <h2 className="text-base font-semibold leading-snug">{visibleMsgs[0].subject || '(no subject)'}</h2>
         <div className="mt-1 flex items-center gap-3 font-mono text-[11px] text-fg-faint">
           {account && (
             <span className="flex items-center gap-1.5">
@@ -35,10 +39,10 @@ export default function ThreadView() {
               {account.name}
             </span>
           )}
-          <span>{msgs.length === 1 ? '1 message' : `${msgs.length} messages`}</span>
+          <span>{visibleMsgs.length === 1 ? '1 message' : `${visibleMsgs.length} messages`}</span>
         </div>
       </div>
-      {msgs.map(m => <MessageBubble key={m.id} msg={m} />)}
+      {visibleMsgs.map(m => <MessageBubble key={m.id} msg={m} />)}
     </div>
   )
 }

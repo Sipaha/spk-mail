@@ -17,7 +17,7 @@ func TestMigrate_FreshDBAppliesAllVersions(t *testing.T) {
 
 	var v int
 	require.NoError(t, s.DB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&v))
-	require.Equal(t, 10, v)
+	require.Equal(t, 11, v)
 
 	// profiles table exists
 	var name string
@@ -132,6 +132,21 @@ func TestMigrationV9_AddsRawCaptureColumns(t *testing.T) {
 	require.NoError(t, st.DB().QueryRow(
 		`SELECT version FROM schema_migrations WHERE version = 9`).Scan(&v))
 	require.Equal(t, 9, v)
+}
+
+func TestMigrationV11_AddsFolderThreadIndexes(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(context.Background(), filepath.Join(dir, "db.sqlite"))
+	require.NoError(t, err)
+	defer st.Close()
+
+	for _, name := range []string{"idx_messages_folder_thread_date", "idx_messages_thread_folder_date"} {
+		var sqlText string
+		err := st.DB().QueryRow(
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, name,
+		).Scan(&sqlText)
+		require.NoError(t, err, "missing index %s", name)
+	}
 }
 
 // tableColumns returns the column names of the given table via PRAGMA.

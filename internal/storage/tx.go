@@ -61,33 +61,88 @@ type MessageBundle struct {
 func (s *Store) InsertParsedMessageBundle(ctx context.Context, b MessageBundle) (int64, int64, error) {
 	var msgID, threadID int64
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
-		threadID = b.ExistingThreadID
-		if threadID == 0 {
-			id, err := insertThread(ctx, tx, b.NewThread)
-			if err != nil {
-				return fmt.Errorf("insert thread: %w", err)
-			}
-			threadID = id
-		}
-		m := b.Message
-		m.ThreadID = &threadID
-		id, err := insertMessage(ctx, tx, m)
-		if err != nil {
-			return fmt.Errorf("insert message: %w", err)
-		}
-		msgID = id
-		for _, a := range b.Attachments {
-			a.MessageID = msgID
-			if _, err := insertAttachment(ctx, tx, a); err != nil {
-				return fmt.Errorf("insert attachment: %w", err)
-			}
-		}
-		if err := updateThreadStats(ctx, tx, threadID); err != nil {
-			return fmt.Errorf("update thread stats: %w", err)
-		}
-		return nil
+		var err error
+		msgID, threadID, err = insertBundleTx(ctx, tx, b)
+		return err
 	})
 	return msgID, threadID, err
+}
+
+// InsertParsedMessageBundleIfNew inserts the message bundle atomically unless
+// a message with the same (account_id, folder_id, uid) already exists. When an
+// existing row is present (e.g. partial-batch retry after a mid-batch failure),
+// it overlays any pending flag intents against the incoming server flags and
+// returns (msgID, threadID, false, nil) without creating duplicate messages or
+// orphan threads.
+func (s *Store) InsertParsedMessageBundleIfNew(ctx context.Context, b MessageBundle) (int64, int64, bool, error) {
+	var msgID, threadID int64
+	var inserted bool
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		var existingThread sql.NullInt64
+		var existingFlags string
+		err := tx.QueryRowContext(ctx,
+			`SELECT id, thread_id, flags FROM messages WHERE account_id = ? AND folder_id = ? AND uid = ?`,
+			b.Message.AccountID, b.Message.FolderID, b.Message.UID,
+		).Scan(&msgID, &existingThread, &existingFlags)
+		if err == nil {
+			if existingThread.Valid {
+				threadID = existingThread.Int64
+			}
+			merged, merr := overlayFlagIntents(ctx, tx, msgID, b.Message.Flags)
+			if merr != nil {
+				return merr
+			}
+			if merged != existingFlags {
+				if _, uerr := tx.ExecContext(ctx, `UPDATE messages SET flags = ? WHERE id = ?`, merged, msgID); uerr != nil {
+					return uerr
+				}
+				if existingThread.Valid {
+					if terr := updateThreadStats(ctx, tx, existingThread.Int64); terr != nil {
+						return terr
+					}
+				}
+			}
+			inserted = false
+			return nil
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+		msgID, threadID, err = insertBundleTx(ctx, tx, b)
+		if err != nil {
+			return err
+		}
+		inserted = true
+		return nil
+	})
+	return msgID, threadID, inserted, err
+}
+
+func insertBundleTx(ctx context.Context, tx *sql.Tx, b MessageBundle) (int64, int64, error) {
+	threadID := b.ExistingThreadID
+	if threadID == 0 {
+		id, err := insertThread(ctx, tx, b.NewThread)
+		if err != nil {
+			return 0, 0, fmt.Errorf("insert thread: %w", err)
+		}
+		threadID = id
+	}
+	m := b.Message
+	m.ThreadID = &threadID
+	msgID, err := insertMessage(ctx, tx, m)
+	if err != nil {
+		return 0, 0, fmt.Errorf("insert message: %w", err)
+	}
+	for _, a := range b.Attachments {
+		a.MessageID = msgID
+		if _, err := insertAttachment(ctx, tx, a); err != nil {
+			return 0, 0, fmt.Errorf("insert attachment: %w", err)
+		}
+	}
+	if err := updateThreadStats(ctx, tx, threadID); err != nil {
+		return 0, 0, fmt.Errorf("update thread stats: %w", err)
+	}
+	return msgID, threadID, nil
 }
 
 // DeleteMessagesByFolder deletes every message row for the given folder.

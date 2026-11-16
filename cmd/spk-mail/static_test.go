@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -29,5 +32,42 @@ func TestServeIndexWithToken_NoStore(t *testing.T) {
 	body := w.Body.String()
 	if want := `<meta name="spk-mail-api-token" content="tok-123">`; !strings.Contains(body, want) {
 		t.Errorf("body missing token meta tag; got %q", body)
+	}
+}
+
+func TestResolveMasterKey_PasswordDeterministicAndIsolated(t *testing.T) {
+	dir := t.TempDir()
+	secretsFile := filepath.Join(dir, "secrets.bin")
+	// Even if a bus address exists or points nowhere, SPK_MAIL_PASSWORD must
+	// derive deterministically from master.salt without using OS keyring.
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:abstract=spk-mail-nonexistent-test-bus")
+	t.Setenv("SPK_MAIL_PASSWORD", "test-master-password")
+
+	k1, err := resolveMasterKey(secretsFile)
+	if err != nil {
+		t.Fatalf("resolveMasterKey #1 failed: %v", err)
+	}
+	if len(k1) != 32 {
+		t.Fatalf("key length = %d, want 32", len(k1))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "master.salt")); err != nil {
+		t.Fatalf("master.salt missing: %v", err)
+	}
+
+	k2, err := resolveMasterKey(secretsFile)
+	if err != nil {
+		t.Fatalf("resolveMasterKey #2 failed: %v", err)
+	}
+	if !bytes.Equal(k1, k2) {
+		t.Fatalf("expected deterministic key reuse across invocations")
+	}
+
+	t.Setenv("SPK_MAIL_PASSWORD", "different-password")
+	k3, err := resolveMasterKey(secretsFile)
+	if err != nil {
+		t.Fatalf("resolveMasterKey #3 failed: %v", err)
+	}
+	if bytes.Equal(k1, k3) {
+		t.Fatalf("expected distinct password to derive a distinct key")
 	}
 }

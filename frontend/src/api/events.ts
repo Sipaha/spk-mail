@@ -1,92 +1,155 @@
 import { useEffect } from 'react'
 import { client } from './client'
 import { useStore } from '../store'
-import { filterSig } from '../lib/filterSig'
+import { filterSig, scopeThreadMessages } from '../lib/filterSig'
 import { refetchLimit } from '../lib/paging'
 
 export function useEventStream() {
   useEffect(() => {
-    return client.subscribeEvents(async (ev) => {
+    let disposed = false
+    let refreshRunning = false
+    let refreshPending = false
+    let activeRefresh: Promise<void> | undefined
+    const pendingAccounts = new Set<number>()
+    let accountStatusSeq = 0
+
+    const performRefresh = async (accIds: number[]) => {
+      for (const accId of accIds) {
+        client.listFolders(accId)
+          .then(fs => {
+            if (!disposed) useStore.getState().setFolders(accId, fs)
+          })
+          .catch(err => console.warn('listFolders refresh failed', err))
+      }
+
+      const s = useStore.getState()
+      const reqFilter = s.filter
+      const reqProfileId = s.activeProfileId
+      const reqSig = filterSig(reqFilter, reqProfileId)
+      const result = await client.listThreads({
+        account_id: reqFilter.accountId,
+        folder_id: reqFilter.folderId,
+        unread_only: reqFilter.unreadOnly,
+        has_flagged: reqFilter.hasFlagged,
+        profile_id: reqProfileId ?? undefined,
+        limit: refetchLimit(s.threads.length),
+      })
+      if (disposed) return
+      const now = useStore.getState()
+      if (filterSig(now.filter, now.activeProfileId) === reqSig) {
+        now.setThreads(result)
+      }
+
+      // openThreadId is captured AFTER the listThreads await using a fresh
+      // state read and re-checked after getThread resolves so closing or
+      // switching threads during the await never leaks stale messages.
+      const after = useStore.getState()
+      if (after.openThreadId !== undefined) {
+        const id = after.openThreadId
+        const msgs = await client.getThread(id)
+        if (disposed) return
+        const final = useStore.getState()
+        if (final.openThreadId === id) {
+          final.setOpenThread(id, msgs)
+          if (typeof document !== 'undefined' && document.hasFocus()) {
+            const scoped = scopeThreadMessages(msgs, final.filter.folderId)
+            const unread = scoped.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
+            if (unread.length) {
+              client.markRead(unread)
+                .then(() => useStore.getState().markThreadRead(id))
+                .catch(err => console.warn('auto markRead failed', err))
+            }
+          }
+        }
+      }
+    }
+
+    const scheduleRefresh = (accId?: number): Promise<void> => {
+      if (accId !== undefined && Number.isFinite(accId) && accId > 0) {
+        pendingAccounts.add(accId)
+      }
+      if (refreshRunning) {
+        refreshPending = true
+        return activeRefresh ?? Promise.resolve()
+      }
+      refreshRunning = true
+      activeRefresh = (async () => {
+        try {
+          do {
+            refreshPending = false
+            const accIds = Array.from(pendingAccounts)
+            pendingAccounts.clear()
+            try {
+              await performRefresh(accIds)
+            } catch (err) {
+              console.warn('event refresh failed', err)
+            }
+          } while (refreshPending && !disposed)
+        } finally {
+          refreshRunning = false
+          activeRefresh = undefined
+        }
+      })()
+      return activeRefresh
+    }
+
+    const unsub = client.subscribeEvents(async (ev) => {
       switch (ev.type) {
         case 'MessageInserted':
         case 'MessageUpdated':
         case 'MessageArrived': {
-          const s = useStore.getState()
           const accId = Number(ev.payload.account_id)
-          if (Number.isFinite(accId) && accId > 0) {
-            client.listFolders(accId)
-              .then(fs => useStore.getState().setFolders(accId, fs))
-              .catch(err => console.warn('listFolders refresh failed', err))
-          }
-          // Refetch using the FULL active filter, not just account_id —
-          // otherwise an Unread / Flagged / per-folder view would silently
-          // get replaced by the unfiltered list on every Mark-Read event.
-          // Snapshot the filter signature; after the await, drop the result
-          // if the user switched profile/folder during the fetch — ThreadList's
-          // own effect is already refetching for the new scope, so applying
-          // the stale-scope result here would just cause a visible flash.
-          const reqFilter = s.filter
-          const reqProfileId = s.activeProfileId
-          const reqSig = filterSig(reqFilter, reqProfileId)
-          const result = await client.listThreads({
-            account_id: reqFilter.accountId,
-            folder_id: reqFilter.folderId,
-            unread_only: reqFilter.unreadOnly,
-            has_flagged: reqFilter.hasFlagged,
-            profile_id: reqProfileId ?? undefined,
-            limit: refetchLimit(s.threads.length),
-          })
-          const now = useStore.getState()
-          if (filterSig(now.filter, now.activeProfileId) === reqSig) {
-            now.setThreads(result)
-          }
-          // openThreadId is captured AFTER the listThreads await using a
-          // fresh state read: if the user closed the thread mid-await, the
-          // closed state must win — the snapshot taken at handler entry
-          // would otherwise re-open a thread the user just dismissed.
-          // We re-check ONCE MORE after getThread resolves: closing the
-          // thread during getThread should also win, and opening a different
-          // thread mid-await means the response we got is for the wrong id.
-          const after = useStore.getState()
-          if (after.openThreadId !== undefined) {
-            const id = after.openThreadId
-            const msgs = await client.getThread(id)
-            const final = useStore.getState()
-            if (final.openThreadId === id) {
-              final.setOpenThread(id, msgs)
-              // Auto-mark-read for messages that landed in an already-open
-              // thread (ThreadList.onOpen only marks the snapshot at click
-              // time). Gated on document.hasFocus(): when the window is not
-              // in focus we leave the new message unread so the unread
-              // counter surfaces it when the user returns.
-              if (typeof document !== 'undefined' && document.hasFocus()) {
-                const unread = msgs.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
-                if (unread.length) {
-                  client.markRead(unread)
-                    .then(() => useStore.getState().markThreadRead(id))
-                    .catch(err => console.warn('auto markRead failed', err))
+          await scheduleRefresh(accId)
+          break
+        }
+        case 'Reconcile': {
+          const seq = ++accountStatusSeq
+          if (typeof client.listAccounts === 'function') {
+            client.listAccounts()
+              .then(list => {
+                if (disposed || seq !== accountStatusSeq) return
+                useStore.getState().setAccounts(list)
+                for (const a of list) {
+                  useStore.getState().setAccountDetail(a.id, a.status === 'error' ? (a.detail ?? 'Connection failed') : undefined)
+                  pendingAccounts.add(a.id)
                 }
-              }
-            }
+              })
+              .catch(err => console.warn('reconcile listAccounts failed', err))
           }
+          for (const a of useStore.getState().accounts) {
+            pendingAccounts.add(a.id)
+          }
+          await scheduleRefresh()
           break
         }
         case 'AccountStatus': {
-          const id = Number(ev.payload.account_id), state = String(ev.payload.state ?? 'ok')
-          // Error events carry a human-readable `detail` (the dial/sync error
-          // string from the account worker). Keep it in the store so the
-          // sidebar and Settings can explain WHY an account is broken.
+          const id = Number(ev.payload.account_id)
+          const state = String(ev.payload.state ?? 'ok')
           const detail = ev.payload.detail != null ? String(ev.payload.detail) : undefined
-          useStore.getState().setAccountDetail(id, state === 'error' ? (detail ?? 'Connection failed') : undefined)
-          const list = await client.listAccounts()
-          // ListAccounts returns a synthetic "ok" for every row (real status
-          // only exists on this event bus), so for accounts OTHER than the
-          // event's subject keep the live status already in the store —
-          // otherwise one account reconnecting would repaint a still-broken
-          // account as healthy.
-          const prevById = new Map(useStore.getState().accounts.map(a => [a.id, a.status]))
-          useStore.getState().setAccounts(list.map(a =>
-            a.id === id ? { ...a, status: state } : { ...a, status: prevById.get(a.id) ?? a.status }))
+          const errDetail = state === 'error' ? (detail ?? 'Connection failed') : undefined
+          const st = useStore.getState()
+          st.setAccountDetail(id, errDetail)
+          if (st.accounts.some(a => a.id === id)) {
+            st.setAccounts(st.accounts.map(a =>
+              a.id === id ? { ...a, status: state, detail: errDetail } : a,
+            ))
+          }
+          const seq = ++accountStatusSeq
+          if (typeof client.listAccounts === 'function') {
+            try {
+              const list = await client.listAccounts()
+              if (disposed || seq !== accountStatusSeq) break
+              const latest = useStore.getState().accounts
+              const prevById = new Map(latest.map(a => [a.id, a]))
+              useStore.getState().setAccounts(list.map(a => {
+                if (a.id === id) return { ...a, status: state, detail: errDetail }
+                const cur = prevById.get(a.id)
+                return cur ? { ...a, status: cur.status, detail: cur.detail ?? a.detail } : a
+              }))
+            } catch (err) {
+              console.warn('accountStatus listAccounts failed', err)
+            }
+          }
           break
         }
         case 'SyncProgress': {
@@ -105,27 +168,16 @@ export function useEventStream() {
           const folderId = Number(ev.payload.folder_id)
           if (Number.isFinite(accId) && accId > 0) {
             client.listFolders(accId)
-              .then(fs => useStore.getState().setFolders(accId, fs))
+              .then(fs => {
+                if (!disposed) useStore.getState().setFolders(accId, fs)
+              })
               .catch(err => console.warn('listFolders refresh failed', err))
           }
-          // Scope gate: skip the threads/openThread refetch when we know
-          // for sure the user's view doesn't intersect the affected folder.
-          // Unlike MessageInserted (which can land in any folder the user
-          // is currently viewing via Unread/Flagged virtual rows), the
-          // payload here gives us the EXACT folder. If the user has a
-          // narrowed filter that pins to a different account or folder,
-          // there's nothing to refresh in their current threads list.
           const s = useStore.getState()
           const reqFilter = s.filter
           const accountMismatches = reqFilter.accountId !== undefined && reqFilter.accountId !== accId
           const folderMismatches = reqFilter.folderId !== undefined && reqFilter.folderId !== folderId
           if (accountMismatches || folderMismatches) {
-            // Folder counts already refreshed above. Open thread can't be in
-            // the affected folder if the active filter excludes it (the
-            // thread row wouldn't have been visible to open in the first
-            // place — except if the filter changed since opening, which is
-            // a corner case where a stale "read" indicator self-heals on
-            // the next interaction).
             break
           }
           const reqProfileId = s.activeProfileId
@@ -138,6 +190,7 @@ export function useEventStream() {
             profile_id: reqProfileId ?? undefined,
             limit: refetchLimit(s.threads.length),
           })
+          if (disposed) break
           const now = useStore.getState()
           if (filterSig(now.filter, now.activeProfileId) === reqSig) {
             now.setThreads(result)
@@ -146,6 +199,7 @@ export function useEventStream() {
           if (after.openThreadId !== undefined) {
             const id = after.openThreadId
             const msgs = await client.getThread(id)
+            if (disposed) break
             const final = useStore.getState()
             if (final.openThreadId === id) {
               final.setOpenThread(id, msgs)
@@ -160,18 +214,8 @@ export function useEventStream() {
           break
         }
         case 'AttachmentReady': {
-          // Re-read openThreadId; a snapshot at handler entry would re-open
-          // a thread the user dismissed during the prior await. Then re-check
-          // once more after getThread resolves so a thread close DURING the
-          // fetch is honored (same race as the MessageInserted branch).
           const fresh = useStore.getState()
           if (fresh.openThreadId === undefined) break
-          // Gate the refetch on whether the ready message is part of the
-          // currently-open thread. AttachmentReady fires for every download
-          // across every account; without this gate, opening a single thread
-          // re-fetches it on every background download anywhere in the app.
-          // When payload.message_id is missing (older event format) we fall
-          // back to refetching — better a redundant fetch than a stale view.
           const msgId = ev.payload && (ev.payload as { message_id?: unknown }).message_id
           const msgIdNum = typeof msgId === 'number' ? msgId : Number(msgId)
           if (Number.isFinite(msgIdNum) && fresh.openThread) {
@@ -180,6 +224,7 @@ export function useEventStream() {
           }
           const id = fresh.openThreadId
           const msgs = await client.getThread(id)
+          if (disposed) break
           const final = useStore.getState()
           if (final.openThreadId === id) {
             final.setOpenThread(id, msgs)
@@ -188,19 +233,19 @@ export function useEventStream() {
         }
       }
     })
+    return () => {
+      disposed = true
+      unsub()
+    }
   }, [])
 
-  // While the window was unfocused, the SSE handler above kept openThread
-  // in sync but skipped mark-read for any newly arrived messages (intentional:
-  // we don't auto-clear the unread badge for emails the user hasn't seen).
-  // When focus returns, the user IS now looking at the open thread, so flush
-  // any unread it accumulated.
   useEffect(() => {
     const onFocus = () => {
       const s = useStore.getState()
       const id = s.openThreadId
       if (id === undefined || !s.openThread) return
-      const unread = s.openThread.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
+      const scoped = scopeThreadMessages(s.openThread, s.filter.folderId)
+      const unread = scoped.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
       if (unread.length === 0) return
       client.markRead(unread)
         .then(() => useStore.getState().markThreadRead(id))

@@ -1,3 +1,5 @@
+import type { MessageDTO } from '../api/types'
+
 // StoreFilter mirrors the store-side filter shape (camelCase) used by the
 // frontend. The wire-side ThreadFilter is snake_case and lives in api/types.
 export type StoreFilter = {
@@ -14,4 +16,12 @@ export type StoreFilter = {
 // before and after a no-op store update.
 export function filterSig(f: StoreFilter, profileId: number | null): string {
   return `${profileId ?? ''}|${f.accountId ?? ''}|${f.folderId ?? ''}|${f.unreadOnly ? 1 : 0}|${f.hasFlagged ? 1 : 0}`
+}
+
+// scopeThreadMessages filters thread messages to the active folder when a
+// concrete folder (such as Inbox or Sent) is selected. All mail / Unread /
+// Flagged views have folderId === undefined and display the entire thread.
+export function scopeThreadMessages(msgs: MessageDTO[], folderId?: number): MessageDTO[] {
+  if (folderId === undefined) return msgs
+  return msgs.filter(m => m.folder_id === folderId)
 }

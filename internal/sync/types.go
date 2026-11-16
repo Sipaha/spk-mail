@@ -25,6 +25,11 @@ type IncomingMessage struct {
 	// the frontend doesn't show "all synced" while rows are still
 	// being committed).
 	Ack func()
+
+	// OnDone, when non-nil, receives the store write error (or nil on
+	// success) and whether a new message row was inserted (false when
+	// deduplicated on retry) before Ack runs.
+	OnDone func(err error, inserted bool)
 }
 
 // AccountStatus is emitted as an event whenever an account's state changes.

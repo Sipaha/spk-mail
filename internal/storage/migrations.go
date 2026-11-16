@@ -22,6 +22,7 @@ var migrationSteps = []migrationStep{
 	{version: 8, apply: applyMigrationV8},
 	{version: 9, apply: applyMigrationV9},
 	{version: 10, apply: applyMigrationV10},
+	{version: 11, apply: applyMigrationV11},
 }
 
 func applyMigrationV1(ctx context.Context, db *sql.DB) error {
@@ -376,6 +377,30 @@ func applyMigrationV10(ctx context.Context, db *sql.DB) error {
  UNIQUE(message_id,flag));
  INSERT INTO schema_migrations(version,applied_at) VALUES (10,strftime('%s','now'))`); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// applyMigrationV11 adds covering indexes for folder-scoped thread queries
+// (Inbox/Sent/custom folder lists) so large mailboxes (~100k rows) stay fast
+// without scanning the full messages table.
+func applyMigrationV11(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_messages_folder_thread_date ON messages(folder_id, thread_id, date DESC, id DESC)`); err != nil {
+		return fmt.Errorf("v11 index folder_thread_date: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_messages_thread_folder_date ON messages(thread_id, folder_id, date DESC, id DESC)`); err != nil {
+		return fmt.Errorf("v11 index thread_folder_date: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at) VALUES (11, strftime('%s','now'))`); err != nil {
+		return fmt.Errorf("v11 record version: %w", err)
 	}
 	return tx.Commit()
 }

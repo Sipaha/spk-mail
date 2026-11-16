@@ -12,9 +12,9 @@ import (
 // TCP_KEEPIDLE / TCP_KEEPINTVL / TCP_KEEPCNT to detect dead IMAP IDLE
 // connections within ~60 seconds:
 //
-//   TCP_KEEPIDLE  = 30s   — start probing after 30s of silence
-//   TCP_KEEPINTVL = 10s   — 10s between probes
-//   TCP_KEEPCNT   = 3     — declare dead after 3 failed probes
+//	TCP_KEEPIDLE  = 30s   — start probing after 30s of silence
+//	TCP_KEEPINTVL = 10s   — 10s between probes
+//	TCP_KEEPCNT   = 3     — declare dead after 3 failed probes
 //
 // Total: 30s + 3×10s = 60s before kernel marks the socket failed and
 // our blocked read wakes with ECONNRESET. The runIDLESession outer
@@ -32,5 +32,8 @@ func tuneTCPKeepAlive(_, _ string, c syscall.RawConn) error {
 		_ = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPIDLE, 30)
 		_ = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPINTVL, 10)
 		_ = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPCNT, 3)
+		// Abort un-ACKed writes (e.g. DONE or commands on a half-open socket)
+		// within 60s instead of waiting ~15 minutes for Linux TCP_RTO_MAX retries.
+		_ = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_USER_TIMEOUT, 60_000)
 	})
 }

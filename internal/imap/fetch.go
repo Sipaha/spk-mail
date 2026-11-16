@@ -11,6 +11,9 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 )
@@ -42,21 +45,26 @@ type FolderState struct {
 // silent no-op. Servers without CONDSTORE return HighestModSeq=0,
 // which the sync layer treats as "skip flag-delta sync" — see
 // FolderState's doc.
-func (c *Client) Select(_ context.Context, mailbox string) (FolderState, error) {
+func (c *Client) Select(ctx context.Context, mailbox string) (FolderState, error) {
 	var opts *imap.SelectOptions
-	if c.HasCondStore() {
+	if c.HasCondStoreContext(ctx) {
 		opts = &imap.SelectOptions{CondStore: true}
 	}
-	sel, err := c.c.Select(mailbox, opts).Wait()
-	if err != nil {
-		return FolderState{}, err
-	}
-	return FolderState{
-		UIDValidity:   int64(sel.UIDValidity),
-		UIDNext:       int64(sel.UIDNext),
-		Exists:        int64(sel.NumMessages),
-		HighestModSeq: sel.HighestModSeq,
-	}, nil
+	var fs FolderState
+	err := c.runWithTimeout(ctx, c.commandTimeout(), "select", func() error {
+		sel, err := c.c.Select(mailbox, opts).Wait()
+		if err != nil {
+			return err
+		}
+		fs = FolderState{
+			UIDValidity:   int64(sel.UIDValidity),
+			UIDNext:       int64(sel.UIDNext),
+			Exists:        int64(sel.NumMessages),
+			HighestModSeq: sel.HighestModSeq,
+		}
+		return nil
+	})
+	return fs, err
 }
 
 // UIDsAbove returns the actual UIDs present in the currently-selected
@@ -75,35 +83,87 @@ func (c *Client) Select(_ context.Context, mailbox string) (FolderState, error) 
 //
 // Filter inclusively (uid > sinceUID) so the function name's
 // promise actually holds.
-func (c *Client) UIDsAbove(_ context.Context, sinceUID int64) ([]int64, error) {
+func (c *Client) UIDsAbove(ctx context.Context, sinceUID int64) ([]int64, error) {
 	var rng imap.UIDSet
 	rng.AddRange(imap.UID(sinceUID+1), 0) // 0 = '*'
 	criteria := &imap.SearchCriteria{UID: []imap.UIDSet{rng}}
-	cmd := c.c.UIDSearch(criteria, nil)
-	data, err := cmd.Wait()
-	if err != nil {
-		return nil, err
-	}
-	uids, ok := data.All.(imap.UIDSet)
-	if !ok || len(uids) == 0 {
-		return nil, nil
-	}
-	out := make([]int64, 0, 16)
-	for _, r := range uids {
-		stop := r.Stop
-		if stop == 0 {
-			// "Up to highest" without an explicit number — shouldn't
-			// happen for SEARCH responses, but skip rather than loop
-			// to infinity.
-			continue
+
+	var out []int64
+	err := c.runWithTimeout(ctx, c.commandTimeout(), "uid search", func() error {
+		data, err := c.c.UIDSearch(criteria, nil).Wait()
+		if err != nil {
+			return err
 		}
-		for u := r.Start; u <= stop; u++ {
-			if int64(u) > sinceUID {
-				out = append(out, int64(u))
+		uids, ok := data.All.(imap.UIDSet)
+		if !ok || len(uids) == 0 {
+			return nil
+		}
+		res := make([]int64, 0, 16)
+		for _, r := range uids {
+			stop := r.Stop
+			if stop == 0 {
+				// "Up to highest" without an explicit number — shouldn't
+				// happen for SEARCH responses, but skip rather than loop
+				// to infinity.
+				continue
+			}
+			for u := r.Start; u <= stop; u++ {
+				if int64(u) > sinceUID {
+					res = append(res, int64(u))
+				}
 			}
 		}
+		out = res
+		return nil
+	})
+	return out, err
+}
+
+// newActivityWatchdog closes c if neither Bump nor Stop occurs within timeout,
+// or if ctx cancels. Used by streaming commands (FetchByUIDs, FetchFlagsChangedSince,
+// FetchBodyPart) so a stalled socket never hangs indefinitely.
+func (c *Client) newActivityWatchdog(ctx context.Context, timeout time.Duration) (bump func(), timedOut *atomic.Bool, stop func()) {
+	bumpCh := make(chan struct{}, 1)
+	done := make(chan struct{})
+	var stopOnce sync.Once
+	var expired atomic.Bool
+
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				_ = c.Close()
+				return
+			case <-bumpCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(timeout)
+			case <-timer.C:
+				expired.Store(true)
+				_ = c.Close()
+				return
+			}
+		}
+	}()
+
+	bump = func() {
+		select {
+		case bumpCh <- struct{}{}:
+		default:
+		}
 	}
-	return out, nil
+	stop = func() {
+		stopOnce.Do(func() { close(done) })
+	}
+	return bump, &expired, stop
 }
 
 // FetchedMessage is the per-message payload streamed by FetchByUIDs.
@@ -118,6 +178,11 @@ type FetchedMessage struct {
 // Used after UIDsAbove identifies the actual live UIDs we still need
 // to fetch — bypasses UIDNEXT-derived ranges and the eventual-
 // consistency / range-collapse quirks they invite.
+//
+// If an unsolicited flag-only FETCH (* N FETCH (UID u FLAGS (...))) lands
+// before the requested BODY[] response for u, go-imap's recvUIDSet treats u as
+// satisfied on the flag-only line and discards the subsequent BODY[] line; any
+// UID whose response lacked a BODY section is automatically re-fetched once.
 func (c *Client) FetchByUIDs(ctx context.Context, uids []int64) (<-chan FetchedMessage, <-chan error) {
 	out := make(chan FetchedMessage, 16)
 	errCh := make(chan error, 1)
@@ -129,55 +194,114 @@ func (c *Client) FetchByUIDs(ctx context.Context, uids []int64) (<-chan FetchedM
 	go func() {
 		defer close(out)
 		defer close(errCh)
-		var seq imap.UIDSet
-		for _, u := range uids {
-			seq.AddNum(imap.UID(u))
-		}
-		opts := &imap.FetchOptions{
-			Flags:        true,
-			InternalDate: true,
-			UID:          true,
-			BodySection: []*imap.FetchItemBodySection{
-				{Specifier: imap.PartSpecifierNone, Peek: true},
-			},
-		}
-		cmd := c.c.Fetch(seq, opts)
-		defer cmd.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				errCh <- ctx.Err()
-				return
-			default:
+
+		bump, expired, stopWatch := c.newActivityWatchdog(ctx, c.streamTimeout())
+		defer stopWatch()
+
+		fetchBatch := func(batch []int64, isRetry bool) ([]int64, error) {
+			var seq imap.UIDSet
+			for _, u := range batch {
+				seq.AddNum(imap.UID(u))
 			}
-			msg := cmd.Next()
-			if msg == nil {
-				break
+			opts := &imap.FetchOptions{
+				Flags:        true,
+				InternalDate: true,
+				UID:          true,
+				BodySection: []*imap.FetchItemBodySection{
+					{Specifier: imap.PartSpecifierNone, Peek: true},
+				},
 			}
-			data, err := msg.Collect()
-			if err != nil {
+			cmd := c.c.Fetch(seq, opts)
+			defer cmd.Close()
+
+			var retryUIDs []int64
+			seenRetry := make(map[int64]bool)
+			for {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
+				msg := cmd.Next()
+				if msg == nil {
+					break
+				}
+				bump()
+				data, err := msg.Collect()
+				if err != nil {
+					if ctx.Err() != nil {
+						return nil, ctx.Err()
+					}
+					if expired.Load() {
+						return nil, fmt.Errorf("imap fetch: %w", context.DeadlineExceeded)
+					}
+					return nil, err
+				}
+				bump()
+
+				var raw []byte
+				hasBody := false
+				for _, sec := range data.BodySection {
+					if sec.Section != nil && sec.Section.Specifier == imap.PartSpecifierNone {
+						raw = sec.Bytes
+						hasBody = true
+						break
+					}
+				}
+				if !hasBody && len(data.BodySection) > 0 {
+					raw = data.BodySection[0].Bytes
+					hasBody = true
+				}
+				if !hasBody {
+					uid := int64(data.UID)
+					if isRetry {
+						return nil, fmt.Errorf("imap fetch: missing body section for uid %d", uid)
+					}
+					if uid > 0 && !seenRetry[uid] {
+						seenRetry[uid] = true
+						retryUIDs = append(retryUIDs, uid)
+					}
+					continue
+				}
+
+				fm := FetchedMessage{UID: int64(data.UID), Internal: data.InternalDate.Unix(), Raw: raw}
+				for _, f := range data.Flags {
+					fm.Flags = append(fm.Flags, string(f))
+				}
+				select {
+				case out <- fm:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			if err := cmd.Close(); err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				if expired.Load() {
+					return nil, fmt.Errorf("imap fetch: %w", context.DeadlineExceeded)
+				}
+				return nil, err
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if expired.Load() {
+				return nil, fmt.Errorf("imap fetch: %w", context.DeadlineExceeded)
+			}
+			return retryUIDs, nil
+		}
+
+		retryUIDs, err := fetchBatch(uids, false)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if len(retryUIDs) > 0 {
+			if _, err := fetchBatch(retryUIDs, true); err != nil {
 				errCh <- err
 				return
 			}
-			fm := FetchedMessage{UID: int64(data.UID), Internal: data.InternalDate.Unix()}
-			for _, f := range data.Flags {
-				fm.Flags = append(fm.Flags, string(f))
-			}
-			for _, sec := range data.BodySection {
-				if len(sec.Bytes) > 0 {
-					fm.Raw = sec.Bytes
-					break
-				}
-			}
-			select {
-			case out <- fm:
-			case <-ctx.Done():
-				errCh <- ctx.Err()
-				return
-			}
-		}
-		if err := cmd.Close(); err != nil {
-			errCh <- err
 		}
 	}()
 	return out, errCh
@@ -207,6 +331,10 @@ func (c *Client) FetchFlagsChangedSince(ctx context.Context, sinceModSeq uint64)
 	go func() {
 		defer close(out)
 		defer close(errCh)
+
+		bump, expired, stopWatch := c.newActivityWatchdog(ctx, c.streamTimeout())
+		defer stopWatch()
+
 		var seq imap.UIDSet
 		seq.AddRange(1, 0) // 1:* — server does the modseq filter
 		opts := &imap.FetchOptions{
@@ -227,11 +355,19 @@ func (c *Client) FetchFlagsChangedSince(ctx context.Context, sinceModSeq uint64)
 			if msg == nil {
 				break
 			}
+			bump()
 			data, err := msg.Collect()
 			if err != nil {
-				errCh <- err
+				if ctx.Err() != nil {
+					errCh <- ctx.Err()
+				} else if expired.Load() {
+					errCh <- fmt.Errorf("imap fetch flags: %w", context.DeadlineExceeded)
+				} else {
+					errCh <- err
+				}
 				return
 			}
+			bump()
 			fd := FlagDelta{UID: int64(data.UID)}
 			for _, f := range data.Flags {
 				fd.Flags = append(fd.Flags, string(f))
@@ -244,7 +380,19 @@ func (c *Client) FetchFlagsChangedSince(ctx context.Context, sinceModSeq uint64)
 			}
 		}
 		if err := cmd.Close(); err != nil {
-			errCh <- err
+			if ctx.Err() != nil {
+				errCh <- ctx.Err()
+			} else if expired.Load() {
+				errCh <- fmt.Errorf("imap fetch flags: %w", context.DeadlineExceeded)
+			} else {
+				errCh <- err
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			errCh <- ctx.Err()
+		} else if expired.Load() {
+			errCh <- fmt.Errorf("imap fetch flags: %w", context.DeadlineExceeded)
 		}
 	}()
 	return out, errCh
@@ -258,6 +406,9 @@ func (c *Client) FetchFlagsChangedSince(ctx context.Context, sinceModSeq uint64)
 // part are fetched in the same FETCH (BODY.PEEK[<part>.MIME]) so we don't
 // need a second round-trip.
 func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([]byte, error) {
+	bump, expired, stopWatch := c.newActivityWatchdog(ctx, c.streamTimeout())
+	defer stopWatch()
+
 	seq := imap.UIDSetNum(imap.UID(uid))
 	part := parsePartPath(partID)
 	opts := &imap.FetchOptions{
@@ -266,9 +417,6 @@ func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([
 			{Specifier: imap.PartSpecifierNone, Part: part, Peek: true},
 		},
 	}
-	// Fetch dispatches to UID FETCH automatically when numSet is a UIDSet
-	// (see imapclient/fetch.go). Mirroring FetchByUIDs' pattern keeps the
-	// read-loop drained on early return; FetchCommand.Close is idempotent.
 	cmd := c.c.Fetch(seq, opts)
 	defer cmd.Close()
 
@@ -284,13 +432,18 @@ func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([
 		if msg == nil {
 			break
 		}
+		bump()
 		data, err := msg.Collect()
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if expired.Load() {
+				return nil, fmt.Errorf("imap fetch body part: %w", context.DeadlineExceeded)
+			}
 			return nil, err
 		}
-		// Match by Specifier — FetchBodySectionBuffer.Section exposes the
-		// FetchItemBodySection that produced this buffer (see
-		// imapclient/fetch.go:484).
+		bump()
 		for _, sec := range data.BodySection {
 			if sec.Section == nil {
 				continue
@@ -305,7 +458,19 @@ func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([
 		}
 	}
 	if err := cmd.Close(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if expired.Load() {
+			return nil, fmt.Errorf("imap fetch body part: %w", context.DeadlineExceeded)
+		}
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if expired.Load() {
+		return nil, fmt.Errorf("imap fetch body part: %w", context.DeadlineExceeded)
 	}
 	if !haveBody {
 		return nil, fmt.Errorf("imap: no body part %q for uid %d", partID, uid)
@@ -326,10 +491,6 @@ func (c *Client) FetchBodyPart(ctx context.Context, uid int64, partID string) ([
 		}
 		body = decoded
 	default:
-		// "", "7bit", "8bit", "binary", or anything else: pass through.
-		// Unknown encodings are treated as identity rather than failing the
-		// download — worst case the user gets a file they can't open, which
-		// is no worse than failing outright.
 	}
 	return body, nil
 }
@@ -369,17 +530,9 @@ func parsePartPath(s string) []int {
 // StoreFlags issues UID STORE +FLAGS / -FLAGS for one or more UIDs on the
 // currently-selected mailbox. The caller is responsible for SELECTing the
 // right folder before calling. An empty uids slice is a no-op.
-//
-// The underlying go-imap Store call is synchronous and does not honour ctx
-// mid-flight, so we only short-circuit on cancellation before issuing the
-// command — enough to skip a STORE when the worker shutdown signal already
-// fired but the drain loop hasn't observed it.
 func (c *Client) StoreFlags(ctx context.Context, uids []int64, flags []string, add bool) error {
 	if len(uids) == 0 {
 		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	op := imap.StoreFlagsAdd
 	if !add {
@@ -394,5 +547,7 @@ func (c *Client) StoreFlags(ctx context.Context, uids []int64, flags []string, a
 		imapUIDs[i] = imap.UID(u)
 	}
 	seq := imap.UIDSetNum(imapUIDs...)
-	return c.c.Store(seq, &imap.StoreFlags{Op: op, Flags: imapFlags}, nil).Close()
+	return c.runWithTimeout(ctx, c.commandTimeout(), "store flags", func() error {
+		return c.c.Store(seq, &imap.StoreFlags{Op: op, Flags: imapFlags}, nil).Close()
+	})
 }

@@ -12,12 +12,13 @@ function makeThreads(n: number): ThreadDTO[] {
   }))
 }
 
-const { listThreads, getThread, listFolders, markRead, eventHandlerRef } = vi.hoisted(() => {
+const { listThreads, getThread, listFolders, listAccounts, markRead, eventHandlerRef } = vi.hoisted(() => {
   let eventHandler: ((ev: { type: string; payload: Record<string, unknown> }) => void | Promise<void>) | undefined
   return {
     listThreads: vi.fn(),
     getThread: vi.fn(),
     listFolders: vi.fn(),
+    listAccounts: vi.fn(),
     markRead: vi.fn(),
     eventHandlerRef: {
       get current() { return eventHandler },
@@ -35,6 +36,7 @@ vi.mock('./client', () => ({
     listThreads,
     getThread,
     listFolders,
+    listAccounts,
     markRead,
   },
 }))
@@ -62,6 +64,7 @@ beforeEach(() => {
     bootstrapError: null,
   })
   listFolders.mockResolvedValue([])
+  listAccounts.mockResolvedValue([])
   markRead.mockResolvedValue(undefined)
 })
 
@@ -160,5 +163,100 @@ describe('useEventStream refetch limit preserves loaded pages', () => {
     })
 
     expect(listThreads).toHaveBeenCalledWith(expect.objectContaining({ limit: 400 }))
+  })
+})
+
+describe('useEventStream coalescing, AccountStatus, and folder-scoped markRead', () => {
+  it('coalesces burst MessageInserted events without out-of-order overwrites', async () => {
+    let resolveFirst!: (v: ThreadDTO[]) => void
+    listThreads
+      .mockReturnValueOnce(new Promise<ThreadDTO[]>((r) => { resolveFirst = r }))
+      .mockResolvedValueOnce([{ ...makeThreads(1)[0], subject: 'latest-thread' }])
+
+    render(<EventHarness />)
+    const p1 = eventHandlerRef.current!({ type: 'MessageInserted', payload: { account_id: 1 } })
+    const p2 = eventHandlerRef.current!({ type: 'MessageInserted', payload: { account_id: 1 } })
+    const p3 = eventHandlerRef.current!({ type: 'MessageInserted', payload: { account_id: 1 } })
+    await waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1))
+
+    resolveFirst([{ ...makeThreads(1)[0], subject: 'older-thread' }])
+    await Promise.all([p1, p2, p3])
+
+    expect(listThreads).toHaveBeenCalledTimes(2)
+    expect(useStore.getState().threads[0]?.subject).toBe('latest-thread')
+  })
+
+  it('runs queued MessageInserted refresh when an in-flight listThreads rejects', async () => {
+    let rejectFirst!: (err: Error) => void
+    listThreads
+      .mockReturnValueOnce(new Promise<ThreadDTO[]>((_, reject) => { rejectFirst = reject }))
+      .mockResolvedValueOnce([{ ...makeThreads(1)[0], id: 99, subject: 'recovered-after-reject' }])
+
+    render(<EventHarness />)
+    const p1 = eventHandlerRef.current!({ type: 'MessageInserted', payload: { account_id: 1 } })
+    await waitFor(() => expect(listThreads).toHaveBeenCalledTimes(1))
+
+    // Second event arrives while first refresh is in flight; then first rejects.
+    const p2 = eventHandlerRef.current!({ type: 'MessageInserted', payload: { account_id: 1 } })
+    rejectFirst(new Error('transient refresh failure'))
+    await Promise.all([p1, p2])
+
+    expect(listThreads).toHaveBeenCalledTimes(2)
+    expect(useStore.getState().threads[0]?.subject).toBe('recovered-after-reject')
+  })
+
+  it('updates AccountStatus synchronously and ignores stale listAccounts responses', async () => {
+    let resolveErrList!: (v: Array<{ id: number; name: string; email: string; color: string; status: string; detail?: string }>) => void
+    let resolveOkList!: (v: Array<{ id: number; name: string; email: string; color: string; status: string; detail?: string }>) => void
+    listAccounts
+      .mockReturnValueOnce(new Promise((r) => { resolveErrList = r }))
+      .mockReturnValueOnce(new Promise((r) => { resolveOkList = r }))
+
+    useStore.setState({
+      accounts: [{ id: 1, name: 'Test', email: 'a@example.com', color: '#3b82f6', status: 'ok' }],
+    })
+    render(<EventHarness />)
+
+    const pErr = eventHandlerRef.current!({
+      type: 'AccountStatus',
+      payload: { account_id: 1, state: 'error', detail: 'dial tcp: connection refused' },
+    })
+    expect(useStore.getState().accounts[0]?.status).toBe('error')
+    expect(useStore.getState().accountDetail[1]).toBe('dial tcp: connection refused')
+
+    const pOk = eventHandlerRef.current!({
+      type: 'AccountStatus',
+      payload: { account_id: 1, state: 'ok' },
+    })
+    expect(useStore.getState().accounts[0]?.status).toBe('ok')
+    expect(useStore.getState().accountDetail[1]).toBeUndefined()
+
+    // Newer #2 response resolves first with status 'ok', then stale #1 resolves with 'error'.
+    resolveOkList([{ id: 1, name: 'Test', email: 'a@example.com', color: '#3b82f6', status: 'ok' }])
+    await pOk
+    resolveErrList([{ id: 1, name: 'Test', email: 'a@example.com', color: '#3b82f6', status: 'error', detail: 'dial tcp: connection refused' }])
+    await pErr
+
+    expect(listAccounts).toHaveBeenCalledTimes(2)
+    expect(useStore.getState().accounts[0]?.status).toBe('ok')
+    expect(useStore.getState().accountDetail[1]).toBeUndefined()
+  })
+
+  it('auto-mark-read only marks messages in the active folder', async () => {
+    listThreads.mockResolvedValue([])
+    getThread.mockResolvedValue([
+      { id: 101, account_id: 1, folder_id: 10, uid: 1, date: 100, flags: [], attachments: [] },
+      { id: 102, account_id: 1, folder_id: 20, uid: 1, date: 200, flags: [], attachments: [] },
+    ])
+    useStore.setState({
+      openThreadId: 7,
+      filter: { folderId: 10, unreadOnly: false, hasFlagged: false },
+    })
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+
+    render(<EventHarness />)
+    await eventHandlerRef.current!({ type: 'MessageInserted', payload: { account_id: 1 } })
+
+    await waitFor(() => expect(markRead).toHaveBeenCalledWith([101]))
   })
 })

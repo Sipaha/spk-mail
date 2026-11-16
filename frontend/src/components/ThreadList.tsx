@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { client } from '../api/client'
 import { useStore } from '../store'
 import type { ThreadDTO } from '../api/types'
-import { filterSig } from '../lib/filterSig'
+import { filterSig, scopeThreadMessages } from '../lib/filterSig'
 import { PAGE_SIZE } from '../lib/paging'
 import ThreadRow from './ThreadRow'
 
@@ -246,7 +246,9 @@ export default function ThreadList() {
             if (fresh) setPinned(fresh)
             client.getThread(id).then(msgs => {
               setOpenThread(id, msgs)
-              const unread = msgs.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
+              const folderId = useStore.getState().filter.folderId
+              const visible = scopeThreadMessages(msgs, folderId)
+              const unread = visible.filter(m => !(m.flags ?? []).includes('\\Seen')).map(m => m.id)
               if (unread.length) {
                 client.markRead(unread)
                   .then(() => useStore.getState().markThreadRead(id))

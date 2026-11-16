@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,145 +11,257 @@ import (
 	"github.com/spk/spk-mail/internal/storage"
 )
 
-// idleSessionMaxLifetime caps how long we keep one IMAP connection in
-// IDLE before tearing it down and dialing a fresh one. 25 minutes
-// sits inside the typical 28–30-min server / NAT inactivity cutoff.
-// Each bounce runs a pre-IDLE syncFolder, which doubles as a
-// defence-in-depth catchup against any push the previous session
-// missed.
-const idleSessionMaxLifetime = 25 * time.Minute
+const (
+	// idleSessionMaxLifetime caps how long one IMAP connection stays in IDLE
+	// before rotating to a fresh session (inside typical 28-30m NAT/server cutoffs).
+	defaultIdleSessionMaxLifetime = 25 * time.Minute
+	// defaultIdleCatchupInterval triggers a lightweight DONE -> syncFolder -> IDLE
+	// sweep inside an active session so a server that silently suppresses EXISTS
+	// cannot leave the inbox stale for 25 minutes.
+	defaultIdleCatchupInterval = 2 * time.Minute
+)
 
-func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, folder, role string) {
-	// Cache the password once at goroutine start. The previous code re-fetched
-	// from the secrets store on every EXISTS notification, which is wasted
-	// keyring traffic for an account whose password hasn't rotated. If a
-	// rotation does happen, supervise will bounce the worker (next IMAP auth
-	// fails → connection error → Run returns → restart picks up the fresh
-	// secret), so caching here doesn't pin a stale credential indefinitely.
+var idleReconnectDelays = []time.Duration{
+	1 * time.Second,
+	2 * time.Second,
+	5 * time.Second,
+	15 * time.Second,
+	30 * time.Second,
+	60 * time.Second,
+}
+
+func (w *AccountWorker) idleSessionLifetime() time.Duration {
+	if w.idleMaxLifetime > 0 {
+		return w.idleMaxLifetime
+	}
+	return defaultIdleSessionMaxLifetime
+}
+
+func (w *AccountWorker) idleCatchupPeriod() time.Duration {
+	if w.idleCatchupInterval > 0 {
+		return w.idleCatchupInterval
+	}
+	return defaultIdleCatchupInterval
+}
+
+func (w *AccountWorker) runIDLE(ctx context.Context, acc storage.AccountRow, folder, role string, fallback chan<- folderTarget) {
 	pw, err := w.secrets.Get(fmt.Sprintf("account:%d", acc.ID))
 	if err != nil {
 		slog.Warn("IDLE: secrets get failed", "account_id", acc.ID, "err", err)
+		w.setInboxState("error", err.Error())
 		return
 	}
+
+	attempt := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-		w.runIDLESession(ctx, acc, pw, folder, role)
-		// Brief backoff so a hard-failing dial doesn't busy-loop. The
-		// supervise loop applies its own tier table when Run() returns
-		// on a real error; this is the inner pause for the in-runIDLE
-		// reconnect cycle.
+
+		rejected, entered, sessionErr := w.runIDLESession(ctx, acc, pw, folder, role, func() {
+			attempt = 0
+			w.setInboxState("ok", "")
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		if rejected {
+			slog.Warn("IDLE rejected by server; falling back to polling", "account_id", acc.ID, "folder", folder, "err", sessionErr)
+			if fallback != nil {
+				select {
+				case fallback <- folderTarget{Name: folder, Role: role}:
+				case <-ctx.Done():
+					return
+				}
+			}
+			return
+		}
+		if sessionErr == nil {
+			// Normal idleSessionMaxLifetime rotation: dial next session immediately.
+			attempt = 0
+			continue
+		}
+
+		// If the active IDLE session dropped unexpectedly (e.g. server BYE/reset),
+		// allow one fast 100ms reconnect before surfacing an error; any Dial or
+		// pre-IDLE sync failure (entered=false) or second consecutive failure
+		// surfaces the error immediately so the UI never lies with "Synced".
+		var wait time.Duration
+		if entered && attempt == 0 {
+			w.setInboxState("connecting", "")
+			wait = 100 * time.Millisecond
+			attempt = 1
+		} else {
+			w.setInboxState("error", sessionErr.Error())
+			idx := attempt
+			if idx >= len(idleReconnectDelays) {
+				idx = len(idleReconnectDelays) - 1
+			}
+			wait = idleReconnectDelays[idx]
+			attempt++
+		}
+
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 		}
 	}
 }
 
-// runIDLESession holds one IMAP connection in IDLE for at most
-// idleSessionMaxLifetime, then returns. Errors are surfaced via slog
-// (not propagated) so the outer reconnect loop can keep going.
-func (w *AccountWorker) runIDLESession(ctx context.Context, acc storage.AccountRow, pw []byte, folder, role string) {
-	sessionCtx, cancel := context.WithTimeout(ctx, idleSessionMaxLifetime)
+// runIDLESession holds one IMAP connection in IDLE for at most idleSessionLifetime.
+// It returns:
+//   - rejected: true if the server rejected IDLE with tagged NO/BAD (triggering poll fallback)
+//   - entered:  true if IDLE was entered at least once during this session
+//   - err:      nil on clean session expiry, otherwise the transport/sync error
+func (w *AccountWorker) runIDLESession(
+	ctx context.Context,
+	acc storage.AccountRow,
+	pw []byte,
+	folder, role string,
+	onEntered func(),
+) (rejected bool, entered bool, err error) {
+	sessionCtx, cancel := context.WithTimeout(ctx, w.idleSessionLifetime())
 	defer cancel()
 
-	c, err := imap.Dial(sessionCtx, imap.DialOpts{
-		Host: acc.IMAPHost, Port: acc.IMAPPort,
-		Username: acc.IMAPUsername, Password: string(pw), UseTLS: acc.UseTLS,
-	})
+	c, err := w.dialConfiguredClient(sessionCtx, acc, pw)
 	if err != nil {
-		// Distinguish "real connect failure" from "parent ctx cancelled
-		// while dialing" — the latter is the worker shutting down and
-		// shouldn't generate a noisy log entry.
 		if ctx.Err() == nil {
 			slog.Warn("IDLE dial failed", "account_id", acc.ID, "err", err)
 		}
-		return
+		return false, false, err
 	}
-	defer c.Close()
+	stopClose := context.AfterFunc(sessionCtx, func() { _ = c.Close() })
+	defer func() {
+		stopClose()
+		_ = c.Close()
+	}()
 
-	// Catchup syncFolder BEFORE entering IDLE. Reasons:
-	//
-	//  1. New messages that arrived between the previous IDLE session
-	//     ending (idleSessionMaxLifetime, the connection-bounce loop)
-	//     and this session starting would otherwise wait for an
-	//     EXISTS push that may never come. We saw this in the field:
-	//     "новые письма появляются только при перезапуске".
-	//  2. If the server stops pushing EXISTS reliably (Yandex has
-	//     been observed to do this under load), the periodic IDLE
-	//     bounce gives us a deterministic catchup cadence — at most
-	//     idleSessionMaxLifetime of staleness instead of "waits
-	//     until process restart".
-	//
-	// syncFolder also internally Selects with CondStore (when the
-	// server supports it) and runs syncFlagDeltas at the end, so this
-	// single call covers BOTH new-message fetch AND server-side flag
-	// propagation. The sessionCtx scopes us to the IDLE-session
-	// lifetime; if the user shuts down mid-catchup, the worker exits
-	// cleanly.
-	if folderID, ok := w.folderIDByName(ctx, acc.ID, folder); ok {
-		if err := w.syncFolder(sessionCtx, c, folderID, folder, role, true); err != nil {
-			if ctx.Err() == nil {
-				slog.Warn("IDLE pre-IDLE catchup sync failed", "account_id", acc.ID, "folder", folder, "err", err)
+	// Pre-IDLE catchup sync BEFORE entering IDLE.
+	if folderID, ok := w.folderIDByName(sessionCtx, acc.ID, folder); ok {
+		if syncErr := w.syncFolder(sessionCtx, c, folderID, folder, role, true); syncErr != nil {
+			if ctx.Err() == nil && errors.Is(syncErr, context.DeadlineExceeded) && sessionCtx.Err() != nil {
+				return false, false, nil
 			}
-			return
+			if ctx.Err() == nil {
+				slog.Warn("IDLE pre-IDLE catchup sync failed", "account_id", acc.ID, "folder", folder, "err", syncErr)
+			}
+			return false, false, syncErr
 		}
 	}
 
-	// syncFolder above already Selected the mailbox; the connection is
-	// in SELECTED state and Idle() can be called directly. No need to
-	// re-Select.
 	notifs := make(chan imap.IdleNotification, 8)
-	var stopIdle func()
-	stopIdle = c.Idle(sessionCtx, notifs)
+	stopIdle, err := c.IdleWithErr(sessionCtx, notifs)
+	if err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) && sessionCtx.Err() != nil {
+			return false, false, nil
+		}
+		if imap.IsCommandRejection(err) {
+			return true, false, err
+		}
+		if ctx.Err() == nil {
+			slog.Warn("IDLE start failed", "account_id", acc.ID, "folder", folder, "err", err)
+		}
+		return false, false, err
+	}
 	defer func() {
 		if stopIdle != nil {
-			stopIdle()
+			_ = stopIdle()
 		}
 	}()
+
+	entered = true
+	if onEntered != nil {
+		onEntered()
+	}
 	slog.Info("IDLE session started", "account_id", acc.ID, "folder", folder)
+
+	catchup := time.NewTimer(w.idleCatchupPeriod())
+	defer catchup.Stop()
+
+	resyncAndRearm := func() (bool, error) {
+		if stopIdle != nil {
+			if serr := stopIdle(); serr != nil {
+				stopIdle = nil
+				return false, serr
+			}
+			stopIdle = nil
+		}
+		if folderID, ok := w.folderIDByName(sessionCtx, acc.ID, folder); ok {
+			if syncErr := w.syncFolder(sessionCtx, c, folderID, folder, role, true); syncErr != nil {
+				return false, syncErr
+			}
+		}
+		notifs = make(chan imap.IdleNotification, 8)
+		var ierr error
+		stopIdle, ierr = c.IdleWithErr(sessionCtx, notifs)
+		if ierr != nil {
+			return imap.IsCommandRejection(ierr), ierr
+		}
+		slog.Info("IDLE session resumed", "account_id", acc.ID, "folder", folder)
+		return false, nil
+	}
+
 	for {
 		select {
 		case <-sessionCtx.Done():
-			return
+			return false, entered, nil
 		case n, ok := <-notifs:
 			if !ok {
-				return
+				var stopErr error
+				if stopIdle != nil {
+					stopErr = stopIdle()
+					stopIdle = nil
+				}
+				if sessionCtx.Err() != nil && ctx.Err() == nil {
+					return false, entered, nil
+				}
+				if stopErr == nil {
+					stopErr = fmt.Errorf("IDLE connection closed")
+				}
+				if ctx.Err() == nil {
+					slog.Warn("IDLE session dropped", "account_id", acc.ID, "folder", folder, "err", stopErr)
+				}
+				return false, entered, stopErr
 			}
 			if n.Kind == imap.NotifExists {
-				// One-line breadcrumb so a "new mail not arriving"
-				// report can be diagnosed from journalctl: if we never
-				// log this, the server isn't pushing EXISTS (firewall,
-				// IDLE timeout, server-side issue); if we do log it but
-				// no MessageInserted follows, the failure is in the
-				// post-EXISTS sync path.
 				slog.Info("IDLE EXISTS received", "account_id", acc.ID, "folder", folder)
-				folderID, ok := w.folderIDByName(ctx, acc.ID, folder)
-				if !ok {
-					continue
-				}
-				// RFC 2177: client must issue DONE before FETCH on the
-				// same connection. Reuse this session instead of dialing
-				// a second connection per EXISTS.
-				stopIdle()
-				stopIdle = nil
-				// runIDLE post-EXISTS — these messages just landed on the
-				// server while we were connected, so they are real-time
-				// arrivals and should produce a MessageArrived notification.
-				if syncErr := w.syncFolder(ctx, c, folderID, folder, role, true); syncErr != nil {
-					if ctx.Err() == nil {
-						slog.Warn("IDLE post-EXISTS sync failed", "account_id", acc.ID, "folder", folder, "err", syncErr)
+				rej, rerr := resyncAndRearm()
+				if rerr != nil {
+					if sessionCtx.Err() != nil && ctx.Err() == nil {
+						return false, entered, nil
 					}
-					return
+					if ctx.Err() == nil {
+						slog.Warn("IDLE post-EXISTS sync failed", "account_id", acc.ID, "folder", folder, "err", rerr)
+					}
+					return rej, entered, rerr
 				}
-				notifs = make(chan imap.IdleNotification, 8)
-				stopIdle = c.Idle(sessionCtx, notifs)
-				slog.Info("IDLE session resumed", "account_id", acc.ID, "folder", folder)
+				resetTimer(catchup, w.idleCatchupPeriod())
 			}
+		case <-catchup.C:
+			rej, rerr := resyncAndRearm()
+			if rerr != nil {
+				if sessionCtx.Err() != nil && ctx.Err() == nil {
+					return false, entered, nil
+				}
+				if ctx.Err() == nil {
+					slog.Warn("IDLE periodic catchup failed", "account_id", acc.ID, "folder", folder, "err", rerr)
+				}
+				return rej, entered, rerr
+			}
+			resetTimer(catchup, w.idleCatchupPeriod())
 		}
 	}
+}
+
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
 }

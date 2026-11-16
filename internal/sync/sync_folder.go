@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	stdsync "sync"
 	"time"
@@ -23,17 +24,13 @@ const fetchBatchSize int64 = 200
 // syncFolder fetches new messages from the given folder and persists them.
 // When notify=true, MessageArrived events are emitted for newly-fetched unread
 // inbox messages — this is the real-time-arrival path, called from runIDLE
-// after a server-pushed EXISTS notification. When notify=false, fetched
-// messages are stored silently — used for initial bulk catch-up at startup
-// and for polling-based discovery (where multiple unread messages may be
-// pulled at once and we don't want to spam N system notifications).
+// after a server-pushed EXISTS notification or periodic catchup. When
+// notify=false, fetched messages are stored silently — used for initial bulk
+// catch-up at startup and for non-inbox polling.
 //
 // syncMu is taken per-batch (not function-wide) so a long bulk catch-up
 // against a 90k-message mailbox can yield to an IDLE-driven inbox sync
 // between batches, instead of pinning that other-folder sync for minutes.
-// Each batch is one UID FETCH range + one Submit drain + one UpsertFolder
-// checkpoint, so per-batch granularity preserves the "one bulk fetch in
-// flight per account" property the lock was originally there for.
 func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID int64, name, role string, notify bool) error {
 	state, err := c.Select(ctx, name)
 	if err != nil {
@@ -41,7 +38,10 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		return err
 	}
 
-	stored, _ := w.store.ListFolders(ctx, w.accountID)
+	stored, err := w.store.ListFolders(ctx, w.accountID)
+	if err != nil {
+		return err
+	}
 	var prev storage.FolderRow
 	for _, s := range stored {
 		if s.ID == folderID {
@@ -55,62 +55,48 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			return err
 		}
 		prev.UIDNext = 0
+		if w.em != nil {
+			w.em.Emit(events.Event{Type: "MessageUpdated", Payload: map[string]any{
+				"account_id": w.accountID,
+				"folder_id":  folderID,
+			}})
+		}
 	}
 
 	// Persist the epoch before any fetched message can become visible to the
 	// UI and receive a read request. A failed partial sync must retain it too.
-	if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: prev.Role, UIDValidity: state.UIDValidity, UIDNext: prev.UIDNext, LastSyncedAt: prev.LastSyncedAt}); err != nil {
+	if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+		AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: prev.Role,
+		UIDValidity: state.UIDValidity, UIDNext: prev.UIDNext, LastSyncedAt: prev.LastSyncedAt,
+	}); err != nil {
 		return err
 	}
 
-	// Resume from MAX(uid) actually present in messages, not just the
-	// persisted folders.uid_next. Older sync paths could insert messages
-	// without ever reaching the final UpsertFolder (e.g. partial bulk sync
-	// against a 90k mailbox where the connection died mid-stream), leaving
-	// uid_next=0 even though messages 1..N are already stored. Without this
-	// check, every restart would re-fetch those N messages from the server
-	// and hit UNIQUE(account_id, folder_id, uid) violations on insert.
+	// Compute the search floor from BOTH MAX(uid) in messages and the saved
+	// uid_next checkpoint. Using min(dbMaxUID, prev.UIDNext-1) when prev.UIDNext > 0
+	// ensures that if a mid-batch write error left a lower UID missing behind a
+	// higher committed UID, the next pass re-searches from the lower checkpoint
+	// instead of leaving a permanent hole.
 	dbMaxUID, err := w.store.MaxUIDByFolder(ctx, folderID)
 	if err != nil {
 		return err
 	}
-	if dbMaxUID > prev.UIDNext {
-		prev.UIDNext = dbMaxUID
+	sinceUID := dbMaxUID
+	if prev.UIDNext > 0 && prev.UIDNext-1 < sinceUID {
+		sinceUID = prev.UIDNext - 1
 	}
 
-	// Batch fetch in chunks of fetchBatchSize UIDs. A single open-ended
-	// "UID FETCH N:*" works for small mailboxes but breaks on huge ones
-	// (>~3000 messages we observed Yandex closing the connection mid-stream).
-	// Drive new-message fetch from a UID SEARCH against the actual max
-	// UID we have in the local DB — NOT from server-reported UIDNEXT.
-	//
-	// Why: Yandex (and presumably any RFC-strict server) pushes EXISTS
-	// for every state change of the mailbox, not just for live new
-	// messages. UIDNEXT can advance on EXPUNGE, on internal index
-	// bumps, on UIDs reserved but never assigned. A naive
-	// `UID FETCH prev:UIDNEXT` then returns zero rows and a cursor
-	// advanced past nothing useful. SEARCH gives us the actual live
-	// UIDs the server has, which we can then FETCH explicitly.
-	//
-	// dbMaxUID is the source of truth for "what we have". The folder
-	// row's UIDNext field is a checkpoint that may run one ahead of
-	// dbMaxUID after a sync hit a reserved-but-empty UID; anchoring
-	// SEARCH on dbMaxUID re-checks those edge UIDs on the next pass.
 	rolePtr := prev.Role
 	serverUIDNext := int64(state.UIDNext)
-	if dbMaxUID > prev.UIDNext {
-		// Recovery for the legacy "checkpoint ran ahead" case.
-		prev.UIDNext = dbMaxUID
-	}
-	liveUIDs, err := c.UIDsAbove(ctx, dbMaxUID)
+
+	liveUIDs, err := c.UIDsAbove(ctx, sinceUID)
 	if err != nil {
 		return fmt.Errorf("UID SEARCH (account_id=%d folder=%s): %w", w.accountID, name, err)
 	}
+	slices.Sort(liveUIDs)
 
-	// SEARCH empty: nothing live above our DB max. Checkpoint
+	// SEARCH empty: nothing live above our checkpoint. Checkpoint
 	// UIDNext, emit SyncProgress, run the flag-delta sweep, return.
-	// EXISTS pushed for an EXPUNGE / state-change no longer triggers
-	// a wasted UID FETCH round-trip.
 	if len(liveUIDs) == 0 {
 		now := time.Now().Unix()
 		if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
@@ -134,7 +120,6 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 	// Fetch the live UIDs in chunks of fetchBatchSize. Each chunk is
 	// one UID FETCH command; the per-chunk syncMu lock preserves the
 	// "one bulk fetch in flight per account" invariant.
-	maxUID := dbMaxUID
 	for i := 0; i < len(liveUIDs); i += int(fetchBatchSize) {
 		select {
 		case <-ctx.Done():
@@ -149,29 +134,32 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 		err := func() error {
 			w.syncMu.Lock()
 			defer w.syncMu.Unlock()
+
 			msgCh, errCh := c.FetchByUIDs(ctx, chunk)
 			var batchAck stdsync.WaitGroup
+			var resMu stdsync.Mutex
+			chunkResults := make(map[int64]error, len(chunk))
+
 			for msg := range msgCh {
-				if msg.UID > maxUID {
-					maxUID = msg.UID
-				}
+				uid := msg.UID
 				batchAck.Add(1)
 				if err := w.writer.Submit(ctx, IncomingMessage{
-					AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: msg.UID,
+					AccountID: w.accountID, FolderID: folderID, FolderRole: role, UID: uid,
 					Flags: msg.Flags, InternalAt: time.Unix(msg.Internal, 0), Raw: msg.Raw,
-					// IsResync gates the MessageArrived event in
-					// StoreWriter: true means "stored silently".
-					// Driven by syncFolder's notify flag.
 					IsResync: !notify,
 					Ack:      batchAck.Done,
+					OnDone: func(writeErr error, _ bool) {
+						resMu.Lock()
+						chunkResults[uid] = writeErr
+						resMu.Unlock()
+					},
 				}); err != nil {
 					batchAck.Done()
 					return err
 				}
 			}
-			if err := <-errCh; err != nil {
-				return err
-			}
+			fetchErr := <-errCh
+
 			drained := make(chan struct{})
 			go func() { batchAck.Wait(); close(drained) }()
 			select {
@@ -179,21 +167,62 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			// Checkpoint to max(maxUID+1, serverUIDNext): record the
-			// highest UID we actually saw so a subsequent EXISTS
-			// doesn't replay these, but never regress below what the
-			// server already announced.
-			ckpt := maxUID + 1
-			if ckpt < serverUIDNext {
-				ckpt = serverUIDNext
+
+			// Advance checkpoint strictly across the contiguous prefix of chunk
+			// UIDs that persisted cleanly. Any gap or write failure holds (or
+			// lowers an inflated legacy checkpoint to) the first unpersisted
+			// UID so the next pass retries it cleanly. Promotion to
+			// serverUIDNext happens only after every chunk succeeds.
+			var contiguousMax int64
+			var firstUnpersistedUID int64
+			var firstWriteErr error
+			resMu.Lock()
+			for _, uid := range chunk {
+				wErr, submitted := chunkResults[uid]
+				if !submitted {
+					if fetchErr != nil {
+						firstUnpersistedUID = uid
+						break
+					}
+					continue
+				}
+				if wErr != nil {
+					firstWriteErr = wErr
+					firstUnpersistedUID = uid
+					break
+				}
+				contiguousMax = uid
 			}
-			now := time.Now().Unix()
-			if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
-				AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
-				UIDValidity: state.UIDValidity, UIDNext: ckpt, LastSyncedAt: &now,
-			}); err != nil {
-				return err
+			resMu.Unlock()
+
+			ckpt := prev.UIDNext
+			if firstUnpersistedUID > 0 {
+				ckpt = firstUnpersistedUID
+			} else if fetchErr == nil && firstWriteErr == nil && len(chunk) > 0 {
+				chunkNext := chunk[len(chunk)-1] + 1
+				if ckpt == 0 || chunkNext > ckpt || end < len(liveUIDs) {
+					ckpt = chunkNext
+				}
+			} else if contiguousMax > 0 && contiguousMax+1 > ckpt {
+				ckpt = contiguousMax + 1
 			}
+			if ckpt != prev.UIDNext {
+				prev.UIDNext = ckpt
+				if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+					AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
+					UIDValidity: state.UIDValidity, UIDNext: ckpt, LastSyncedAt: prev.LastSyncedAt,
+				}); err != nil {
+					return err
+				}
+			}
+
+			if fetchErr != nil {
+				return fetchErr
+			}
+			if firstWriteErr != nil {
+				return firstWriteErr
+			}
+
 			if w.em != nil {
 				w.em.Emit(events.Event{Type: "SyncProgress", Payload: map[string]any{
 					"account_id": w.accountID, "folder_id": folderID, "folder": name,
@@ -206,10 +235,22 @@ func (w *AccountWorker) syncFolder(ctx context.Context, c *imap.Client, folderID
 			return err
 		}
 	}
+
+	finalUIDNext := serverUIDNext
+	if prev.UIDNext > finalUIDNext {
+		finalUIDNext = prev.UIDNext
+	}
+	now := time.Now().Unix()
+	if _, err := w.store.UpsertFolder(ctx, storage.FolderRow{
+		AccountID: w.accountID, Name: name, Delimiter: prev.Delimiter, Role: rolePtr,
+		UIDValidity: state.UIDValidity, UIDNext: finalUIDNext, LastSyncedAt: &now,
+	}); err != nil {
+		return err
+	}
 	// CONDSTORE flag-delta sweep at the end of every successful
 	// syncFolder pass — initial bulk, IDLE post-EXISTS, runPoll all
 	// funnel through here. No-op when the server doesn't support
-	// CONDSTORE (e.g. Yandex) or when the watermark is current.
+	// CONDSTORE or when the watermark is current.
 	if _, err := w.syncFlagDeltas(ctx, c, folderID, state.HighestModSeq); err != nil {
 		slog.Warn("flag delta sync failed", "account_id", w.accountID, "folder", name, "err", err)
 	}
@@ -242,32 +283,17 @@ func (w *AccountWorker) folderIDByName(ctx context.Context, accountID int64, nam
 //
 //	UID FETCH 1:* (FLAGS UID) (CHANGEDSINCE <stored_modseq>)
 //
-// The server filters in O(changed messages), not O(mailbox size).
-// On a 90k-inbox where the user marked three messages read on the
-// phone, this returns three rows — not a probabilistic sample of
-// "the last N UIDs and pray it covered the changes".
-//
-// First-call semantics: when the stored watermark is 0 (just-
-// migrated v8 row, or folder seen for the first time), we skip the
-// sweep entirely and just record the current modseq as the baseline
-// for next time. Trying to fetch CHANGEDSINCE 0 on a huge mailbox
-// would mean "send me every message" — a worse brute-force than what
-// we just removed.
-//
-// Server without CONDSTORE: serverModSeq == 0. Skip silently —
-// flag-delta sync is unsupported on this server, only new-message
-// flags propagate (via the body-fetch path in syncFolder).
-//
 // Returns the number of rows whose flags actually changed.
 func (w *AccountWorker) syncFlagDeltas(ctx context.Context, c *imap.Client, folderID int64, serverModSeq uint64) (int, error) {
+	if serverModSeq == 0 {
+		return 0, nil // server doesn't support CONDSTORE
+	}
+
 	// A response fetched before our STORE must be applied before its ack removes
 	// the pending overlay. Otherwise a late server snapshot could undo the UI.
 	w.syncMu.Lock()
 	defer w.syncMu.Unlock()
 
-	if serverModSeq == 0 {
-		return 0, nil // server doesn't support CONDSTORE
-	}
 	folders, err := w.store.ListFolders(ctx, w.accountID)
 	if err != nil {
 		return 0, err
@@ -321,9 +347,6 @@ func (w *AccountWorker) syncFlagDeltas(ctx context.Context, c *imap.Client, fold
 			slog.Warn("flag delta: thread stats recompute failed", "thread_id", tid, "err", err)
 		}
 	}
-	// Persist the new watermark so the next call asks for deltas
-	// from this point. SetFolderHighestModSeq only writes if the
-	// new value is greater (defensive against out-of-order calls).
 	if err := w.store.SetFolderHighestModSeq(ctx, folderID, serverModSeq); err != nil {
 		slog.Warn("flag delta: watermark update failed", "folder_id", folderID, "err", err)
 	}

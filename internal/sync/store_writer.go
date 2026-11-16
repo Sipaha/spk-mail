@@ -120,10 +120,16 @@ func (w *StoreWriter) drainOnShutdown(pending *IncomingMessage) {
 	}
 }
 
-func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
+func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) (retErr error) {
 	if m.Ack != nil {
 		defer m.Ack()
 	}
+	var inserted bool
+	defer func() {
+		if m.OnDone != nil {
+			m.OnDone(retErr, inserted)
+		}
+	}()
 	parsed, err := mimep.Parse(m.Raw)
 	if err != nil {
 		return err
@@ -153,7 +159,7 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 		}
 	}
 	if existingThreadID == 0 {
-		// As above, log warn but keep going — InsertParsedMessageBundle below
+		// As above, log warn but keep going — InsertParsedMessageBundleIfNew below
 		// will surface a real DB outage as a WriteError event regardless.
 		id, ok, err := w.store.FindThreadBySubject(ctx, m.AccountID, thread.NormalizeSubject(parsed.Subject), parsed.Date.Unix(), 14*86400)
 		if err != nil {
@@ -185,9 +191,10 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 		})
 	}
 
-	// Single tx for thread+message+attachments+stats. If any step fails, the
-	// rollback leaves no orphan rows and the caller can retry the bundle.
-	msgID, threadID, err := w.store.InsertParsedMessageBundle(ctx, storage.MessageBundle{
+	// Single tx for thread+message+attachments+stats. Idempotent on
+	// (account_id, folder_id, uid) so partial-batch retries never create
+	// duplicate messages or orphan threads.
+	msgID, threadID, wasInserted, err := w.store.InsertParsedMessageBundleIfNew(ctx, storage.MessageBundle{
 		ExistingThreadID: existingThreadID,
 		NewThread: storage.ThreadRow{
 			SubjectNorm: thread.NormalizeSubject(parsed.Subject),
@@ -216,6 +223,14 @@ func (w *StoreWriter) process(ctx context.Context, m IncomingMessage) error {
 	})
 	if err != nil {
 		return err
+	}
+	inserted = wasInserted
+
+	if !inserted {
+		w.em.Emit(events.Event{Type: "MessageUpdated", Payload: map[string]any{
+			"id": msgID, "thread_id": threadID, "account_id": m.AccountID, "folder_id": m.FolderID,
+		}})
+		return nil
 	}
 
 	w.em.Emit(events.Event{Type: "MessageInserted", Payload: map[string]any{

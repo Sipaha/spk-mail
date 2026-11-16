@@ -64,6 +64,7 @@ const httpClient: Client = {
   subscribeEvents: (onEvent) => {
     const token = browserApiToken()
     const es = new EventSource(token ? `/api/events?token=${encodeURIComponent(token)}` : '/api/events')
+    let hadError = false
     const handler = (ev: MessageEvent) => {
       try {
         onEvent(JSON.parse(ev.data) as ApiEvent)
@@ -72,7 +73,14 @@ const httpClient: Client = {
       }
     }
     ;(['MessageInserted','MessageArrived','MessageUpdated','SyncProgress','AccountStatus','WriteError','AttachmentReady','FolderMarkedRead'] as const).forEach(t => es.addEventListener(t, handler))
+    es.onopen = () => {
+      if (hadError) {
+        hadError = false
+        onEvent({ type: 'Reconcile', payload: {} })
+      }
+    }
     es.onerror = (err) => {
+      hadError = true
       console.warn('SSE error', err, 'readyState', es.readyState)
     }
     return () => es.close()

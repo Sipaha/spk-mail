@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/spk/spk-mail/internal/api"
+	"github.com/spk/spk-mail/internal/secrets"
 	mailsync "github.com/spk/spk-mail/internal/sync"
 )
 
@@ -65,4 +68,26 @@ func (a engineAdapter) WorkerFor(id int64) api.FlagOpSubmitter {
 		return nil
 	}
 	return w
+}
+
+// resolveMasterKey derives the secrets master key from SPK_MAIL_PASSWORD when
+// set (creating/reusing master.salt beside secretsFile without touching D-Bus
+// or the OS keyring) and otherwise falls back to the OS keyring.
+func resolveMasterKey(secretsFile string) ([]byte, error) {
+	if pw := os.Getenv("SPK_MAIL_PASSWORD"); pw != "" {
+		saltPath := filepath.Join(filepath.Dir(secretsFile), "master.salt")
+		salt, err := secrets.LoadOrCreateSalt(saltPath)
+		if err != nil {
+			return nil, fmt.Errorf("master key salt: %w", err)
+		}
+		return secrets.DeriveKeyFromPassword(pw, salt), nil
+	}
+	masterKey, err := secrets.LoadOrCreateMasterKey()
+	if errors.Is(err, secrets.ErrKeyringUnavailable) {
+		return nil, fmt.Errorf("master key: %w (set SPK_MAIL_PASSWORD when keyring is unavailable)", err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("master key: %w", err)
+	}
+	return masterKey, nil
 }

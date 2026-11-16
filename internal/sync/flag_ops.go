@@ -60,12 +60,7 @@ func (w *AccountWorker) flushFlagIntentBatch(ctx context.Context, c *imap.Client
 			return false, err
 		}
 		if detail != w.flagError {
-			w.flagError = detail
-			if detail != "" {
-				w.setStatus("error", detail)
-			} else {
-				w.setStatus("ok", "")
-			}
+			w.setFlagError(detail)
 		}
 		return false, nil
 	}

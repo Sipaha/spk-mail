@@ -2,8 +2,12 @@ package imap
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"sync"
 	"time"
+
+	"github.com/emersion/go-imap/v2/imapclient"
 )
 
 // NotifKind identifies the type of unilateral update observed on the
@@ -33,20 +37,35 @@ type IdleNotification struct {
 
 // Idle starts an IDLE loop on the currently-selected mailbox. Notifications
 // observed via the imapclient.UnilateralDataHandler installed at Dial time
-// are forwarded to ch (drop-on-full at the Client side, blocking on ch).
+// are forwarded to ch. When the underlying connection closes or IDLE fails,
+// Idle closes ch so callers break out immediately rather than hanging until a
+// session timer fires.
 //
-// Idle blocks until the first IDLE command is acknowledged by the server,
-// so callers that schedule mailbox writes immediately afterwards can rely
-// on those writes producing notifications. (If the initial IDLE attempt
-// fails the call still returns; the loop will reconnect/retry every 2s.)
-//
-// The returned stop function is idempotent: it ends the IDLE loop and
-// closes ch. The IDLE command is automatically restarted every 28 minutes
-// to dodge server inactivity timeouts.
+// See IdleWithErr for callers that need the initial IDLE error or the DONE
+// completion status.
 func (c *Client) Idle(ctx context.Context, ch chan<- IdleNotification) func() {
+	stop, err := c.IdleWithErr(ctx, ch)
+	if err != nil {
+		return func() {}
+	}
+	return func() { _ = stop() }
+}
+
+// IdleWithErr enters IMAP IDLE on the currently-selected mailbox and waits
+// until the server acknowledges `+ idling` before returning. If entering IDLE
+// fails (e.g. tagged NO/BAD rejection or dead socket), ch is closed and the
+// error is returned immediately instead of spinning silently.
+//
+// The returned stop function sends DONE and waits for the server's tagged
+// completion (bounded by command timeout) while clearing the notification slot
+// before DONE so any push arriving during the DONE→FETCH→IDLE gap sets
+// idleMissed for replay on the next IdleWithErr call. If the underlying
+// connection dies while idling, ch is closed immediately and stop returns the
+// connection failure.
+func (c *Client) IdleWithErr(ctx context.Context, ch chan<- IdleNotification) (func() error, error) {
 	c.idleMu.Lock()
-	c.idleNotifs = make(chan IdleNotification, 16)
-	internalCh := c.idleNotifs
+	internalCh := make(chan IdleNotification, 16)
+	c.idleNotifs = internalCh
 	missed := c.idleMissed
 	c.idleMissed = false
 	c.idleMu.Unlock()
@@ -56,123 +75,188 @@ func (c *Client) Idle(ctx context.Context, ch chan<- IdleNotification) func() {
 	// the channel and taking the flag happen under the same lock, so a
 	// notification arriving during the swap either lands in internalCh or sets
 	// the flag again for the next Idle; it cannot fall between the two.
-	// EXISTS is idempotent for the caller (it re-syncs the folder), so a
-	// spurious replay costs one extra UID SEARCH, while a lost one costs a
-	// message invisible until the session bounces.
 	if missed {
 		internalCh <- IdleNotification{Kind: NotifExists}
 	}
 
+	var idle *imapclient.IdleCommand
+	if err := c.runWithTimeout(ctx, c.commandTimeout(), "idle start", func() error {
+		var e error
+		idle, e = c.c.Idle()
+		return e
+	}); err != nil {
+		c.idleMu.Lock()
+		if c.idleNotifs == internalCh {
+			c.idleNotifs = nil
+		}
+		if missed || len(internalCh) > 0 {
+			c.idleMissed = true
+		}
+		c.idleMu.Unlock()
+		close(ch)
+		return nil, err
+	}
+
 	stopCh := make(chan struct{})
 	var stopOnce sync.Once
-	ready := make(chan struct{})
 	exited := make(chan struct{})
+	var stopErr error
+
+	terminateIdle := func(cur *imapclient.IdleCommand) error {
+		c.idleMu.Lock()
+		if c.idleNotifs == internalCh {
+			c.idleNotifs = nil
+		}
+		c.idleMu.Unlock()
+
+		if cur == nil {
+			return nil
+		}
+		done := make(chan error, 1)
+		go func() {
+			closeErr := cur.Close()
+			waitErr := cur.Wait()
+			if closeErr != nil {
+				done <- closeErr
+			} else {
+				done <- waitErr
+			}
+		}()
+		waitTimeout := c.commandTimeout()
+		if waitTimeout > 10*time.Second {
+			waitTimeout = 10 * time.Second
+		}
+		timer := time.NewTimer(waitTimeout)
+		defer timer.Stop()
+		select {
+		case err := <-done:
+			return err
+		case <-timer.C:
+			_ = c.Close()
+			if err := <-done; err != nil {
+				return err
+			}
+			return fmt.Errorf("imap idle DONE: %w", context.DeadlineExceeded)
+		}
+	}
+
+	idleClosedErr := func(cur *imapclient.IdleCommand) error {
+		c.idleMu.Lock()
+		if c.idleNotifs == internalCh {
+			c.idleNotifs = nil
+		}
+		c.idleMu.Unlock()
+		if cur != nil {
+			if err := cur.Wait(); err != nil {
+				return fmt.Errorf("imap idle connection closed: %w", err)
+			}
+		}
+		return fmt.Errorf("imap idle connection closed: %w", io.ErrUnexpectedEOF)
+	}
 
 	go func() {
 		defer close(exited)
-		defer func() {
-			c.idleMu.Lock()
-			c.idleNotifs = nil
-			c.idleMu.Unlock()
-			close(ch)
-		}()
+		defer close(ch)
 
-		first := true
+		refresh := time.NewTimer(27 * time.Minute)
+		defer refresh.Stop()
+
 		for {
 			select {
+			case <-c.c.Closed():
+				stopErr = idleClosedErr(idle)
+				_ = c.Close()
+				return
 			case <-stopCh:
-				if first {
-					close(ready)
-				}
+				stopErr = terminateIdle(idle)
 				return
 			case <-ctx.Done():
-				if first {
-					close(ready)
-				}
+				_ = terminateIdle(idle)
+				stopErr = ctx.Err()
 				return
-			default:
-			}
-
-			idle, err := c.c.Idle()
-			if err != nil {
-				if first {
-					// Unblock the caller even on a failed first attempt
-					// so Idle() does not deadlock on a broken server.
-					close(ready)
-					first = false
+			case <-refresh.C:
+				if err := terminateIdle(idle); err != nil {
+					stopErr = err
+					_ = c.Close()
+					return
 				}
-				// Brief backoff before the next attempt; honour stop /
-				// ctx cancellation so we never leak the goroutine.
-				select {
-				case <-stopCh:
-					return
-				case <-ctx.Done():
-					return
-				case <-time.After(2 * time.Second):
-					continue
-				}
-			}
-
-			if first {
-				close(ready)
-				first = false
-			}
-
-			refresh := time.NewTimer(28 * time.Minute)
-			done := false
-			for !done {
-				select {
-				case <-stopCh:
-					_ = idle.Close()
-					refresh.Stop()
-					return
-				case <-ctx.Done():
-					_ = idle.Close()
-					refresh.Stop()
-					return
-				case <-refresh.C:
-					_ = idle.Close()
-					done = true
-				case n := <-internalCh:
-					select {
-					case ch <- n:
-					case <-stopCh:
-						_ = idle.Close()
-						refresh.Stop()
-						return
-					case <-ctx.Done():
-						_ = idle.Close()
-						refresh.Stop()
-						return
+				c.idleMu.Lock()
+				c.idleNotifs = internalCh
+				c.idleMu.Unlock()
+				var nextIdle *imapclient.IdleCommand
+				if err := c.runWithTimeout(ctx, c.commandTimeout(), "idle refresh", func() error {
+					var e error
+					nextIdle, e = c.c.Idle()
+					return e
+				}); err != nil {
+					c.idleMu.Lock()
+					if c.idleNotifs == internalCh {
+						c.idleNotifs = nil
 					}
+					c.idleMu.Unlock()
+					stopErr = err
+					return
+				}
+				idle = nextIdle
+				refresh.Reset(27 * time.Minute)
+			case n := <-internalCh:
+				select {
+				case ch <- n:
+				case <-c.c.Closed():
+					stopErr = idleClosedErr(idle)
+					_ = c.Close()
+					return
+				case <-stopCh:
+					c.idleMu.Lock()
+					c.idleMissed = true
+					c.idleMu.Unlock()
+					stopErr = terminateIdle(idle)
+					return
+				case <-ctx.Done():
+					c.idleMu.Lock()
+					c.idleMissed = true
+					c.idleMu.Unlock()
+					_ = terminateIdle(idle)
+					stopErr = ctx.Err()
+					return
 				}
 			}
 		}
 	}()
 
-	<-ready
-	return func() {
+	return func() error {
 		stopOnce.Do(func() { close(stopCh) })
 		<-exited
-	}
+		return stopErr
+	}, nil
 }
 
-// HasIDLE reports whether the server advertises the IDLE capability.
+// HasIDLE reports whether the server advertises the IDLE capability (or IMAP4rev2).
 func (c *Client) HasIDLE() bool {
-	caps, err := c.Capabilities()
+	return c.HasIDLEContext(context.Background())
+}
+
+// HasIDLEContext reports whether the server supports IDLE, bounded by ctx.
+func (c *Client) HasIDLEContext(ctx context.Context) bool {
+	caps, err := c.CapabilitiesWithContext(ctx)
 	if err != nil {
 		return false
 	}
-	return caps["IDLE"]
+	return caps["IDLE"] || caps["IMAP4REV2"]
 }
 
 // HasCondStore reports whether the server advertises CONDSTORE
 // (RFC 7162). The Select wrapper consults this before passing
 // CondStore=true in the SELECT options — sending the option to a
-// server that doesn't support it is a protocol error (CLIENTBUG /
+// server that doesn't advertise it is a protocol error (CLIENTBUG /
 // BAD), not just a silent no-op.
 func (c *Client) HasCondStore() bool {
-	caps, err := c.Capabilities()
+	return c.HasCondStoreContext(context.Background())
+}
+
+// HasCondStoreContext reports whether the server advertises CONDSTORE, bounded by ctx.
+func (c *Client) HasCondStoreContext(ctx context.Context) bool {
+	caps, err := c.CapabilitiesWithContext(ctx)
 	if err != nil {
 		return false
 	}
